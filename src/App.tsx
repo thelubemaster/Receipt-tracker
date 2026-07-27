@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { AiId } from './aiRoster'
+import { AI_ROSTER, getAi } from './aiRoster'
 import { CATEGORIES, getCategory } from './categories'
 import {
   deletePurchase,
@@ -11,8 +13,17 @@ import {
   savePurchase,
   saveSettings,
   clearAllData,
+  getLeaderboard,
 } from './db'
 import { downloadCsv, downloadPdfSummary } from './exportData'
+import {
+  defaultLeaderboard,
+  normalizeLeaderboard,
+  rankLeaderboard,
+  recordAiWin,
+  recordScanParticipation,
+  type LeaderboardMap,
+} from './leaderboard'
 import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
@@ -40,7 +51,9 @@ function todayISO(): string {
   return `${y}-${m}-${day}`
 }
 
-function emptyForm(partial?: Partial<Purchase> & { agentReport?: string }) {
+function emptyForm(
+  partial?: Partial<Purchase> & { agentReport?: string; activeAiLabel?: string },
+) {
   return {
     date: partial?.date ?? todayISO(),
     description: partial?.description ?? '',
@@ -50,6 +63,9 @@ function emptyForm(partial?: Partial<Purchase> & { agentReport?: string }) {
     notes: partial?.notes ?? '',
     lineItems: (partial?.lineItems ?? []) as ReceiptLineItem[],
     agentReport: partial?.agentReport ?? '',
+    aisUsed: (partial?.aisUsed ?? []) as AiId[],
+    activeAiLabel: partial?.activeAiLabel ?? '',
+    bestAiId: (partial?.bestAiId ?? null) as AiId | null,
   }
 }
 
@@ -58,6 +74,7 @@ export default function App() {
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [settings, setSettings] = useState<AppSettings>({
     apiKey: '',
+    openaiApiKey: '',
     projectName: 'My Schoolie',
     lastSeenVersion: '',
   })
@@ -115,6 +132,8 @@ export default function App() {
     vendor: string
     notes: string
     lineItems?: ReceiptLineItem[]
+    aisUsed?: AiId[]
+    bestAiId?: AiId | null
     receiptBlob?: Blob | null
     existingReceiptImageId?: string | null
   }) {
@@ -147,6 +166,7 @@ export default function App() {
         .slice(0, 6)
         .join('; ')
 
+    const aisUsed = input.aisUsed ?? []
     const purchase: Purchase = {
       id: input.id ?? newId(),
       date: input.date,
@@ -157,6 +177,8 @@ export default function App() {
       notes: input.notes.trim(),
       receiptImageId,
       lineItems,
+      aisUsed,
+      bestAiId: input.bestAiId ?? null,
       createdAt: input.id
         ? (purchases.find((p) => p.id === input.id)?.createdAt ?? now)
         : now,
@@ -164,8 +186,15 @@ export default function App() {
     }
 
     await savePurchase(purchase)
+    if (input.bestAiId) {
+      await recordAiWin(input.bestAiId, 5)
+    }
     await refresh()
-    setInfo('Purchase saved.')
+    setInfo(
+      input.bestAiId
+        ? `Purchase saved · ${getAi(input.bestAiId).name} got a win on the leaderboard`
+        : 'Purchase saved.',
+    )
     setScreen({ name: 'home' })
     return true
   }
@@ -272,9 +301,12 @@ export default function App() {
       {screen.name === 'scan' && (
         <ScanScreen
           apiKey={settings.apiKey}
+          openaiApiKey={settings.openaiApiKey}
           onBack={() => setScreen({ name: 'home' })}
           onNeedSettings={() => setScreen({ name: 'settings' })}
           onParsed={(suggestion, blob, previewUrl) => {
+            const aisUsed = (suggestion.aisUsed ?? []) as AiId[]
+            void recordScanParticipation(aisUsed)
             setScreen({
               name: 'add',
               initial: {
@@ -286,6 +318,8 @@ export default function App() {
                 notes: suggestion.notes,
                 lineItems: suggestion.lineItems ?? [],
                 agentReport: suggestion.agentReport,
+                aisUsed,
+                activeAiLabel: suggestion.activeAiLabel,
               },
               receiptBlob: blob,
               receiptPreviewUrl: previewUrl,
@@ -318,6 +352,8 @@ export default function App() {
               vendor: form.vendor,
               notes: form.notes,
               lineItems: form.lineItems,
+              aisUsed: form.aisUsed,
+              bestAiId: form.bestAiId,
               receiptBlob,
             })
           }}
@@ -338,6 +374,8 @@ export default function App() {
               vendor: form.vendor,
               notes: form.notes,
               lineItems: form.lineItems,
+              aisUsed: form.aisUsed,
+              bestAiId: form.bestAiId,
               existingReceiptImageId: existingId,
             })
           }}
@@ -591,6 +629,7 @@ function HomeScreen(props: {
 
 function ScanScreen(props: {
   apiKey: string
+  openaiApiKey: string
   onBack: () => void
   onNeedSettings: () => void
   onParsed: (suggestion: ScanResult, blob: Blob, previewUrl: string) => void
@@ -600,7 +639,14 @@ function ScanScreen(props: {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
-  const [engine, setEngine] = useState<'on-device' | 'cloud'>('on-device')
+  const [activeAi, setActiveAi] = useState<{ name: string; id?: AiId } | null>(null)
+
+  const whoWillScan = useMemo(() => {
+    const names = ['Scout', 'Ledger', 'Cashier', 'Clerk', 'Arbiter']
+    if (props.apiKey.trim()) names.push('Grok')
+    if (props.openaiApiKey.trim()) names.push('ChatGPT')
+    return names
+  }, [props.apiKey, props.openaiApiKey])
 
   async function handleFile(file: File | null) {
     if (!file) return
@@ -614,15 +660,16 @@ function ScanScreen(props: {
 
     setBusy(true)
     setProgress(0.02)
-    setEngine('on-device')
-    setStatus('Starting on-device agent…')
+    setActiveAi({ name: 'Scout', id: 'scout' })
+    setStatus('Scout is scanning the photo…')
     try {
       const suggestion = await scanReceipt(blob, {
         apiKey: props.apiKey,
+        openaiApiKey: props.openaiApiKey,
         onProgress: (p) => {
           setProgress(p.progress)
           setStatus(p.message)
-          setEngine(p.engine)
+          if (p.aiName) setActiveAi({ name: p.aiName, id: p.aiId })
         },
       })
       props.onParsed(suggestion, blob, previewUrl)
@@ -633,6 +680,7 @@ function ScanScreen(props: {
       setBusy(false)
       setStatus(null)
       setProgress(0)
+      setActiveAi(null)
     }
   }
 
@@ -647,34 +695,46 @@ function ScanScreen(props: {
       </header>
 
       <div className="banner banner-info">
-        Snap the whole receipt. A <strong>multi-agent team runs on your phone</strong>: OCR (2
-        passes), line-items, totals, merchant, then an arbiter that cross-checks them. You get a full
-        item breakdown to confirm before save.
-        {props.apiKey.trim()
-          ? ' Cloud agent joins when the local team is unsure or finds few lines.'
-          : ' Add an API key in Settings for an optional cloud cross-check.'}
+        You&apos;ll see <strong>which AI is working by name</strong> (e.g. “Grok is scanning the
+        photo…” or “ChatGPT is scanning the photo…”). On-device: Scout → Ledger → Cashier → Clerk →
+        Arbiter.
+        {props.apiKey.trim() || props.openaiApiKey.trim()
+          ? ` Cloud: ${[props.apiKey.trim() && 'Grok', props.openaiApiKey.trim() && 'ChatGPT'].filter(Boolean).join(' + ')}.`
+          : ' Add Grok / ChatGPT keys in Settings to include them.'}
       </div>
 
       {busy ? (
         <div className="card agent-status">
           <div className="spinner" />
           <div className="status-title">{status}</div>
+          {activeAi && (
+            <div
+              className="ai-live-chip"
+              style={{
+                borderColor: activeAi.id ? getAi(activeAi.id).color : undefined,
+              }}
+            >
+              <span className="ai-live-dot" />
+              {activeAi.name} is working now
+            </div>
+          )}
           <div className="progress-track">
             <div className="progress-fill" style={{ width: `${Math.round(progress * 100)}%` }} />
           </div>
           <div className="muted">{Math.round(progress * 100)}%</div>
-          <div className="agent-badge">
-            {engine === 'on-device' ? '⚡ Agent team · on-device' : '☁ Cloud agent cross-check'}
-          </div>
         </div>
       ) : (
         <div className="scan-drop">
           <div className="scan-icon">📷</div>
           <strong>Photograph or choose a receipt</strong>
-          <p className="muted">
-            Good light, flat, full receipt in frame. First scan may download a small language pack
-            (then works offline).
-          </p>
+          <p className="muted">AIs that will run this scan:</p>
+          <div className="ai-chip-row">
+            {whoWillScan.map((n) => (
+              <span key={n} className="ai-chip">
+                {n}
+              </span>
+            ))}
+          </div>
           <div className="row-actions" style={{ marginTop: 16 }}>
             <label className="btn btn-primary">
               Take photo
@@ -697,9 +757,9 @@ function ScanScreen(props: {
             </label>
           </div>
           <p className="muted" style={{ marginTop: 16 }}>
-            Want smarter cloud assist?{' '}
+            Enable Grok or ChatGPT?{' '}
             <button type="button" style={{ textDecoration: 'underline' }} onClick={props.onNeedSettings}>
-              Add API key
+              Open Settings
             </button>
           </p>
         </div>
@@ -776,6 +836,13 @@ function PurchaseFormScreen(props: {
         <img className="receipt-preview" src={props.receiptPreviewUrl} alt="Receipt preview" />
       )}
 
+      {(form.activeAiLabel || form.aisUsed.length > 0) && (
+        <div className="banner banner-info">
+          <strong>AIs on this scan:</strong>{' '}
+          {form.activeAiLabel || form.aisUsed.map((id) => getAi(id).name).join(', ')}
+        </div>
+      )}
+
       {form.agentReport && (
         <div className="card agent-report-card">
           <button
@@ -783,7 +850,7 @@ function PurchaseFormScreen(props: {
             className="agent-report-toggle"
             onClick={() => setShowAgentReport((v) => !v)}
           >
-            {showAgentReport ? '▼' : '▶'} Agent team report
+            {showAgentReport ? '▼' : '▶'} Who scanned · full report
           </button>
           {showAgentReport && (
             <pre className="agent-report-body">{form.agentReport}</pre>
@@ -801,6 +868,33 @@ function PurchaseFormScreen(props: {
             .finally(() => setSaving(false))
         }}
       >
+        {form.aisUsed.length > 0 && (
+          <div className="field">
+            <label>Who scanned best? (leaderboard)</label>
+            <p className="muted" style={{ margin: '0 0 8px' }}>
+              Pick the AI that got closest — they get a win on the leaderboard.
+            </p>
+            <div className="ai-pick-grid">
+              {form.aisUsed.map((id) => {
+                const ai = getAi(id)
+                const selected = form.bestAiId === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`ai-pick ${selected ? 'ai-pick-selected' : ''}`}
+                    style={{ borderColor: selected ? ai.color : undefined }}
+                    onClick={() => update('bestAiId', selected ? null : id)}
+                  >
+                    <span className="ai-pick-emoji">{ai.emoji}</span>
+                    <span className="ai-pick-name">{ai.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         {form.lineItems.length > 0 && (
           <div className="field">
             <label>Line items ({form.lineItems.length})</label>
@@ -1064,6 +1158,15 @@ function DetailScreen(props: {
             <span className="detail-value">{purchase.notes}</span>
           </div>
         )}
+        {purchase.aisUsed.length > 0 && (
+          <div className="detail-row">
+            <span className="detail-label">AIs</span>
+            <span className="detail-value">
+              {purchase.aisUsed.map((id) => getAi(id).name).join(', ')}
+              {purchase.bestAiId ? ` · best: ${getAi(purchase.bestAiId).name}` : ''}
+            </span>
+          </div>
+        )}
       </div>
 
       {purchase.lineItems.length > 0 && (
@@ -1109,8 +1212,16 @@ function SettingsScreen(props: {
 }) {
   const [projectName, setProjectName] = useState(props.settings.projectName)
   const [apiKey, setApiKey] = useState(props.settings.apiKey)
+  const [openaiApiKey, setOpenaiApiKey] = useState(props.settings.openaiApiKey)
   const [saving, setSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
+  const [board, setBoard] = useState<LeaderboardMap>(defaultLeaderboard())
+
+  useEffect(() => {
+    void getLeaderboard().then((b) => setBoard(normalizeLeaderboard(b)))
+  }, [])
+
+  const ranked = useMemo(() => rankLeaderboard(board), [board])
 
   async function handleCheckUpdates() {
     setUpdateStatus({ state: 'checking' })
@@ -1141,6 +1252,7 @@ function SettingsScreen(props: {
             .onSave({
               projectName: projectName.trim() || 'My Schoolie',
               apiKey: apiKey.trim(),
+              openaiApiKey: openaiApiKey.trim(),
               lastSeenVersion: props.settings.lastSeenVersion,
             })
             .finally(() => setSaving(false))
@@ -1157,6 +1269,69 @@ function SettingsScreen(props: {
           <button type="button" className="btn btn-secondary" onClick={props.onShowWhatsNew}>
             What&apos;s new / version history
           </button>
+        </div>
+
+        <div className="card settings-card">
+          <strong>AI roster</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Every AI that can work a receipt. On-device AIs always run; cloud AIs need a key.
+          </p>
+          <div className="ai-roster-list">
+            {AI_ROSTER.map((ai) => {
+              const enabled =
+                ai.kind === 'on-device' ||
+                (ai.needsKey === 'xai' && Boolean(apiKey.trim())) ||
+                (ai.needsKey === 'openai' && Boolean(openaiApiKey.trim()))
+              return (
+                <div key={ai.id} className="ai-roster-row">
+                  <div className="ai-roster-icon" style={{ background: `${ai.color}22`, color: ai.color }}>
+                    {ai.emoji}
+                  </div>
+                  <div className="ai-roster-body">
+                    <div className="ai-roster-title">
+                      {ai.name}
+                      <span className={`ai-status-dot ${enabled ? 'on' : 'off'}`}>
+                        {enabled ? 'ready' : 'needs key'}
+                      </span>
+                    </div>
+                    <div className="muted" style={{ fontSize: '0.82rem' }}>
+                      {ai.fullName} · {ai.kind === 'on-device' ? 'On your phone' : 'Cloud'}
+                    </div>
+                    <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
+                      {ai.role}
+                    </div>
+                    <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
+                      Engine: {ai.engine}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="card settings-card">
+          <strong>AI leaderboard</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Ranked by your “who scanned best?” wins, ratings, and how often each AI runs.
+          </p>
+          <div className="leaderboard-list">
+            {ranked.map((row) => (
+              <div key={row.profile.id} className="leaderboard-row">
+                <span className="lb-rank">#{row.rank}</span>
+                <span className="lb-emoji">{row.profile.emoji}</span>
+                <div className="lb-body">
+                  <strong>{row.profile.name}</strong>
+                  <div className="muted" style={{ fontSize: '0.78rem' }}>
+                    {row.stats.wins} win{row.stats.wins === 1 ? '' : 's'} · {row.stats.scans} scan
+                    {row.stats.scans === 1 ? '' : 's'}
+                    {row.avgRating != null ? ` · ★ ${row.avgRating}` : ''}
+                  </div>
+                </div>
+                <span className="lb-score">{Math.round(row.score)}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="card settings-card update-scan-card">
@@ -1234,17 +1409,8 @@ function SettingsScreen(props: {
           />
         </div>
 
-        <div className="card settings-card">
-          <strong>⚡ Multi-agent team (on-device)</strong>
-          <p className="muted" style={{ margin: 0 }}>
-            OCR (2 passes) → line-items agent → totals agent → merchant agent → arbiter that
-            cross-checks them. Breaks down each item on the receipt. Offline after the first
-            language pack. Optional cloud agent cross-checks when results look thin.
-          </p>
-        </div>
-
         <div className="field">
-          <label htmlFor="apiKey">Optional cloud boost (xAI API key)</label>
+          <label htmlFor="apiKey">Grok API key (xAI)</label>
           <input
             id="apiKey"
             type="password"
@@ -1254,11 +1420,30 @@ function SettingsScreen(props: {
             placeholder="xai-…"
           />
           <p className="muted" style={{ marginTop: 8 }}>
-            Only used if the on-device read is weak. Stored on this phone. Get a key at{' '}
+            When set, you&apos;ll see <strong>Grok is scanning the photo…</strong> after the on-device
+            team. Key stays on this phone.{' '}
             <a href="https://console.x.ai" target="_blank" rel="noreferrer">
               console.x.ai
             </a>
-            .
+          </p>
+        </div>
+
+        <div className="field">
+          <label htmlFor="openaiApiKey">ChatGPT API key (OpenAI)</label>
+          <input
+            id="openaiApiKey"
+            type="password"
+            autoComplete="off"
+            value={openaiApiKey}
+            onChange={(e) => setOpenaiApiKey(e.target.value)}
+            placeholder="sk-…"
+          />
+          <p className="muted" style={{ marginTop: 8 }}>
+            When set, you&apos;ll see <strong>ChatGPT is scanning the photo…</strong> as a second
+            cloud opinion. Key stays on this phone.{' '}
+            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">
+              platform.openai.com
+            </a>
           </p>
         </div>
 

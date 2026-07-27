@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import type { LeaderboardMap } from './leaderboard'
 import type { AppSettings, Purchase } from './types'
 
 interface SchoolieDB extends DBSchema {
@@ -15,23 +16,35 @@ interface SchoolieDB extends DBSchema {
     key: string
     value: AppSettings & { id: string }
   }
+  meta: {
+    key: string
+    value: { id: string; leaderboard?: LeaderboardMap }
+  }
 }
 
 const DB_NAME = 'schoolie-tracker'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const SETTINGS_KEY = 'app'
+const META_KEY = 'meta'
 
 let dbPromise: Promise<IDBPDatabase<SchoolieDB>> | null = null
 
 function getDb() {
   if (!dbPromise) {
     dbPromise = openDB<SchoolieDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        const purchases = db.createObjectStore('purchases', { keyPath: 'id' })
-        purchases.createIndex('by-date', 'date')
-        purchases.createIndex('by-created', 'createdAt')
-        db.createObjectStore('images', { keyPath: 'id' })
-        db.createObjectStore('settings', { keyPath: 'id' })
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          const purchases = db.createObjectStore('purchases', { keyPath: 'id' })
+          purchases.createIndex('by-date', 'date')
+          purchases.createIndex('by-created', 'createdAt')
+          db.createObjectStore('images', { keyPath: 'id' })
+          db.createObjectStore('settings', { keyPath: 'id' })
+        }
+        if (oldVersion < 2) {
+          if (!db.objectStoreNames.contains('meta')) {
+            db.createObjectStore('meta', { keyPath: 'id' })
+          }
+        }
       },
     })
   }
@@ -46,6 +59,7 @@ function normalizePurchase(p: Purchase): Purchase {
   return {
     ...p,
     lineItems: Array.isArray(p.lineItems) ? p.lineItems : [],
+    aisUsed: Array.isArray(p.aisUsed) ? p.aisUsed : [],
   }
 }
 
@@ -98,6 +112,7 @@ export async function getSettings(): Promise<AppSettings> {
   const row = await db.get('settings', SETTINGS_KEY)
   return {
     apiKey: row?.apiKey ?? '',
+    openaiApiKey: row?.openaiApiKey ?? '',
     projectName: row?.projectName ?? 'My Schoolie',
     lastSeenVersion: row?.lastSeenVersion ?? '',
   }
@@ -106,6 +121,17 @@ export async function getSettings(): Promise<AppSettings> {
 export async function saveSettings(settings: AppSettings): Promise<void> {
   const db = await getDb()
   await db.put('settings', { id: SETTINGS_KEY, ...settings })
+}
+
+export async function getLeaderboard(): Promise<LeaderboardMap | null> {
+  const db = await getDb()
+  const row = await db.get('meta', META_KEY)
+  return row?.leaderboard ?? null
+}
+
+export async function saveLeaderboard(leaderboard: LeaderboardMap): Promise<void> {
+  const db = await getDb()
+  await db.put('meta', { id: META_KEY, leaderboard })
 }
 
 export async function clearAllData(): Promise<void> {

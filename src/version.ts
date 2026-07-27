@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.2.0'
+export const APP_VERSION = '1.3.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.3.0',
+    date: '2026-07-27',
+    title: 'Named AIs + leaderboard',
+    changes: [
+      'See which AI is working by name (Scout, Grok, ChatGPT, …)',
+      'Settings lists every AI in the roster with ready/needs-key status',
+      'Optional ChatGPT (OpenAI) key alongside Grok (xAI)',
+      'Leaderboard: crown who scanned best after each receipt',
+    ],
+  },
   {
     version: '1.2.0',
     date: '2026-07-27',

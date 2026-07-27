@@ -2,7 +2,7 @@
  * On-device multi-agent receipt team (OCR + specialists + arbiter).
  * Re-exports pipeline entry points and pure parsers used by tests.
  */
-export type { AgentProgress } from './agents/pipeline'
+export type { AgentProgress, LocalAgentResult } from './agents/pipeline'
 export {
   disposeOnDeviceAgent,
   prepareImageForOcr,
@@ -14,19 +14,15 @@ export { runMerchantAgent, extractDate, extractVendor } from './agents/merchantA
 export { categorizeText } from './agents/keywords'
 export { runArbiterAgent } from './agents/arbiterAgent'
 
-import type { ReceiptSuggestion } from './types'
-import { runMultiAgentReceiptPipeline, type AgentProgress } from './agents/pipeline'
+import {
+  runMultiAgentReceiptPipeline,
+  type AgentProgress,
+  type LocalAgentResult,
+} from './agents/pipeline'
 import { runLineItemsAgent } from './agents/lineItemsAgent'
 import { runTotalsAgent } from './agents/totalsAgent'
 import { runMerchantAgent } from './agents/merchantAgent'
 import { runArbiterAgent } from './agents/arbiterAgent'
-
-export type LocalAgentResult = ReceiptSuggestion & {
-  source: 'on-device'
-  confidence: number
-  rawText: string
-  agentReport?: string
-}
 
 /** Pure multi-agent parse from OCR text (no Tesseract) — tests & reuse. */
 export function parseReceiptText(rawText: string): LocalAgentResult {

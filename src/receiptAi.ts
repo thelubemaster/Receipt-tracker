@@ -1,3 +1,4 @@
+import type { AiId } from './aiRoster'
 import { CATEGORIES, isCategoryId } from './categories'
 import {
   runOnDeviceReceiptAgent,
@@ -7,19 +8,26 @@ import {
 import type { CategoryId, ReceiptSuggestion } from './types'
 
 const XAI_URL = 'https://api.x.ai/v1/responses'
-const MODEL = 'grok-4.5'
+const GROK_MODEL = 'grok-4.5'
+const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+const OPENAI_MODEL = 'gpt-4o'
 
 export type ScanResult = ReceiptSuggestion & {
-  source: 'on-device' | 'cloud'
+  source: 'on-device' | 'cloud' | 'mixed'
   confidence?: number
   rawText?: string
 }
 
 export type ScanOptions = {
   apiKey?: string
-  /** Prefer cloud when API key present (default false — on-device first). */
-  preferCloud?: boolean
-  onProgress?: (p: AgentProgress & { engine: 'on-device' | 'cloud' }) => void
+  openaiApiKey?: string
+  onProgress?: (
+    p: AgentProgress & {
+      engine: 'on-device' | 'cloud'
+      aiId?: AiId
+      aiName?: string
+    },
+  ) => void
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -57,8 +65,7 @@ Rules:
 - amount is the grand total / amount due.
 - categoryId values MUST be from:
 ${categoryList}
-- Prefer schoolie-build categories per item (foam → insulation; romex → electrical; lumber → structure; etc.).
-- description = join of line item names.
+- Prefer schoolie-build categories per item.
 - If unclear category, use "misc".`
 }
 
@@ -66,10 +73,8 @@ function extractOutputText(data: unknown): string {
   if (!data || typeof data !== 'object') return ''
   const obj = data as Record<string, unknown>
   if (typeof obj.output_text === 'string') return obj.output_text
-
   const output = obj.output
   if (!Array.isArray(output)) return ''
-
   const parts: string[] = []
   for (const item of output) {
     if (!item || typeof item !== 'object') continue
@@ -90,12 +95,9 @@ function parseSuggestionJson(text: string): ReceiptSuggestion {
   let cleaned = text.trim()
   const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (fence) cleaned = fence[1].trim()
-
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')
-  if (start === -1 || end === -1) {
-    throw new Error('AI did not return JSON')
-  }
+  if (start === -1 || end === -1) throw new Error('AI did not return JSON')
 
   const parsed = JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>
 
@@ -109,7 +111,6 @@ function parseSuggestionJson(text: string): ReceiptSuggestion {
 
   const categoryRaw = String(parsed.categoryId ?? 'misc')
   const categoryId: CategoryId = isCategoryId(categoryRaw) ? categoryRaw : 'misc'
-
   let date: string | null = null
   if (typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) {
     date = parsed.date
@@ -163,7 +164,6 @@ function parseSuggestionJson(text: string): ReceiptSuggestion {
     lineItems,
     subtotal,
     tax,
-    agentReport: `Cloud agent · ${lineItems.length} line item(s)`,
   }
 }
 
@@ -179,19 +179,17 @@ async function ensureJpegOrPngDataUrl(blob: Blob): Promise<string> {
   return canvas.toDataURL('image/jpeg', 0.92)
 }
 
-export async function parseReceiptImageCloud(
-  apiKey: string,
-  imageBlob: Blob,
-): Promise<ScanResult> {
-  if (!apiKey.trim()) {
-    throw new Error('Add your xAI API key in Settings for cloud boost.')
-  }
-
+async function imageDataUrl(imageBlob: Blob): Promise<string> {
   let dataUrl = await blobToDataUrl(imageBlob)
   if (!dataUrl.startsWith('data:image/jpeg') && !dataUrl.startsWith('data:image/png')) {
     dataUrl = await ensureJpegOrPngDataUrl(imageBlob)
   }
+  return dataUrl
+}
 
+export async function parseReceiptWithGrok(apiKey: string, imageBlob: Blob): Promise<ScanResult> {
+  if (!apiKey.trim()) throw new Error('Add your Grok (xAI) API key in Settings.')
+  const dataUrl = await imageDataUrl(imageBlob)
   const response = await fetch(XAI_URL, {
     method: 'POST',
     headers: {
@@ -199,157 +197,220 @@ export async function parseReceiptImageCloud(
       Authorization: `Bearer ${apiKey.trim()}`,
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: GROK_MODEL,
       input: [
         {
           role: 'user',
           content: [
-            {
-              type: 'input_image',
-              image_url: dataUrl,
-              detail: 'high',
-            },
-            {
-              type: 'input_text',
-              text: buildPrompt(),
-            },
+            { type: 'input_image', image_url: dataUrl, detail: 'high' },
+            { type: 'input_text', text: buildPrompt() },
           ],
         },
       ],
     }),
   })
-
   if (!response.ok) {
     const errText = await response.text().catch(() => '')
-    throw new Error(
-      `Cloud scan failed (${response.status}). ${errText.slice(0, 200) || 'Check your API key and network.'}`,
-    )
+    throw new Error(`Grok scan failed (${response.status}). ${errText.slice(0, 180)}`)
   }
-
-  const data: unknown = await response.json()
-  const text = extractOutputText(data)
-  if (!text) {
-    throw new Error('Cloud scan returned empty response.')
-  }
+  const text = extractOutputText(await response.json())
+  if (!text) throw new Error('Grok returned an empty response.')
+  const parsed = parseSuggestionJson(text)
   return {
-    ...parseSuggestionJson(text),
+    ...parsed,
     source: 'cloud',
     confidence: 0.9,
+    aisUsed: ['grok'],
+    activeAiLabel: 'Grok',
+    agentReport: `Grok (xAI · ${GROK_MODEL}) scanned the photo · ${parsed.lineItems.length} line items`,
   }
 }
 
-function mergeLocalAndCloud(local: LocalAgentResult, cloud: ScanResult): ScanResult {
-  const localLines = local.lineItems?.length ?? 0
-  const cloudLines = cloud.lineItems?.length ?? 0
-  const useCloudLines = cloudLines > localLines
-  const lineItems = useCloudLines ? cloud.lineItems : local.lineItems
-
-  let amount = local.amount
-  let amountSource = 'on-device'
-  if (cloud.amount != null && local.amount != null) {
-    if (Math.abs(cloud.amount - local.amount) < 0.06) {
-      amount = local.amount
-      amountSource = 'agents-agree'
-    } else if ((cloud.confidence ?? 0) >= 0.85) {
-      amount = cloud.amount
-      amountSource = 'cloud'
-    }
-  } else if (cloud.amount != null && local.amount == null) {
-    amount = cloud.amount
-    amountSource = 'cloud'
-  }
-
-  const description =
-    lineItems.length > 0
-      ? lineItems
-          .map((l) => l.description)
-          .slice(0, 8)
-          .join('; ')
-      : cloud.description || local.description
-
-  const report = [
-    'Multi-agent consensus (on-device team + cloud)',
-    local.agentReport,
-    cloud.agentReport,
-    `Amount source: ${amountSource}`,
-    `Line items: ${useCloudLines ? 'cloud' : 'on-device'} (${lineItems.length})`,
-  ]
-    .filter(Boolean)
-    .join('\n')
-
-  return {
-    date: local.date || cloud.date,
-    vendor: local.vendor || cloud.vendor,
-    amount,
-    description,
-    categoryId: lineItems.length
-      ? local.categoryId
-      : cloud.categoryId || local.categoryId,
-    notes: [local.notes, cloud.notes, 'cross-checked'].filter(Boolean).join(' · '),
-    lineItems,
-    subtotal: local.subtotal ?? cloud.subtotal ?? null,
-    tax: local.tax ?? cloud.tax ?? null,
-    source: 'on-device',
-    confidence: Math.min(
-      0.97,
-      ((local.confidence ?? 0.5) + (cloud.confidence ?? 0.5)) / 2 + 0.1,
-    ),
-    rawText: local.rawText,
-    agentReport: report,
-  }
-}
-
-/** @deprecated use scanReceipt */
-export async function parseReceiptImage(
+export async function parseReceiptWithChatGPT(
   apiKey: string,
   imageBlob: Blob,
-): Promise<ReceiptSuggestion> {
-  return parseReceiptImageCloud(apiKey, imageBlob)
+): Promise<ScanResult> {
+  if (!apiKey.trim()) throw new Error('Add your ChatGPT (OpenAI) API key in Settings.')
+  const dataUrl = await imageDataUrl(imageBlob)
+  const response = await fetch(OPENAI_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey.trim()}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: buildPrompt() },
+            { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+          ],
+        },
+      ],
+      max_tokens: 2000,
+    }),
+  })
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '')
+    throw new Error(`ChatGPT scan failed (${response.status}). ${errText.slice(0, 180)}`)
+  }
+  const data = (await response.json()) as {
+    choices?: { message?: { content?: string } }[]
+  }
+  const text = data.choices?.[0]?.message?.content ?? ''
+  if (!text) throw new Error('ChatGPT returned an empty response.')
+  const parsed = parseSuggestionJson(text)
+  return {
+    ...parsed,
+    source: 'cloud',
+    confidence: 0.9,
+    aisUsed: ['chatgpt'],
+    activeAiLabel: 'ChatGPT',
+    agentReport: `ChatGPT (OpenAI · ${OPENAI_MODEL}) scanned the photo · ${parsed.lineItems.length} line items`,
+  }
 }
 
-/**
- * Multi-agent on-device team first (OCR dual-pass + line-items + totals + merchant + arbiter).
- * If API key present, cloud agent also runs and results are cross-checked when
- * line items are thin or confidence is low — or always when preferCloud.
- */
+function mergeResults(parts: ScanResult[]): ScanResult {
+  if (parts.length === 1) return parts[0]
+
+  let bestLines = parts[0].lineItems
+  let bestLinesFrom = parts[0].activeAiLabel || 'team'
+  for (const c of parts) {
+    if ((c.lineItems?.length ?? 0) > bestLines.length) {
+      bestLines = c.lineItems
+      bestLinesFrom = c.activeAiLabel || 'cloud'
+    }
+  }
+
+  const amounts = parts.map((p) => p.amount).filter((a): a is number => a != null)
+  let amount: number | null = parts[0].amount
+  let amountFrom = parts[0].activeAiLabel || 'team'
+  if (amounts.length >= 2) {
+    const rounded = amounts.map((a) => Math.round(a * 100) / 100)
+    const counts = new Map<number, number>()
+    for (const a of rounded) counts.set(a, (counts.get(a) ?? 0) + 1)
+    let top = rounded[0]
+    let topN = 0
+    for (const [a, n] of counts) {
+      if (n > topN) {
+        top = a
+        topN = n
+      }
+    }
+    amount = top
+    amountFrom = topN >= 2 ? 'AIs agree' : (parts[parts.length - 1].activeAiLabel || 'cloud')
+  }
+
+  const aisUsed = Array.from(new Set(parts.flatMap((p) => p.aisUsed ?? []))) as AiId[]
+  const names = [...new Set(parts.map((p) => p.activeAiLabel).filter(Boolean))].join(' + ')
+  const hasCloud = parts.some((p) => p.source === 'cloud')
+
+  return {
+    date: parts.map((p) => p.date).find(Boolean) ?? null,
+    vendor: parts.map((p) => p.vendor).find((v) => v?.trim()) ?? '',
+    amount,
+    description:
+      bestLines.length > 0
+        ? bestLines
+            .map((l) => l.description)
+            .slice(0, 8)
+            .join('; ')
+        : parts.map((p) => p.description).find((d) => d?.trim()) ?? '',
+    categoryId: parts[0].categoryId,
+    notes: parts
+      .map((p) => p.notes)
+      .filter(Boolean)
+      .join(' · '),
+    lineItems: bestLines,
+    subtotal: parts.map((p) => p.subtotal).find((x) => x != null) ?? null,
+    tax: parts.map((p) => p.tax).find((x) => x != null) ?? null,
+    source: hasCloud ? 'mixed' : 'on-device',
+    confidence: Math.min(
+      0.97,
+      parts.reduce((s, p) => s + (p.confidence ?? 0.5), 0) / parts.length + 0.05,
+    ),
+    rawText: parts[0].rawText,
+    aisUsed,
+    activeAiLabel: names || 'AI team',
+    agentReport: [
+      `AIs that scanned: ${names}`,
+      `Line items from: ${bestLinesFrom} (${bestLines.length})`,
+      `Total from: ${amountFrom}`,
+      ...parts.map((p) => p.agentReport).filter(Boolean),
+    ].join('\n'),
+  }
+}
+
+/** On-device team always; Grok and/or ChatGPT also scan when keys are set. */
 export async function scanReceipt(
   imageBlob: Blob,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  const { apiKey = '', preferCloud = false, onProgress } = options
+  const { apiKey = '', openaiApiKey = '', onProgress } = options
 
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
-    message: 'Starting multi-agent team…',
+    message: 'Starting AI team…',
     engine: 'on-device',
+    aiId: 'scout',
+    aiName: 'Scout',
   })
 
   const local: LocalAgentResult = await runOnDeviceReceiptAgent(imageBlob, (p) =>
-    onProgress?.({ ...p, engine: 'on-device' }),
+    onProgress?.({ ...p, engine: 'on-device', aiId: p.aiId, aiName: p.aiName }),
   )
 
-  const wantsCloud =
-    Boolean(apiKey.trim()) &&
-    (preferCloud ||
-      local.confidence < 0.62 ||
-      local.amount == null ||
-      (local.lineItems?.length ?? 0) < 2)
+  const results: ScanResult[] = [
+    {
+      ...local,
+      source: 'on-device',
+      aisUsed: local.aisUsed ?? ['scout', 'ledger', 'cashier', 'clerk', 'arbiter'],
+      activeAiLabel: 'On-device team',
+    },
+  ]
 
-  if (wantsCloud) {
+  if (apiKey.trim()) {
     onProgress?.({
       stage: 'ocr',
       progress: 0.88,
-      message: 'Cloud agent cross-checking…',
+      message: 'Grok is scanning the photo…',
       engine: 'cloud',
+      aiId: 'grok',
+      aiName: 'Grok',
     })
     try {
-      const cloud = await parseReceiptImageCloud(apiKey, imageBlob)
-      return mergeLocalAndCloud(local, cloud)
+      results.push(await parseReceiptWithGrok(apiKey, imageBlob))
     } catch {
-      return local
+      /* keep on-device */
     }
   }
 
-  return local
+  if (openaiApiKey.trim()) {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.94,
+      message: 'ChatGPT is scanning the photo…',
+      engine: 'cloud',
+      aiId: 'chatgpt',
+      aiName: 'ChatGPT',
+    })
+    try {
+      results.push(await parseReceiptWithChatGPT(openaiApiKey, imageBlob))
+    } catch {
+      /* keep others */
+    }
+  }
+
+  onProgress?.({
+    stage: 'done',
+    progress: 1,
+    message: 'All AIs finished — preparing your review…',
+    engine: 'on-device',
+    aiName: 'Team',
+  })
+
+  return mergeResults(results)
 }

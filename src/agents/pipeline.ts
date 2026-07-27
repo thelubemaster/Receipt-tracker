@@ -1,14 +1,26 @@
 import type { Worker } from 'tesseract.js'
-import type { LocalAgentResult } from '../localAgent'
+import type { AiId } from '../aiRoster'
+import type { ReceiptSuggestion } from '../types'
 import { runArbiterAgent } from './arbiterAgent'
 import { runLineItemsAgent } from './lineItemsAgent'
 import { runMerchantAgent } from './merchantAgent'
 import { runTotalsAgent } from './totalsAgent'
 
+export type LocalAgentResult = ReceiptSuggestion & {
+  source: 'on-device'
+  confidence: number
+  rawText: string
+  agentReport?: string
+  aisUsed?: AiId[]
+}
+
 export type AgentProgress = {
   stage: 'prepare' | 'ocr' | 'parse' | 'arbitrate' | 'done' | string
   progress: number
   message: string
+  /** Named AI currently working (for UI) */
+  aiId?: AiId
+  aiName?: string
 }
 
 /** Downscale + grayscale for low-power OCR. */
@@ -59,7 +71,9 @@ async function getWorker(onProgress?: (p: AgentProgress) => void): Promise<Worke
       onProgress?.({
         stage: 'ocr',
         progress: 0.05,
-        message: 'Starting OCR agent…',
+        message: 'Scout is starting up…',
+        aiId: 'scout',
+        aiName: 'Scout',
       })
       const Tesseract = await import('tesseract.js')
       const worker = await Tesseract.createWorker('eng', 1, {
@@ -68,13 +82,17 @@ async function getWorker(onProgress?: (p: AgentProgress) => void): Promise<Worke
             onProgress?.({
               stage: 'ocr',
               progress: 0.12 + m.progress * 0.45,
-              message: `OCR agent reading… ${Math.round(m.progress * 100)}%`,
+              message: `Scout is scanning the photo… ${Math.round(m.progress * 100)}%`,
+              aiId: 'scout',
+              aiName: 'Scout',
             })
           } else if (m.status === 'loading language traineddata') {
             onProgress?.({
               stage: 'ocr',
               progress: 0.08,
-              message: 'Loading offline language pack…',
+              message: 'Scout is loading the offline language pack…',
+              aiId: 'scout',
+              aiName: 'Scout',
             })
           }
         },
@@ -99,7 +117,9 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
-    message: 'Preparing photo for agent team…',
+    message: 'Warming up the AI team…',
+    aiId: 'scout',
+    aiName: 'Scout',
   })
   const prepared = await prepareImageForOcr(imageBlob)
   const worker = await getWorker(onProgress)
@@ -108,7 +128,9 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'ocr',
     progress: 0.15,
-    message: 'OCR agent pass 1/2 (auto layout)…',
+    message: 'Scout is scanning the photo (pass 1/2)…',
+    aiId: 'scout',
+    aiName: 'Scout',
   })
   await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.AUTO })
   const pass1 = await worker.recognize(prepared)
@@ -116,7 +138,9 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'ocr',
     progress: 0.45,
-    message: 'OCR agent pass 2/2 (sparse text)…',
+    message: 'Scout is scanning the photo (pass 2/2)…',
+    aiId: 'scout',
+    aiName: 'Scout',
   })
   await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT })
   const pass2 = await worker.recognize(prepared)
@@ -126,30 +150,61 @@ export async function runMultiAgentReceiptPipeline(
   const rawText = scoreOcrText(t1) >= scoreOcrText(t2) ? t1 : t2
   const ocrNote =
     scoreOcrText(t1) >= scoreOcrText(t2)
-      ? 'OCR: used auto-layout pass'
-      : 'OCR: used sparse-text pass'
+      ? 'Scout: used auto-layout OCR pass'
+      : 'Scout: used sparse-text OCR pass'
 
   onProgress?.({
     stage: 'parse',
-    progress: 0.72,
-    message: 'Line-items, totals & merchant agents…',
+    progress: 0.68,
+    message: 'Ledger is listing every item on the receipt…',
+    aiId: 'ledger',
+    aiName: 'Ledger',
   })
-
   const lines = runLineItemsAgent(rawText)
+
+  onProgress?.({
+    stage: 'parse',
+    progress: 0.76,
+    message: 'Cashier is checking the totals…',
+    aiId: 'cashier',
+    aiName: 'Cashier',
+  })
   const totals = runTotalsAgent(rawText)
+
+  onProgress?.({
+    stage: 'parse',
+    progress: 0.82,
+    message: 'Clerk is reading the store and date…',
+    aiId: 'clerk',
+    aiName: 'Clerk',
+  })
   const merchant = runMerchantAgent(rawText)
 
   onProgress?.({
     stage: 'arbitrate',
     progress: 0.9,
-    message: 'Arbiter cross-checking agents…',
+    message: 'Arbiter is cross-checking the team…',
+    aiId: 'arbiter',
+    aiName: 'Arbiter',
   })
 
   const result = runArbiterAgent({ rawText, lines, totals, merchant })
-  result.agentReport = `${ocrNote}\n${result.agentReport}`
+  result.aisUsed = ['scout', 'ledger', 'cashier', 'clerk', 'arbiter']
+  result.activeAiLabel = 'On-device team (Scout → Arbiter)'
+  result.agentReport = [
+    'AI team: Scout, Ledger, Cashier, Clerk, Arbiter',
+    ocrNote,
+    result.agentReport,
+  ].join('\n')
   result.notes = [result.notes, `${lines.items.length} line items`].filter(Boolean).join(' · ')
 
-  onProgress?.({ stage: 'done', progress: 1, message: 'Agent team finished' })
+  onProgress?.({
+    stage: 'done',
+    progress: 1,
+    message: 'On-device AI team finished',
+    aiId: 'arbiter',
+    aiName: 'Arbiter',
+  })
   return result
 }
 
