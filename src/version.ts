@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.6.0'
+export const APP_VERSION = '1.6.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.6.1',
+    date: '2026-07-27',
+    title: 'Fix real receipt parse (Swag Performance Parts)',
+    changes: [
+      'Multi-line product blocks: catch second items like Caterpillar fuel filter',
+      'Do not treat Shipping as a product line item',
+      'Vendor from domain/brand footer (not OCR garbage)',
+      'Fuel filter / diesel parts map to Tools category',
+    ],
+  },
   {
     version: '1.6.0',
     date: '2026-07-27',

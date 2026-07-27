@@ -148,6 +148,17 @@ export const CATEGORY_KEYWORDS: Record<CategoryId, string[]> = {
     'bit set',
     'multimeter',
     'utility knife',
+    'fuel filter',
+    'oil filter',
+    'air filter',
+    'filter kit',
+    'filter',
+    'racor',
+    'caterpillar',
+    'powerstroke',
+    'diesel',
+    'adapter kit',
+    'parfit',
   ],
   safety: [
     'extinguisher',
@@ -188,6 +199,8 @@ export const VENDOR_HINTS = [
   'northern tool',
   'micro center',
   'best buy',
+  'swag performance',
+  'swagperformanceparts',
 ]
 
 export function categorizeText(text: string): { categoryId: CategoryId; score: number } {

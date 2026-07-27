@@ -16,7 +16,13 @@ function relaxedLineItems(text: string): ReceiptLineItem[] {
   const items: ReceiptLineItem[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    if (/\b(subtotal|total|tax|visa|mastercard|debit|change|cash|thank)\b/i.test(line)) continue
+    if (
+      /\b(subtotal|total|tax|shipping|freight|visa|mastercard|debit|change|cash|thank|payment)\b/i.test(
+        line,
+      )
+    ) {
+      continue
+    }
     const amount = lastMoneyOnLine(line)
     if (amount == null || amount <= 0 || amount > 20000) continue
     let desc = line
