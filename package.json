@@ -14,7 +14,8 @@
     "idb": "^8.0.3",
     "jspdf": "^4.2.1",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",

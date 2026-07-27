@@ -1,8 +1,26 @@
 import { CATEGORIES, isCategoryId } from './categories'
+import {
+  runOnDeviceReceiptAgent,
+  type AgentProgress,
+  type LocalAgentResult,
+} from './localAgent'
 import type { CategoryId, ReceiptSuggestion } from './types'
 
 const XAI_URL = 'https://api.x.ai/v1/responses'
 const MODEL = 'grok-4.5'
+
+export type ScanResult = ReceiptSuggestion & {
+  source: 'on-device' | 'cloud'
+  confidence?: number
+  rawText?: string
+}
+
+export type ScanOptions = {
+  apiKey?: string
+  /** Prefer cloud when API key present (default false — on-device first). */
+  preferCloud?: boolean
+  onProgress?: (p: AgentProgress & { engine: 'on-device' | 'cloud' }) => void
+}
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -102,15 +120,26 @@ function parseSuggestionJson(text: string): ReceiptSuggestion {
   }
 }
 
-export async function parseReceiptImage(
+async function ensureJpegOrPngDataUrl(blob: Blob): Promise<string> {
+  const bitmap = await createImageBitmap(blob)
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Could not process image')
+  ctx.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  return canvas.toDataURL('image/jpeg', 0.92)
+}
+
+export async function parseReceiptImageCloud(
   apiKey: string,
   imageBlob: Blob,
-): Promise<ReceiptSuggestion> {
+): Promise<ScanResult> {
   if (!apiKey.trim()) {
-    throw new Error('Add your xAI API key in Settings to scan receipts.')
+    throw new Error('Add your xAI API key in Settings for cloud boost.')
   }
 
-  // Prefer jpeg/png; convert unknown types by re-wrapping as jpeg data URL from canvas if needed
   let dataUrl = await blobToDataUrl(imageBlob)
   if (!dataUrl.startsWith('data:image/jpeg') && !dataUrl.startsWith('data:image/png')) {
     dataUrl = await ensureJpegOrPngDataUrl(imageBlob)
@@ -146,26 +175,83 @@ export async function parseReceiptImage(
   if (!response.ok) {
     const errText = await response.text().catch(() => '')
     throw new Error(
-      `Receipt scan failed (${response.status}). ${errText.slice(0, 200) || 'Check your API key and network.'}`,
+      `Cloud scan failed (${response.status}). ${errText.slice(0, 200) || 'Check your API key and network.'}`,
     )
   }
 
   const data: unknown = await response.json()
   const text = extractOutputText(data)
   if (!text) {
-    throw new Error('Receipt scan returned empty response. Try again or enter manually.')
+    throw new Error('Cloud scan returned empty response.')
   }
-  return parseSuggestionJson(text)
+  return { ...parseSuggestionJson(text), source: 'cloud', confidence: 0.9 }
 }
 
-async function ensureJpegOrPngDataUrl(blob: Blob): Promise<string> {
-  const bitmap = await createImageBitmap(blob)
-  const canvas = document.createElement('canvas')
-  canvas.width = bitmap.width
-  canvas.height = bitmap.height
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Could not process image')
-  ctx.drawImage(bitmap, 0, 0)
-  bitmap.close()
-  return canvas.toDataURL('image/jpeg', 0.92)
+/** @deprecated use scanReceipt */
+export async function parseReceiptImage(
+  apiKey: string,
+  imageBlob: Blob,
+): Promise<ReceiptSuggestion> {
+  return parseReceiptImageCloud(apiKey, imageBlob)
+}
+
+/**
+ * Default path: low-power on-device agent (Tesseract + local rules).
+ * Optional cloud boost when API key is set and on-device confidence is low,
+ * or when preferCloud is true.
+ */
+export async function scanReceipt(
+  imageBlob: Blob,
+  options: ScanOptions = {},
+): Promise<ScanResult> {
+  const { apiKey = '', preferCloud = false, onProgress } = options
+
+  if (preferCloud && apiKey.trim()) {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.2,
+      message: 'Cloud AI reading receipt…',
+      engine: 'cloud',
+    })
+    try {
+      return await parseReceiptImageCloud(apiKey, imageBlob)
+    } catch {
+      // fall through to on-device
+    }
+  }
+
+  onProgress?.({
+    stage: 'prepare',
+    progress: 0.02,
+    message: 'Starting on-device agent…',
+    engine: 'on-device',
+  })
+
+  const local: LocalAgentResult = await runOnDeviceReceiptAgent(imageBlob, (p) =>
+    onProgress?.({ ...p, engine: 'on-device' }),
+  )
+
+  const needsBoost =
+    apiKey.trim() &&
+    (local.confidence < 0.55 || local.amount == null || !local.description)
+
+  if (needsBoost) {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.5,
+      message: 'Boosting with cloud AI…',
+      engine: 'cloud',
+    })
+    try {
+      const cloud = await parseReceiptImageCloud(apiKey, imageBlob)
+      return {
+        ...cloud,
+        notes: [cloud.notes, 'Cloud boost after on-device pass'].filter(Boolean).join(' · '),
+      }
+    } catch {
+      return local
+    }
+  }
+
+  return local
 }

@@ -7,7 +7,9 @@ Phone-friendly app to track purchases for **one** school bus conversion (schooli
 ## Features
 
 - Running total + category breakdown + recent purchases
-- Scan receipt (photo) → AI suggests date, store, amount, description, category → you confirm
+- **On-device low-power agent** (Tesseract OCR + schoolie filing rules) when you upload a receipt — works offline after first language pack
+- Optional cloud boost (xAI) if on-device confidence is low
+- Suggest & confirm before save
 - Manual add / edit / delete
 - Receipt photos stored on device (IndexedDB)
 - Export CSV and PDF summary
@@ -23,13 +25,11 @@ npm run dev
 
 Open the URL on your phone (same Wi‑Fi) or use the printed local URL. In the browser: **Add to Home Screen**.
 
-## Receipt scanning (xAI)
+## Receipt scanning
 
-1. Get an API key at [console.x.ai](https://console.x.ai)
-2. In the app: **Settings** → paste key → Save
-3. Tap **Scan receipt**
+**Default — on your phone:** Tap **Scan receipt** → photo → on-device agent reads text and suggests fields. No API key needed.
 
-The key stays on your device and is only sent to xAI with the receipt image.
+**Optional cloud boost:** Add an xAI key in Settings ([console.x.ai](https://console.x.ai)). Used only when the on-device read looks weak.
 
 ## Data & backup
 

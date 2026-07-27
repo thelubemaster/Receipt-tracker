@@ -13,8 +13,9 @@ import {
   clearAllData,
 } from './db'
 import { downloadCsv, downloadPdfSummary } from './exportData'
+import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
-import { parseReceiptImage } from './receiptAi'
+import { scanReceipt, type ScanResult } from './receiptAi'
 import { categoryBreakdown, totalSpent } from './stats'
 import type { AppSettings, CategoryId, Purchase, Screen } from './types'
 import './index.css'
@@ -307,22 +308,25 @@ function HomeScreen(props: {
   return (
     <>
       <header className="topbar">
-        <div>
-          <h1>{props.projectName}</h1>
-          <div className="muted">Schoolie conversion costs</div>
-        </div>
+        <BrandLockup title={props.projectName} subtitle="Schoolie conversion costs" />
         <button type="button" className="icon-btn" aria-label="Settings" onClick={props.onSettings}>
           ⚙
         </button>
       </header>
 
       <section className="hero-card">
-        <div className="hero-label">Total spent</div>
-        <div className="hero-total">{formatMoney(props.total)}</div>
-        <div className="hero-sub">
-          {props.purchaseCount === 0
-            ? 'No purchases yet — scan a receipt to start'
-            : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} logged`}
+        <div className="hero-inner">
+          <div className="hero-label">Total spent</div>
+          <div className="hero-total">{formatMoney(props.total)}</div>
+          <div className="hero-sub">
+            {props.purchaseCount === 0
+              ? 'No purchases yet — scan a receipt to start'
+              : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} logged`}
+          </div>
+          <div className="hero-pills">
+            <span className="pill pill-accent">⚡ On-device agent</span>
+            <span className="pill">Works offline</span>
+          </div>
         </div>
       </section>
 
@@ -340,7 +344,13 @@ function HomeScreen(props: {
                 {formatMoney(c.amount)} · {c.percent}%
               </span>
               <div className="category-bar">
-                <span style={{ width: `${Math.max(c.percent, 2)}%`, background: c.color }} />
+                <span
+                  style={{
+                    width: `${Math.max(c.percent, 2)}%`,
+                    background: c.color,
+                    color: c.color,
+                  }}
+                />
               </div>
             </div>
           ))}
@@ -349,12 +359,11 @@ function HomeScreen(props: {
 
       <div className="section-title">
         <span>Recent</span>
-        <span>
-          <button type="button" className="muted" onClick={props.onExportCsv}>
+        <span className="export-links">
+          <button type="button" onClick={props.onExportCsv}>
             CSV
           </button>
-          {' · '}
-          <button type="button" className="muted" onClick={props.onExportPdf}>
+          <button type="button" onClick={props.onExportPdf}>
             PDF
           </button>
         </span>
@@ -362,7 +371,8 @@ function HomeScreen(props: {
 
       {props.purchases.length === 0 ? (
         <div className="empty">
-          Tap <strong>Scan receipt</strong> to photograph a store receipt, or add one manually.
+          Tap <strong>Scan receipt</strong> — your phone reads the photo with a low-power on-device
+          agent, then you confirm before saving.
         </div>
       ) : (
         <div className="purchase-list">
@@ -402,16 +412,14 @@ function ScanScreen(props: {
   apiKey: string
   onBack: () => void
   onNeedSettings: () => void
-  onParsed: (
-    suggestion: Awaited<ReturnType<typeof parseReceiptImage>>,
-    blob: Blob,
-    previewUrl: string,
-  ) => void
+  onParsed: (suggestion: ScanResult, blob: Blob, previewUrl: string) => void
   onManualWithPhoto: (blob: Blob, previewUrl: string) => void
   onError: (msg: string) => void
 }) {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [engine, setEngine] = useState<'on-device' | 'cloud'>('on-device')
 
   async function handleFile(file: File | null) {
     if (!file) return
@@ -423,23 +431,27 @@ function ScanScreen(props: {
     const blob = file
     const previewUrl = URL.createObjectURL(blob)
 
-    if (!props.apiKey.trim()) {
-      props.onError('Add your xAI API key in Settings to auto-read receipts — or fill the form manually.')
-      props.onManualWithPhoto(blob, previewUrl)
-      return
-    }
-
     setBusy(true)
-    setStatus('Reading receipt… this can take a few seconds.')
+    setProgress(0.02)
+    setEngine('on-device')
+    setStatus('Starting on-device agent…')
     try {
-      const suggestion = await parseReceiptImage(props.apiKey, blob)
+      const suggestion = await scanReceipt(blob, {
+        apiKey: props.apiKey,
+        onProgress: (p) => {
+          setProgress(p.progress)
+          setStatus(p.message)
+          setEngine(p.engine)
+        },
+      })
       props.onParsed(suggestion, blob, previewUrl)
     } catch (e) {
-      props.onError(e instanceof Error ? e.message : 'Scan failed')
+      props.onError(e instanceof Error ? e.message : 'Scan failed — enter details manually.')
       props.onManualWithPhoto(blob, previewUrl)
     } finally {
       setBusy(false)
       setStatus(null)
+      setProgress(0)
     }
   }
 
@@ -450,23 +462,37 @@ function ScanScreen(props: {
           ←
         </button>
         <h1>Scan receipt</h1>
-        <span style={{ width: 44 }} />
+        <LogoMark size={36} />
       </header>
 
       <div className="banner banner-info">
-        Take a clear photo of the whole receipt. The app reads the text and suggests store, total,
-        description, and schoolie category — you confirm before saving.
+        Snap the whole receipt. A <strong>low-power agent runs on your phone</strong> — it reads the
+        text, guesses total, store, and schoolie category. You confirm before anything is saved.
+        {props.apiKey.trim()
+          ? ' Cloud boost kicks in only if the on-device read looks weak.'
+          : ' Optional cloud boost available in Settings.'}
       </div>
 
       {busy ? (
-        <div className="card" style={{ textAlign: 'center', padding: 28 }}>
+        <div className="card agent-status">
           <div className="spinner" />
-          <div>{status}</div>
+          <div className="status-title">{status}</div>
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${Math.round(progress * 100)}%` }} />
+          </div>
+          <div className="muted">{Math.round(progress * 100)}%</div>
+          <div className="agent-badge">
+            {engine === 'on-device' ? '⚡ On-device · low power' : '☁ Cloud boost'}
+          </div>
         </div>
       ) : (
         <div className="scan-drop">
+          <div className="scan-icon">📷</div>
           <strong>Photograph or choose a receipt</strong>
-          <p className="muted">Works best in good light, flat, and fully in frame.</p>
+          <p className="muted">
+            Good light, flat, full receipt in frame. First scan may download a small language pack
+            (then works offline).
+          </p>
           <div className="row-actions" style={{ marginTop: 16 }}>
             <label className="btn btn-primary">
               Take photo
@@ -488,15 +514,12 @@ function ScanScreen(props: {
               />
             </label>
           </div>
-          {!props.apiKey.trim() && (
-            <p className="muted" style={{ marginTop: 16 }}>
-              No API key yet —{' '}
-              <button type="button" style={{ textDecoration: 'underline' }} onClick={props.onNeedSettings}>
-                open Settings
-              </button>{' '}
-              to enable auto-fill, or continue and enter details yourself.
-            </p>
-          )}
+          <p className="muted" style={{ marginTop: 16 }}>
+            Want smarter cloud assist?{' '}
+            <button type="button" style={{ textDecoration: 'underline' }} onClick={props.onNeedSettings}>
+              Add API key
+            </button>
+          </p>
         </div>
       )}
     </>
@@ -801,8 +824,16 @@ function SettingsScreen(props: {
           />
         </div>
 
+        <div className="card settings-card">
+          <strong>⚡ On-device agent (default)</strong>
+          <p className="muted" style={{ margin: 0 }}>
+            When you upload a receipt photo, OCR + a lightweight filing agent run entirely in this
+            browser — no key required, works offline after the first language pack download.
+          </p>
+        </div>
+
         <div className="field">
-          <label htmlFor="apiKey">xAI API key (for receipt scanning)</label>
+          <label htmlFor="apiKey">Optional cloud boost (xAI API key)</label>
           <input
             id="apiKey"
             type="password"
@@ -812,8 +843,7 @@ function SettingsScreen(props: {
             placeholder="xai-…"
           />
           <p className="muted" style={{ marginTop: 8 }}>
-            Stored only on this phone. Used to send receipt photos to xAI so the app can read totals
-            and suggest categories. Get a key at{' '}
+            Only used if the on-device read is weak. Stored on this phone. Get a key at{' '}
             <a href="https://console.x.ai" target="_blank" rel="noreferrer">
               console.x.ai
             </a>
@@ -821,7 +851,7 @@ function SettingsScreen(props: {
           </p>
         </div>
 
-        <div className="card">
+        <div className="card settings-card">
           <strong>Install on your phone</strong>
           <ul className="help-list">
             <li>
