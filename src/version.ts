@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.4.0'
+export const APP_VERSION = '1.5.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.5.0',
+    date: '2026-07-27',
+    title: 'Free high-power AIs + device & stability tests',
+    changes: [
+      'Free high-power Forge OCR (multi-preprocess on your phone)',
+      'Optional free-tier Gemini (Google AI Studio) — paid AIs not used in free scan mode',
+      'Settings → Scan this device for AI capability',
+      'Settings → Test free AIs stability suite (synthetic receipt)',
+    ],
+  },
   {
     version: '1.4.0',
     date: '2026-07-27',

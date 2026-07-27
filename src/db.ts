@@ -113,6 +113,7 @@ export async function getSettings(): Promise<AppSettings> {
   return {
     apiKey: row?.apiKey ?? '',
     openaiApiKey: row?.openaiApiKey ?? '',
+    geminiApiKey: row?.geminiApiKey ?? '',
     projectName: row?.projectName ?? 'My Schoolie',
     lastSeenVersion: row?.lastSeenVersion ?? '',
   }

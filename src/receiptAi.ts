@@ -21,6 +21,9 @@ export type ScanResult = ReceiptSuggestion & {
 export type ScanOptions = {
   apiKey?: string
   openaiApiKey?: string
+  geminiApiKey?: string
+  /** Prefer free AIs only (default true) — skip paid Grok/ChatGPT unless false */
+  freeOnly?: boolean
   onProgress?: (
     p: AgentProgress & {
       engine: 'on-device' | 'cloud'
@@ -187,6 +190,56 @@ async function imageDataUrl(imageBlob: Blob): Promise<string> {
   return dataUrl
 }
 
+/** Gemini free-tier (Google AI Studio) scans the photo */
+export async function parseReceiptWithGemini(
+  apiKey: string,
+  imageBlob: Blob,
+): Promise<ScanResult> {
+  if (!apiKey.trim()) throw new Error('Add your free Gemini API key in Settings.')
+  const dataUrl = await imageDataUrl(imageBlob)
+  const base64 = dataUrl.split(',')[1] || ''
+  const mime = dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg'
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey.trim())}`
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: buildPrompt() },
+            { inline_data: { mime_type: mime, data: base64 } },
+          ],
+        },
+      ],
+      generationConfig: { temperature: 0.1 },
+    }),
+  })
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '')
+    throw new Error(`Gemini scan failed (${response.status}). ${errText.slice(0, 180)}`)
+  }
+
+  const data = (await response.json()) as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[]
+  }
+  const text =
+    data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('\n') || ''
+  if (!text) throw new Error('Gemini returned an empty response.')
+  const parsed = parseSuggestionJson(text)
+  return {
+    ...parsed,
+    source: 'cloud',
+    confidence: 0.9,
+    aisUsed: ['gemini'],
+    activeAiLabel: 'Gemini',
+    agentReport: `Gemini (Google free tier · gemini-2.0-flash) scanned the photo · ${parsed.lineItems.length} line items`,
+  }
+}
+
 export async function parseReceiptWithGrok(apiKey: string, imageBlob: Blob): Promise<ScanResult> {
   if (!apiKey.trim()) throw new Error('Add your Grok (xAI) API key in Settings.')
   const dataUrl = await imageDataUrl(imageBlob)
@@ -343,20 +396,29 @@ function mergeResults(parts: ScanResult[]): ScanResult {
   }
 }
 
-/** On-device team always; Grok and/or ChatGPT also scan when keys are set. */
+/**
+ * Free-first: Forge on-device team always, then Gemini free-tier if key set.
+ * Paid Grok/ChatGPT only run when freeOnly is false and keys exist.
+ */
 export async function scanReceipt(
   imageBlob: Blob,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  const { apiKey = '', openaiApiKey = '', onProgress } = options
+  const {
+    apiKey = '',
+    openaiApiKey = '',
+    geminiApiKey = '',
+    freeOnly = true,
+    onProgress,
+  } = options
 
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
-    message: 'Starting AI team…',
+    message: 'Starting free AI team…',
     engine: 'on-device',
-    aiId: 'scout',
-    aiName: 'Scout',
+    aiId: 'forge',
+    aiName: 'Forge',
   })
 
   const local: LocalAgentResult = await runOnDeviceReceiptAgent(imageBlob, (p) =>
@@ -367,15 +429,32 @@ export async function scanReceipt(
     {
       ...local,
       source: 'on-device',
-      aisUsed: local.aisUsed ?? ['scout', 'ledger', 'cashier', 'clerk', 'arbiter'],
-      activeAiLabel: 'On-device team',
+      aisUsed: local.aisUsed ?? ['forge', 'scout', 'ledger', 'cashier', 'clerk', 'arbiter'],
+      activeAiLabel: 'Free on-device team',
     },
   ]
 
-  if (apiKey.trim()) {
+  // Free-tier cloud first
+  if (geminiApiKey.trim()) {
     onProgress?.({
       stage: 'ocr',
       progress: 0.88,
+      message: 'Gemini is scanning the photo…',
+      engine: 'cloud',
+      aiId: 'gemini',
+      aiName: 'Gemini',
+    })
+    try {
+      results.push(await parseReceiptWithGemini(geminiApiKey, imageBlob))
+    } catch {
+      /* keep free on-device */
+    }
+  }
+
+  if (!freeOnly && apiKey.trim()) {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.93,
       message: 'Grok is scanning the photo…',
       engine: 'cloud',
       aiId: 'grok',
@@ -384,14 +463,14 @@ export async function scanReceipt(
     try {
       results.push(await parseReceiptWithGrok(apiKey, imageBlob))
     } catch {
-      /* keep on-device */
+      /* ignore */
     }
   }
 
-  if (openaiApiKey.trim()) {
+  if (!freeOnly && openaiApiKey.trim()) {
     onProgress?.({
       stage: 'ocr',
-      progress: 0.94,
+      progress: 0.96,
       message: 'ChatGPT is scanning the photo…',
       engine: 'cloud',
       aiId: 'chatgpt',
@@ -400,14 +479,14 @@ export async function scanReceipt(
     try {
       results.push(await parseReceiptWithChatGPT(openaiApiKey, imageBlob))
     } catch {
-      /* keep others */
+      /* ignore */
     }
   }
 
   onProgress?.({
     stage: 'done',
     progress: 1,
-    message: 'All AIs finished — preparing your review…',
+    message: 'Free AI team finished — preparing your review…',
     engine: 'on-device',
     aiName: 'Team',
   })

@@ -44,10 +44,12 @@ export interface Purchase {
 }
 
 export interface AppSettings {
-  /** xAI / Grok API key */
+  /** xAI / Grok API key (optional paid) */
   apiKey: string
-  /** OpenAI / ChatGPT API key */
+  /** OpenAI / ChatGPT API key (optional paid) */
   openaiApiKey: string
+  /** Google AI Studio Gemini key (free tier) */
+  geminiApiKey: string
   projectName: string
   /** Last app version the user acknowledged (What's new). */
   lastSeenVersion: string

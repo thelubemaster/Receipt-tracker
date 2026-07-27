@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AiId } from './aiRoster'
 import { AI_ROSTER, getAi } from './aiRoster'
+import { runAiStabilitySuite, type StabilitySuiteResult } from './aiStability'
+import { probeDevice, type DeviceProbeResult } from './deviceProbe'
 import { CATEGORIES, getCategory } from './categories'
 import {
   deletePurchase,
@@ -95,6 +97,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>({
     apiKey: '',
     openaiApiKey: '',
+    geminiApiKey: '',
     projectName: 'My Schoolie',
     lastSeenVersion: '',
   })
@@ -322,6 +325,7 @@ export default function App() {
         <ScanScreen
           apiKey={settings.apiKey}
           openaiApiKey={settings.openaiApiKey}
+          geminiApiKey={settings.geminiApiKey}
           onBack={() => setScreen({ name: 'home' })}
           onNeedSettings={() => setScreen({ name: 'settings' })}
           onParsed={(suggestion, blob, previewUrl) => {
@@ -562,8 +566,8 @@ function HomeScreen(props: {
               : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} logged`}
           </div>
           <div className="hero-pills">
-            <span className="pill pill-accent">⚡ Multi-agent team</span>
-            <span className="pill">Cross-checked</span>
+            <span className="pill pill-accent">Free AI team</span>
+            <span className="pill">Forge + Arbiter</span>
           </div>
         </div>
       </section>
@@ -656,6 +660,7 @@ function HomeScreen(props: {
 function ScanScreen(props: {
   apiKey: string
   openaiApiKey: string
+  geminiApiKey: string
   onBack: () => void
   onNeedSettings: () => void
   onParsed: (suggestion: ScanResult, blob: Blob, previewUrl: string) => void
@@ -668,11 +673,11 @@ function ScanScreen(props: {
   const [activeAi, setActiveAi] = useState<{ name: string; id?: AiId } | null>(null)
 
   const whoWillScan = useMemo(() => {
-    const names = ['Scout', 'Ledger', 'Cashier', 'Clerk', 'Arbiter']
-    if (props.apiKey.trim()) names.push('Grok')
-    if (props.openaiApiKey.trim()) names.push('ChatGPT')
+    // Free-first roster shown before scan
+    const names = ['Forge', 'Scout', 'Ledger', 'Cashier', 'Clerk', 'Arbiter']
+    if (props.geminiApiKey.trim()) names.push('Gemini (free)')
     return names
-  }, [props.apiKey, props.openaiApiKey])
+  }, [props.geminiApiKey])
 
   async function handleFile(file: File | null) {
     if (!file) return
@@ -692,6 +697,8 @@ function ScanScreen(props: {
       const suggestion = await scanReceipt(blob, {
         apiKey: props.apiKey,
         openaiApiKey: props.openaiApiKey,
+        geminiApiKey: props.geminiApiKey,
+        freeOnly: true,
         onProgress: (p) => {
           setProgress(p.progress)
           setStatus(p.message)
@@ -721,12 +728,9 @@ function ScanScreen(props: {
       </header>
 
       <div className="banner banner-info">
-        You&apos;ll see <strong>which AI is working by name</strong> (e.g. “Grok is scanning the
-        photo…” or “ChatGPT is scanning the photo…”). On-device: Scout → Ledger → Cashier → Clerk →
-        Arbiter.
-        {props.apiKey.trim() || props.openaiApiKey.trim()
-          ? ` Cloud: ${[props.apiKey.trim() && 'Grok', props.openaiApiKey.trim() && 'ChatGPT'].filter(Boolean).join(' + ')}.`
-          : ' Add Grok / ChatGPT keys in Settings to include them.'}
+        <strong>Free AIs only.</strong> You&apos;ll see names live (e.g. “Forge is deep-scanning…” /
+        “Gemini is scanning the photo…”). On-device team is always free. Optional free-tier Gemini
+        needs a free Google AI Studio key in Settings.
       </div>
 
       {busy ? (
@@ -783,7 +787,7 @@ function ScanScreen(props: {
             </label>
           </div>
           <p className="muted" style={{ marginTop: 16 }}>
-            Enable Grok or ChatGPT?{' '}
+            Want free-tier Gemini?{' '}
             <button type="button" style={{ textDecoration: 'underline' }} onClick={props.onNeedSettings}>
               Open Settings
             </button>
@@ -1342,11 +1346,17 @@ function SettingsScreen(props: {
   const [projectName, setProjectName] = useState(props.settings.projectName)
   const [apiKey, setApiKey] = useState(props.settings.apiKey)
   const [openaiApiKey, setOpenaiApiKey] = useState(props.settings.openaiApiKey)
+  const [geminiApiKey, setGeminiApiKey] = useState(props.settings.geminiApiKey)
   const [saving, setSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
   const [board, setBoard] = useState<LeaderboardMap>(defaultLeaderboard())
   const [debugReports, setDebugReports] = useState<RemoteDebugSummary[]>([])
   const [debugLoading, setDebugLoading] = useState(false)
+  const [deviceProbe, setDeviceProbe] = useState<DeviceProbeResult | null>(null)
+  const [probing, setProbing] = useState(false)
+  const [stability, setStability] = useState<StabilitySuiteResult | null>(null)
+  const [stabilityRunning, setStabilityRunning] = useState(false)
+  const [stabilityStatus, setStabilityStatus] = useState('')
 
   useEffect(() => {
     void getLeaderboard().then((b) => setBoard(normalizeLeaderboard(b)))
@@ -1361,6 +1371,32 @@ function SettingsScreen(props: {
       setDebugReports(await listRemoteDebugReports())
     } finally {
       setDebugLoading(false)
+    }
+  }
+
+  async function handleDeviceScan() {
+    setProbing(true)
+    try {
+      setDeviceProbe(await probeDevice())
+    } finally {
+      setProbing(false)
+    }
+  }
+
+  async function handleStabilityTest() {
+    setStabilityRunning(true)
+    setStabilityStatus('Starting free AI stability suite…')
+    try {
+      const result = await runAiStabilitySuite(
+        { geminiApiKey },
+        (msg) => setStabilityStatus(msg),
+      )
+      setStability(result)
+      setStabilityStatus(result.summary)
+    } catch (e) {
+      setStabilityStatus(e instanceof Error ? e.message : 'Stability test failed')
+    } finally {
+      setStabilityRunning(false)
     }
   }
 
@@ -1394,11 +1430,92 @@ function SettingsScreen(props: {
               projectName: projectName.trim() || 'My Schoolie',
               apiKey: apiKey.trim(),
               openaiApiKey: openaiApiKey.trim(),
+              geminiApiKey: geminiApiKey.trim(),
               lastSeenVersion: props.settings.lastSeenVersion,
             })
             .finally(() => setSaving(false))
         }}
       >
+        <div className="card settings-card">
+          <strong>Device AI scan</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Checks whether this phone can run free on-device AIs (WASM, workers, storage, network…).
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={probing}
+            onClick={() => void handleDeviceScan()}
+          >
+            {probing ? 'Scanning device…' : 'Scan this device'}
+          </button>
+          {deviceProbe && (
+            <div className="device-probe-results">
+              <div className={`probe-grade probe-grade-${deviceProbe.grade}`}>
+                Grade: {deviceProbe.grade} · {deviceProbe.score}/{deviceProbe.maxScore}
+              </div>
+              <p className="muted">{deviceProbe.summary}</p>
+              <div className="muted" style={{ fontSize: '0.82rem', marginBottom: 8 }}>
+                Recommended: {deviceProbe.recommended.join(' · ')}
+              </div>
+              <div className="cap-list">
+                {deviceProbe.checks.map((c) => (
+                  <div key={c.id} className={`cap-row cap-${c.level}`}>
+                    <span className="cap-level">{c.level}</span>
+                    <div>
+                      <strong>{c.name}</strong>
+                      <div className="muted" style={{ fontSize: '0.78rem' }}>
+                        {c.detail}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="card settings-card">
+          <strong>Free AI stability test</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Runs a synthetic receipt through free AIs (Forge OCR + parsers
+            {geminiApiKey.trim() ? ' + Gemini' : ''}) and reports pass/fail + speed. No personal
+            photos leave the device for on-device tests.
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={stabilityRunning}
+            onClick={() => void handleStabilityTest()}
+          >
+            {stabilityRunning ? 'Testing free AIs…' : 'Test free AIs'}
+          </button>
+          {stabilityStatus && (
+            <p className="muted" style={{ marginTop: 10 }}>
+              {stabilityStatus}
+            </p>
+          )}
+          {stability && (
+            <div className="stability-list">
+              {stability.results.map((r) => (
+                <div key={r.aiId} className={`stability-row st-${r.status}`}>
+                  <span className="st-badge">{r.status}</span>
+                  <div>
+                    <strong>
+                      {r.name}
+                      {r.free ? ' · free' : ' · paid'}
+                    </strong>
+                    <div className="muted" style={{ fontSize: '0.78rem' }}>
+                      {r.detail}
+                      {r.latencyMs > 0 ? ` · ${r.latencyMs} ms` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="card settings-card">
           <strong>App version</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
@@ -1413,16 +1530,20 @@ function SettingsScreen(props: {
         </div>
 
         <div className="card settings-card">
-          <strong>AI roster</strong>
+          <strong>AI roster (free-first)</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Every AI that can work a receipt. On-device AIs always run; cloud AIs need a key.
+            Free on-device AIs always run. Gemini uses Google&apos;s free AI Studio tier. Paid AIs
+            are listed but not used in free-only scan mode.
           </p>
           <div className="ai-roster-list">
             {AI_ROSTER.map((ai) => {
               const enabled =
                 ai.kind === 'on-device' ||
+                (ai.needsKey === 'gemini' && Boolean(geminiApiKey.trim())) ||
                 (ai.needsKey === 'xai' && Boolean(apiKey.trim())) ||
                 (ai.needsKey === 'openai' && Boolean(openaiApiKey.trim()))
+              const costLabel =
+                ai.cost === 'free' ? 'free' : ai.cost === 'free-tier' ? 'free tier' : 'paid'
               return (
                 <div key={ai.id} className="ai-roster-row">
                   <div className="ai-roster-icon" style={{ background: `${ai.color}22`, color: ai.color }}>
@@ -1431,12 +1552,13 @@ function SettingsScreen(props: {
                   <div className="ai-roster-body">
                     <div className="ai-roster-title">
                       {ai.name}
+                      <span className={`ai-cost-pill cost-${ai.cost}`}>{costLabel}</span>
                       <span className={`ai-status-dot ${enabled ? 'on' : 'off'}`}>
-                        {enabled ? 'ready' : 'needs key'}
+                        {ai.kind === 'on-device' ? 'ready' : enabled ? 'ready' : 'needs key'}
                       </span>
                     </div>
                     <div className="muted" style={{ fontSize: '0.82rem' }}>
-                      {ai.fullName} · {ai.kind === 'on-device' ? 'On your phone' : 'Cloud'}
+                      {ai.fullName} · power {ai.power}/5
                     </div>
                     <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
                       {ai.role}
@@ -1590,7 +1712,27 @@ function SettingsScreen(props: {
         </div>
 
         <div className="field">
-          <label htmlFor="apiKey">Grok API key (xAI)</label>
+          <label htmlFor="geminiApiKey">Gemini API key (Google free tier)</label>
+          <input
+            id="geminiApiKey"
+            type="password"
+            autoComplete="off"
+            value={geminiApiKey}
+            onChange={(e) => setGeminiApiKey(e.target.value)}
+            placeholder="AIza…"
+          />
+          <p className="muted" style={{ marginTop: 8 }}>
+            Free AI Studio key. When set, you&apos;ll see <strong>Gemini is scanning the photo…</strong>{' '}
+            after the free on-device team. Get a free key at{' '}
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+              aistudio.google.com/apikey
+            </a>
+            .
+          </p>
+        </div>
+
+        <div className="field">
+          <label htmlFor="apiKey">Grok API key (optional paid — not used in free mode)</label>
           <input
             id="apiKey"
             type="password"
@@ -1599,17 +1741,10 @@ function SettingsScreen(props: {
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="xai-…"
           />
-          <p className="muted" style={{ marginTop: 8 }}>
-            When set, you&apos;ll see <strong>Grok is scanning the photo…</strong> after the on-device
-            team. Key stays on this phone.{' '}
-            <a href="https://console.x.ai" target="_blank" rel="noreferrer">
-              console.x.ai
-            </a>
-          </p>
         </div>
 
         <div className="field">
-          <label htmlFor="openaiApiKey">ChatGPT API key (OpenAI)</label>
+          <label htmlFor="openaiApiKey">ChatGPT API key (optional paid — not used in free mode)</label>
           <input
             id="openaiApiKey"
             type="password"
@@ -1618,13 +1753,6 @@ function SettingsScreen(props: {
             onChange={(e) => setOpenaiApiKey(e.target.value)}
             placeholder="sk-…"
           />
-          <p className="muted" style={{ marginTop: 8 }}>
-            When set, you&apos;ll see <strong>ChatGPT is scanning the photo…</strong> as a second
-            cloud opinion. Key stays on this phone.{' '}
-            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">
-              platform.openai.com
-            </a>
-          </p>
         </div>
 
         <div className="card settings-card">

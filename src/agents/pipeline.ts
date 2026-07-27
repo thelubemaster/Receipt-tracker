@@ -107,8 +107,7 @@ async function getWorker(onProgress?: (p: AgentProgress) => void): Promise<Worke
 }
 
 /**
- * Dual-pass OCR: two page-segmentation modes, keep the richer read.
- * Then line-items, totals, and merchant agents run in parallel and the arbiter reconciles.
+ * Free high-power path: Forge multi-preprocess OCR, then Ledger/Cashier/Clerk/Arbiter.
  */
 export async function runMultiAgentReceiptPipeline(
   imageBlob: Blob,
@@ -117,41 +116,39 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
-    message: 'Warming up the AI team…',
-    aiId: 'scout',
-    aiName: 'Scout',
+    message: 'Warming up free AI team…',
+    aiId: 'forge',
+    aiName: 'Forge',
   })
-  const prepared = await prepareImageForOcr(imageBlob)
-  const worker = await getWorker(onProgress)
-  const Tesseract = await import('tesseract.js')
 
-  onProgress?.({
-    stage: 'ocr',
-    progress: 0.15,
-    message: 'Scout is scanning the photo (pass 1/2)…',
-    aiId: 'scout',
-    aiName: 'Scout',
-  })
-  await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.AUTO })
-  const pass1 = await worker.recognize(prepared)
-
-  onProgress?.({
-    stage: 'ocr',
-    progress: 0.45,
-    message: 'Scout is scanning the photo (pass 2/2)…',
-    aiId: 'scout',
-    aiName: 'Scout',
-  })
-  await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT })
-  const pass2 = await worker.recognize(prepared)
-
-  const t1 = pass1.data.text || ''
-  const t2 = pass2.data.text || ''
-  const rawText = scoreOcrText(t1) >= scoreOcrText(t2) ? t1 : t2
-  const ocrNote =
-    scoreOcrText(t1) >= scoreOcrText(t2)
-      ? 'Scout: used auto-layout OCR pass'
-      : 'Scout: used sparse-text OCR pass'
+  // Prefer Forge (free high-power). Fall back to Scout dual-pass if Forge throws.
+  let rawText = ''
+  let ocrNote = ''
+  try {
+    const { runForgeOcr } = await import('./forgeOcr')
+    const forge = await runForgeOcr(imageBlob, onProgress)
+    rawText = forge.text
+    ocrNote = `Forge (free high-power): best pass ${forge.bestPass}`
+  } catch {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.2,
+      message: 'Scout is scanning the photo (fallback)…',
+      aiId: 'scout',
+      aiName: 'Scout',
+    })
+    const prepared = await prepareImageForOcr(imageBlob)
+    const worker = await getWorker(onProgress)
+    const Tesseract = await import('tesseract.js')
+    await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.AUTO })
+    const pass1 = await worker.recognize(prepared)
+    await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT })
+    const pass2 = await worker.recognize(prepared)
+    const t1 = pass1.data.text || ''
+    const t2 = pass2.data.text || ''
+    rawText = scoreOcrText(t1) >= scoreOcrText(t2) ? t1 : t2
+    ocrNote = 'Scout free OCR fallback'
+  }
 
   onProgress?.({
     stage: 'parse',
@@ -189,10 +186,10 @@ export async function runMultiAgentReceiptPipeline(
   })
 
   const result = runArbiterAgent({ rawText, lines, totals, merchant })
-  result.aisUsed = ['scout', 'ledger', 'cashier', 'clerk', 'arbiter']
-  result.activeAiLabel = 'On-device team (Scout → Arbiter)'
+  result.aisUsed = ['forge', 'scout', 'ledger', 'cashier', 'clerk', 'arbiter']
+  result.activeAiLabel = 'Free on-device team (Forge → Arbiter)'
   result.agentReport = [
-    'AI team: Scout, Ledger, Cashier, Clerk, Arbiter',
+    'Free AI team: Forge, Scout, Ledger, Cashier, Clerk, Arbiter',
     ocrNote,
     result.agentReport,
   ].join('\n')
@@ -201,7 +198,7 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'done',
     progress: 1,
-    message: 'On-device AI team finished',
+    message: 'Free on-device AI team finished',
     aiId: 'arbiter',
     aiName: 'Arbiter',
   })

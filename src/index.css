@@ -960,6 +960,103 @@ code {
   border-radius: 4px;
 }
 
+.ai-cost-pill {
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.cost-free {
+  background: rgba(92, 184, 138, 0.18);
+  color: #b8efd0;
+}
+
+.cost-free-tier {
+  background: rgba(138, 180, 248, 0.18);
+  color: #c5dbff;
+}
+
+.cost-paid {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+
+.device-probe-results {
+  margin-top: 14px;
+}
+
+.probe-grade {
+  font-weight: 800;
+  margin-bottom: 8px;
+  text-transform: capitalize;
+}
+
+.probe-grade-excellent {
+  color: #b8efd0;
+}
+.probe-grade-good {
+  color: #c5dbff;
+}
+.probe-grade-limited {
+  color: #f6e2bc;
+}
+.probe-grade-poor {
+  color: #ffc5c0;
+}
+
+.cap-list,
+.stability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cap-row,
+.stability-row {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.cap-level,
+.st-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 0;
+  text-align: center;
+  border-radius: 6px;
+}
+
+.cap-pass .cap-level,
+.st-pass .st-badge {
+  background: rgba(92, 184, 138, 0.2);
+  color: #b8efd0;
+}
+.cap-warn .cap-level {
+  background: rgba(232, 165, 75, 0.2);
+  color: #f6e2bc;
+}
+.cap-fail .cap-level,
+.st-fail .st-badge {
+  background: rgba(224, 90, 79, 0.2);
+  color: #ffc5c0;
+}
+.st-skip .st-badge {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
