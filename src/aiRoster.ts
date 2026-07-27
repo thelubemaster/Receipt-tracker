@@ -14,6 +14,7 @@ export type AiId =
   | 'clerk'
   | 'arbiter'
   | 'quorum'
+  | 'council'
 
 export type AiKind = 'on-device'
 
@@ -175,6 +176,19 @@ export const AI_ROSTER: AiProfile[] = [
     emoji: '👑',
     color: '#f0c36a',
     power: 6,
+  },
+  {
+    id: 'council',
+    name: 'Council',
+    fullName: 'Council · Agent Debate',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Agents talk on a shared board: Cashier challenges gaps, Sieve hunts missing prices, Clerk fixes vendor, then they agree.',
+    workingLine: 'Council is debating the receipt…',
+    engine: 'Blackboard multi-round free agents',
+    emoji: '🏛️',
+    color: '#90caf9',
+    power: 8,
   },
 ]
 

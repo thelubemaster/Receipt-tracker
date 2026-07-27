@@ -14,6 +14,7 @@ export { runMerchantAgent, extractDate, extractVendor } from './agents/merchantA
 export { categorizeText } from './agents/keywords'
 export { runArbiterAgent } from './agents/arbiterAgent'
 
+import { runCouncilAgent } from './agents/councilAgent'
 import {
   runMultiAgentReceiptPipeline,
   type AgentProgress,
@@ -29,7 +30,15 @@ export function parseReceiptText(rawText: string): LocalAgentResult {
   const lines = runLineItemsAgent(rawText)
   const totals = runTotalsAgent(rawText)
   const merchant = runMerchantAgent(rawText)
-  return runArbiterAgent({ rawText, lines, totals, merchant })
+  const draft = runArbiterAgent({ rawText, lines, totals, merchant })
+  return runCouncilAgent(
+    {
+      ...draft,
+      aisUsed: ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'],
+      activeAiLabel: 'Text parse',
+    },
+    rawText,
+  )
 }
 
 export function extractAmount(text: string): number | null {

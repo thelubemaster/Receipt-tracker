@@ -6,6 +6,7 @@ import { runHammerOcr } from './hammerOcr'
 import { mergeOcrTexts, runLensOcr } from './lensOcr'
 import { runLineItemsAgent } from './lineItemsAgent'
 import { runMerchantAgent } from './merchantAgent'
+import { runCouncilAgent } from './councilAgent'
 import { runQuorumAgent } from './quorumAgent'
 import { runSieveAgent } from './sieveAgent'
 import { runTotalsAgent } from './totalsAgent'
@@ -234,7 +235,7 @@ export async function runMultiAgentReceiptPipeline(
 
   onProgress?.({
     stage: 'arbitrate',
-    progress: 0.9,
+    progress: 0.88,
     message: `Quorum is voting across ${parses.length} full parses…`,
     aiId: 'quorum',
     aiName: 'Quorum',
@@ -244,6 +245,33 @@ export async function runMultiAgentReceiptPipeline(
   for (let i = 1; i < parses.length; i++) {
     final = runQuorumAgent(final, parses[i])
   }
+
+  // Use richest OCR text for council hunting
+  let councilText = usable[0].text
+  for (let i = 1; i < usable.length; i++) {
+    councilText = mergeOcrTexts(councilText, usable[i].text)
+  }
+  if (!final.rawText || councilText.length > final.rawText.length) {
+    final = { ...final, rawText: councilText }
+  }
+
+  onProgress?.({
+    stage: 'arbitrate',
+    progress: 0.93,
+    message: 'Council is debating — agents challenging gaps…',
+    aiId: 'council',
+    aiName: 'Council',
+  })
+
+  final = runCouncilAgent(final, councilText || final.rawText || '', (msg, aiId) => {
+    onProgress?.({
+      stage: 'arbitrate',
+      progress: 0.94,
+      message: msg.slice(0, 120),
+      aiId: aiId ?? 'council',
+      aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+    })
+  })
 
   final.aisUsed = Array.from(
     new Set<AiId>([
@@ -259,15 +287,16 @@ export async function runMultiAgentReceiptPipeline(
       'clerk',
       'arbiter',
       'quorum',
+      'council',
     ]),
   )
   final.activeAiLabel = maxPower
-    ? 'Max-power free team (Hammer + Titan + Quorum)'
-    : 'Free on-device team (Quorum)'
+    ? 'Max-power free team + Council debate'
+    : 'Free team + Council debate'
   final.agentReport = [
     maxPower
-      ? 'MAX POWER free AIs: Forge, Lens, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum'
-      : 'Free AIs: Forge, Lens, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum',
+      ? 'MAX POWER free AIs: Forge, Lens, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council'
+      : 'Free AIs: Forge, Lens, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council',
     ...usable.map((u) => u.note),
     final.agentReport,
   ].join('\n')
@@ -276,9 +305,9 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'done',
     progress: 1,
-    message: 'Free AI team finished',
-    aiId: 'quorum',
-    aiName: 'Quorum',
+    message: 'Council agreed — free AI team finished',
+    aiId: 'council',
+    aiName: 'Council',
   })
 
   return final

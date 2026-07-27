@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.7.0'
+export const APP_VERSION = '1.7.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.7.1',
+    date: '2026-07-27',
+    title: 'Council agent debate + debug receipt recheck',
+    changes: [
+      'Council blackboard: Cashier challenges gaps, Sieve hunts missing prices, Clerk fixes vendor',
+      'Agents talk to each other in multi-round debate after Quorum',
+      'Rechecked Swag Performance Parts debug scan — products + shipping math agreement',
+    ],
+  },
   {
     version: '1.7.0',
     date: '2026-07-27',

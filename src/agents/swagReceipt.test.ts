@@ -71,4 +71,12 @@ describe('Swag Performance Parts receipt (real user debug scan)', () => {
     expect(r.lineItems.length).toBeGreaterThanOrEqual(2)
     expect(r.vendor.toLowerCase()).toMatch(/swag/)
   })
+
+  it('council debate log shows agents talking', () => {
+    const r = parseReceiptText(SWAG_OCR)
+    expect(r.agentReport || '').toMatch(/Council debate|cashier|challenge|hunted|missing/i)
+    const sums = r.lineItems.reduce((s, i) => s + i.amount, 0)
+    // products should approach subtotal 66.72 (39.97+26.75)
+    expect(sums).toBeGreaterThanOrEqual(60)
+  })
 })
