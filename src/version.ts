@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.3.0'
+export const APP_VERSION = '1.4.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.4.0',
+    date: '2026-07-27',
+    title: 'Report bad scans for debugging',
+    changes: [
+      '“Report bad scan” saves the receipt photo + AI outputs so the coding agent can inspect them',
+      'Reports land in debug-scans/ when using the project’s dev/preview server',
+      'Always can download a debug JSON bundle to share',
+      'Settings shows remote debug reports when available',
+    ],
+  },
   {
     version: '1.3.0',
     date: '2026-07-27',

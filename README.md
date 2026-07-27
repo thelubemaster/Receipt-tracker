@@ -31,6 +31,30 @@ Open the URL on your phone (same Wi‑Fi) or use the printed local URL. In the b
 
 **Optional cloud boost:** Add an xAI key in Settings ([console.x.ai](https://console.x.ai)). Used only when the on-device read looks weak.
 
+## Debug bad scans (so the coding agent can see them)
+
+When agents misread a receipt:
+
+1. After a scan, open the review screen.
+2. Optionally type what went wrong.
+3. Tap **Report bad scan for debugging**.
+
+If the app is running via this project’s `npm run dev` or `npm run preview` server, the report is saved to:
+
+```text
+debug-scans/<report-id>/
+  meta.json
+  receipt.jpg
+  ocr.txt
+  agent-report.txt
+  suggestion.json
+  form-snapshot.json
+```
+
+Then tell the agent: “look at the latest bad scan in `debug-scans/`.”
+
+If the host can’t receive uploads, the app downloads a `schoolie-debug-*.json` file — share that in chat instead.
+
 ## Version & updates
 
 - Version chip on home and in Settings (`vX.Y.Z`)

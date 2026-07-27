@@ -935,6 +935,31 @@ a {
   font-size: 0.85rem;
 }
 
+.debug-report-card {
+  margin-top: 8px;
+}
+
+.debug-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.debug-list-row {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

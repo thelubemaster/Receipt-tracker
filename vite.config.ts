@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+// @ts-expect-error plain JS middleware helper
+import { attachDebugReportMiddleware } from './scripts/debug-report-middleware.mjs'
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
   version: string
@@ -44,10 +46,24 @@ function versionJsonPlugin(): Plugin {
   }
 }
 
+/** Lets the coding agent inspect bad scans saved from the phone/browser. */
+function debugReportPlugin(): Plugin {
+  return {
+    name: 'schoolie-debug-reports',
+    configureServer(server) {
+      attachDebugReportMiddleware(server.middlewares)
+    },
+    configurePreviewServer(server) {
+      attachDebugReportMiddleware(server.middlewares)
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     react(),
     versionJsonPlugin(),
+    debugReportPlugin(),
     VitePWA({
       // Prompt so we can show “new version ready” instead of silent swap only
       registerType: 'prompt',

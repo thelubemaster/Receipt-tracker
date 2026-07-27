@@ -35,6 +35,13 @@ import {
   type UpdateCheckStatus,
 } from './updateCheck'
 import {
+  blobToDataUrl,
+  buildReportShell,
+  listRemoteDebugReports,
+  submitDebugReport,
+  type RemoteDebugSummary,
+} from './debugReport'
+import {
   APP_VERSION,
   CHANGELOG,
   formatVersionLabel,
@@ -52,7 +59,15 @@ function todayISO(): string {
 }
 
 function emptyForm(
-  partial?: Partial<Purchase> & { agentReport?: string; activeAiLabel?: string },
+  partial?: Partial<Purchase> & {
+    agentReport?: string
+    activeAiLabel?: string
+    rawText?: string
+    confidence?: number
+    source?: string
+    subtotal?: number | null
+    tax?: number | null
+  },
 ) {
   return {
     date: partial?.date ?? todayISO(),
@@ -66,6 +81,11 @@ function emptyForm(
     aisUsed: (partial?.aisUsed ?? []) as AiId[],
     activeAiLabel: partial?.activeAiLabel ?? '',
     bestAiId: (partial?.bestAiId ?? null) as AiId | null,
+    rawText: partial?.rawText ?? '',
+    confidence: partial?.confidence,
+    source: partial?.source ?? '',
+    subtotal: partial?.subtotal ?? null,
+    tax: partial?.tax ?? null,
   }
 }
 
@@ -320,6 +340,11 @@ export default function App() {
                 agentReport: suggestion.agentReport,
                 aisUsed,
                 activeAiLabel: suggestion.activeAiLabel,
+                rawText: suggestion.rawText,
+                confidence: suggestion.confidence,
+                source: suggestion.source,
+                subtotal: suggestion.subtotal,
+                tax: suggestion.tax,
               },
               receiptBlob: blob,
               receiptPreviewUrl: previewUrl,
@@ -343,6 +368,7 @@ export default function App() {
           receiptPreviewUrl={screen.receiptPreviewUrl}
           receiptBlob={screen.receiptBlob}
           onBack={() => setScreen({ name: 'home' })}
+          onDebugMessage={(msg) => setInfo(msg)}
           onSave={async (form, receiptBlob) => {
             await handleSavePurchase({
               date: form.date,
@@ -778,13 +804,89 @@ function PurchaseFormScreen(props: {
   existingReceiptImageId?: string | null
   onBack: () => void
   onSave: (form: FormState, receiptBlob?: Blob | null) => Promise<void>
+  onDebugMessage?: (msg: string) => void
 }) {
   const [form, setForm] = useState(props.initial)
   const [saving, setSaving] = useState(false)
   const [showAgentReport, setShowAgentReport] = useState(Boolean(props.initial.agentReport))
+  const [reporting, setReporting] = useState(false)
+  const [reportNote, setReportNote] = useState('')
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
+  }
+
+  async function handleReportBadScan() {
+    if (!props.receiptBlob && !props.receiptPreviewUrl) {
+      props.onDebugMessage?.('No receipt image to attach — scan again first.')
+      return
+    }
+    setReporting(true)
+    try {
+      let dataUrl = ''
+      let mime = 'image/jpeg'
+      if (props.receiptBlob) {
+        dataUrl = await blobToDataUrl(props.receiptBlob)
+        mime = props.receiptBlob.type || 'image/jpeg'
+      } else if (props.receiptPreviewUrl?.startsWith('data:')) {
+        dataUrl = props.receiptPreviewUrl
+      } else if (props.receiptPreviewUrl) {
+        const res = await fetch(props.receiptPreviewUrl)
+        const b = await res.blob()
+        dataUrl = await blobToDataUrl(b)
+        mime = b.type || 'image/jpeg'
+      }
+
+      const amountNum = parseMoneyInput(form.amount)
+      const report = buildReportShell({
+        userNote: reportNote,
+        receiptDataUrl: dataUrl,
+        receiptMime: mime,
+        suggestion: {
+          date: form.date || null,
+          vendor: form.vendor,
+          amount: amountNum,
+          description: form.description,
+          categoryId: form.categoryId,
+          notes: form.notes,
+          lineItems: form.lineItems,
+          agentReport: form.agentReport,
+          aisUsed: form.aisUsed,
+          activeAiLabel: form.activeAiLabel,
+          confidence: form.confidence,
+          rawText: form.rawText,
+          source: form.source,
+          subtotal: form.subtotal,
+          tax: form.tax,
+        },
+        formSnapshot: {
+          date: form.date,
+          vendor: form.vendor,
+          amount: form.amount,
+          description: form.description,
+          categoryId: form.categoryId,
+          notes: form.notes,
+          lineItems: form.lineItems,
+        },
+      })
+
+      const result = await submitDebugReport(report)
+      if (result.ok && result.mode === 'server') {
+        props.onDebugMessage?.(
+          `Bad scan reported. Saved as ${result.id} — the coding agent can open debug-scans/${result.id}/`,
+        )
+      } else if (result.ok && result.mode === 'download') {
+        props.onDebugMessage?.(
+          'Downloaded debug JSON (server not reachable). Share that file in chat so the agent can inspect the scan.',
+        )
+      } else {
+        props.onDebugMessage?.('Could not save debug report.')
+      }
+    } catch (e) {
+      props.onDebugMessage?.(e instanceof Error ? e.message : 'Report failed')
+    } finally {
+      setReporting(false)
+    }
   }
 
   function updateLine(id: string, patch: Partial<ReceiptLineItem>) {
@@ -1027,6 +1129,33 @@ function PurchaseFormScreen(props: {
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
+
+        {(props.receiptBlob || props.receiptPreviewUrl) && (
+          <div className="card settings-card debug-report-card">
+            <strong>AIs getting it wrong?</strong>
+            <p className="muted" style={{ margin: '6px 0 10px' }}>
+              Report this scan so the coding agent can see the receipt photo, OCR text, and what each
+              AI produced.
+            </p>
+            <div className="field">
+              <label htmlFor="debugNote">What went wrong?</label>
+              <textarea
+                id="debugNote"
+                value={reportNote}
+                onChange={(e) => setReportNote(e.target.value)}
+                placeholder="e.g. Missed 3 items, total should be $84.12, foam listed as misc…"
+              />
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={reporting}
+              onClick={() => void handleReportBadScan()}
+            >
+              {reporting ? 'Reporting…' : 'Report bad scan for debugging'}
+            </button>
+          </div>
+        )}
       </form>
     </>
   )
@@ -1216,12 +1345,24 @@ function SettingsScreen(props: {
   const [saving, setSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
   const [board, setBoard] = useState<LeaderboardMap>(defaultLeaderboard())
+  const [debugReports, setDebugReports] = useState<RemoteDebugSummary[]>([])
+  const [debugLoading, setDebugLoading] = useState(false)
 
   useEffect(() => {
     void getLeaderboard().then((b) => setBoard(normalizeLeaderboard(b)))
+    void listRemoteDebugReports().then(setDebugReports)
   }, [])
 
   const ranked = useMemo(() => rankLeaderboard(board), [board])
+
+  async function refreshDebugReports() {
+    setDebugLoading(true)
+    try {
+      setDebugReports(await listRemoteDebugReports())
+    } finally {
+      setDebugLoading(false)
+    }
+  }
 
   async function handleCheckUpdates() {
     setUpdateStatus({ state: 'checking' })
@@ -1308,6 +1449,45 @@ function SettingsScreen(props: {
               )
             })}
           </div>
+        </div>
+
+        <div className="card settings-card">
+          <strong>Debug scans (for the coding agent)</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            When a scan is wrong, use <strong>Report bad scan</strong> on the review screen. If
+            you&apos;re on this project&apos;s preview/dev server, reports land in{' '}
+            <code>debug-scans/</code> so the agent can open the photo and AI outputs.
+          </p>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={debugLoading}
+            onClick={() => void refreshDebugReports()}
+          >
+            {debugLoading ? 'Refreshing…' : 'Refresh debug list'}
+          </button>
+          {debugReports.length === 0 ? (
+            <p className="muted" style={{ marginTop: 12 }}>
+              No remote reports yet (or this host can&apos;t receive them — use download fallback).
+            </p>
+          ) : (
+            <div className="debug-list" style={{ marginTop: 12 }}>
+              {debugReports.map((r) => (
+                <div key={r.id} className="debug-list-row">
+                  <div>
+                    <strong className="muted" style={{ color: 'var(--text)', fontSize: '0.85rem' }}>
+                      {r.id}
+                    </strong>
+                    <div className="muted" style={{ fontSize: '0.8rem' }}>
+                      {r.vendor || '—'} · {r.amount != null ? `$${r.amount}` : 'no total'} ·{' '}
+                      {r.aisUsed?.join(', ') || 'AIs n/a'}
+                    </div>
+                    <div className="muted" style={{ fontSize: '0.78rem' }}>{r.userNote}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="card settings-card">

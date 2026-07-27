@@ -70,11 +70,21 @@ export interface ReceiptSuggestion {
   activeAiLabel?: string
 }
 
+export type ScanFormSeed = Partial<Purchase> & {
+  agentReport?: string
+  activeAiLabel?: string
+  rawText?: string
+  confidence?: number
+  source?: string
+  subtotal?: number | null
+  tax?: number | null
+}
+
 export type Screen =
   | { name: 'home' }
   | {
       name: 'add'
-      initial?: Partial<Purchase> & { agentReport?: string; activeAiLabel?: string }
+      initial?: ScanFormSeed
       receiptBlob?: Blob
       receiptPreviewUrl?: string
     }
