@@ -15,10 +15,14 @@ import {
 import { downloadCsv, downloadPdfSummary } from './exportData'
 import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
-import { setupPwaUpdates } from './pwa'
+import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { categoryBreakdown, totalSpent } from './stats'
 import type { AppSettings, CategoryId, Purchase, Screen } from './types'
+import {
+  checkForAppUpdates,
+  type UpdateCheckStatus,
+} from './updateCheck'
 import {
   APP_VERSION,
   CHANGELOG,
@@ -361,6 +365,9 @@ export default function App() {
           onShowWhatsNew={() => {
             setWhatsNewMode('history')
             setWhatsNew(CHANGELOG)
+          }}
+          onUpdateAvailable={() => {
+            setPendingSwUpdate(() => applyWaitingUpdate)
           }}
         />
       )}
@@ -948,10 +955,22 @@ function SettingsScreen(props: {
   onSave: (s: AppSettings) => Promise<void>
   onClear: () => Promise<void>
   onShowWhatsNew: () => void
+  onUpdateAvailable: () => void
 }) {
   const [projectName, setProjectName] = useState(props.settings.projectName)
   const [apiKey, setApiKey] = useState(props.settings.apiKey)
   const [saving, setSaving] = useState(false)
+  const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
+
+  async function handleCheckUpdates() {
+    setUpdateStatus({ state: 'checking' })
+    const result = await checkForAppUpdates()
+    setUpdateStatus(result)
+    if (result.state === 'available') {
+      notifyIfWaitingUpdate()
+      props.onUpdateAvailable()
+    }
+  }
 
   return (
     <>
@@ -988,6 +1007,72 @@ function SettingsScreen(props: {
           <button type="button" className="btn btn-secondary" onClick={props.onShowWhatsNew}>
             What&apos;s new / version history
           </button>
+        </div>
+
+        <div className="card settings-card update-scan-card">
+          <strong>Scan for updates</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Checks the server for a newer Schoolie build and asks this device for a waiting install.
+            Use this when you want to confirm you&apos;re on the latest version.
+          </p>
+
+          {updateStatus.state === 'idle' && (
+            <p className="update-status update-status-idle">
+              Installed build: <strong>{formatVersionLabel()}</strong> · not checked yet this
+              session
+            </p>
+          )}
+          {updateStatus.state === 'checking' && (
+            <div className="update-status update-status-checking">
+              <div className="spinner spinner-inline" />
+              Scanning for a newer version…
+            </div>
+          )}
+          {updateStatus.state === 'current' && (
+            <div className="update-status update-status-ok" role="status">
+              <div className="update-status-title">✓ You&apos;re up to date</div>
+              <p>{updateStatus.message}</p>
+              <p className="muted update-checked-at">
+                Checked {new Date(updateStatus.checkedAt).toLocaleString()} · server v
+                {updateStatus.remoteVersion}
+              </p>
+            </div>
+          )}
+          {updateStatus.state === 'available' && (
+            <div className="update-status update-status-new" role="status">
+              <div className="update-status-title">↑ Update available</div>
+              <p>{updateStatus.message}</p>
+              <p className="muted update-checked-at">
+                You: v{updateStatus.localVersion} · Server: v{updateStatus.remoteVersion}
+              </p>
+            </div>
+          )}
+          {updateStatus.state === 'error' && (
+            <div className="update-status update-status-err" role="alert">
+              <div className="update-status-title">Couldn&apos;t check</div>
+              <p>{updateStatus.message}</p>
+            </div>
+          )}
+
+          <div className="row-actions stack" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={updateStatus.state === 'checking'}
+              onClick={() => void handleCheckUpdates()}
+            >
+              {updateStatus.state === 'checking' ? 'Scanning…' : 'Scan for updates'}
+            </button>
+            {updateStatus.state === 'available' && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => applyWaitingUpdate()}
+              >
+                Reload to update now
+              </button>
+            )}
+          </div>
         </div>
         <div className="field">
           <label htmlFor="projectName">Project name</label>

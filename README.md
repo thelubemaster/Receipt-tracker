@@ -31,6 +31,12 @@ Open the URL on your phone (same Wi‑Fi) or use the printed local URL. In the b
 
 **Optional cloud boost:** Add an xAI key in Settings ([console.x.ai](https://console.x.ai)). Used only when the on-device read looks weak.
 
+## Version & updates
+
+- Version chip on home and in Settings (`vX.Y.Z`)
+- **Settings → Scan for updates** compares this build to the server’s `version.json`
+- “What’s new” appears after you land on a newer version
+
 ## Data & backup
 
 - Data is stored in this browser/device only

@@ -4,6 +4,7 @@
  * Add a CHANGELOG entry for that version so the "What's new" sheet stays accurate.
  */
 
+/** Keep in sync with package.json version (single source users see in the UI). */
 export const APP_VERSION = '1.1.0'
 
 export type ChangelogEntry = {
@@ -18,10 +19,11 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     version: '1.1.0',
     date: '2026-07-27',
-    title: 'Version badge & update notes',
+    title: 'Version badge & update scan',
     changes: [
       'Always show the app version so you know which build you’re on',
       'When the app updates, a “What’s new” sheet lists what changed',
+      'Settings → Scan for updates checks the server for a newer build',
       'Settings includes full version history and a way to re-open release notes',
       'Banner when a newer install is ready (PWA) so you can reload into it',
     ],
