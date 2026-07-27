@@ -8,6 +8,7 @@ import { runLineItemsAgent } from './lineItemsAgent'
 import { runMerchantAgent } from './merchantAgent'
 import { runCouncilAgent } from './councilAgent'
 import { runQuorumAgent } from './quorumAgent'
+import { applySeekerToDraft, runSeekerAgent } from './seekerAgent'
 import { runSieveAgent } from './sieveAgent'
 import { runTotalsAgent } from './totalsAgent'
 
@@ -273,6 +274,45 @@ export async function runMultiAgentReceiptPipeline(
     })
   })
 
+  // Seeker — free internet enrichment (DuckDuckGo + Wikipedia via host proxy)
+  if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+    onProgress?.({
+      stage: 'arbitrate',
+      progress: 0.96,
+      message: 'Seeker is scanning the internet for product info…',
+      aiId: 'seeker',
+      aiName: 'Seeker',
+    })
+    try {
+      const seek = await runSeekerAgent(final, {
+        onProgress: (msg, aiId) =>
+          onProgress?.({
+            stage: 'arbitrate',
+            progress: 0.97,
+            message: msg.slice(0, 120),
+            aiId: aiId ?? 'seeker',
+            aiName: 'Seeker',
+          }),
+      })
+      final = applySeekerToDraft(final, seek)
+      // Re-run a light council pass so agents react to web facts
+      final = runCouncilAgent(final, councilText || final.rawText || '', (msg, aiId) => {
+        onProgress?.({
+          stage: 'arbitrate',
+          progress: 0.98,
+          message: msg.slice(0, 120),
+          aiId: aiId ?? 'council',
+          aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+        })
+      })
+    } catch (e) {
+      final.agentReport = [
+        final.agentReport,
+        `Seeker skipped: ${e instanceof Error ? e.message : 'offline or proxy unavailable'}`,
+      ].join('\n')
+    }
+  }
+
   final.aisUsed = Array.from(
     new Set<AiId>([
       ...(final.aisUsed ?? []),
@@ -288,15 +328,16 @@ export async function runMultiAgentReceiptPipeline(
       'arbiter',
       'quorum',
       'council',
+      'seeker',
     ]),
   )
   final.activeAiLabel = maxPower
-    ? 'Max-power free team + Council debate'
-    : 'Free team + Council debate'
+    ? 'Max-power free team + Council + Seeker'
+    : 'Free team + Council + Seeker'
   final.agentReport = [
     maxPower
-      ? 'MAX POWER free AIs: Forge, Lens, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council'
-      : 'Free AIs: Forge, Lens, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council',
+      ? 'MAX POWER free AIs: Forge, Lens, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker'
+      : 'Free AIs: Forge, Lens, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker',
     ...usable.map((u) => u.note),
     final.agentReport,
   ].join('\n')
@@ -305,9 +346,9 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'done',
     progress: 1,
-    message: 'Council agreed — free AI team finished',
-    aiId: 'council',
-    aiName: 'Council',
+    message: 'Seeker + Council finished — free AI team done',
+    aiId: 'seeker',
+    aiName: 'Seeker',
   })
 
   return final

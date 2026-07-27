@@ -27,11 +27,11 @@ Open the URL on your phone (same Wi‑Fi) or use the printed local URL. In the b
 
 ## Receipt scanning
 
-**100% free, no API keys.** Tap **Scan receipt** → photo → free keyless team on your phone:
+**100% free, no paid API keys.** Tap **Scan receipt** → photo → free team on your phone:
 
-Forge + Lens (OCR) → Ledger + Sieve (line items) → Cashier + Clerk → Arbiter → **Quorum** final vote.
+Forge / Lens / Hammer / Titan (OCR) → Ledger + Sieve → Cashier + Clerk → Arbiter → **Quorum** → **Council** debate → **Seeker** free web lookup (DuckDuckGo + Wikipedia).
 
-First scan may download a small OCR language pack; after that it works offline.
+Seeker needs network and the app’s **dev/preview server** (`/api/web-lookup`). First OCR may download a language pack; Titan downloads a free neural model once.
 
 ## Debug bad scans (so the coding agent can see them)
 

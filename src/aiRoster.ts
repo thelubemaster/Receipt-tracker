@@ -15,6 +15,7 @@ export type AiId =
   | 'arbiter'
   | 'quorum'
   | 'council'
+  | 'seeker'
 
 export type AiKind = 'on-device'
 
@@ -189,6 +190,19 @@ export const AI_ROSTER: AiProfile[] = [
     emoji: '🏛️',
     color: '#90caf9',
     power: 8,
+  },
+  {
+    id: 'seeker',
+    name: 'Seeker',
+    fullName: 'Seeker · Free Web Lookup',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Looks up SKUs/products on the free public web (DuckDuckGo + Wikipedia via local proxy). No API key. Needs network.',
+    workingLine: 'Seeker is scanning the internet for product info…',
+    engine: 'Free web proxy (DuckDuckGo Instant Answer + Wikipedia)',
+    emoji: '🌐',
+    color: '#26c6da',
+    power: 7,
   },
 ]
 

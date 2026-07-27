@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 // @ts-expect-error plain JS middleware helper
 import { attachDebugReportMiddleware } from './scripts/debug-report-middleware.mjs'
+// @ts-expect-error plain JS middleware helper
+import { attachWebLookupMiddleware } from './scripts/web-lookup-middleware.mjs'
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
   version: string
@@ -59,11 +61,25 @@ function debugReportPlugin(): Plugin {
   }
 }
 
+/** Free internet lookup for Seeker agent (DuckDuckGo + Wikipedia, no API key). */
+function webLookupPlugin(): Plugin {
+  return {
+    name: 'schoolie-web-lookup',
+    configureServer(server) {
+      attachWebLookupMiddleware(server.middlewares)
+    },
+    configurePreviewServer(server) {
+      attachWebLookupMiddleware(server.middlewares)
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     react(),
     versionJsonPlugin(),
     debugReportPlugin(),
+    webLookupPlugin(),
     VitePWA({
       // Prompt so we can show “new version ready” instead of silent swap only
       registerType: 'prompt',

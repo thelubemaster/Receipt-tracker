@@ -726,8 +726,8 @@ function ScanScreen(props: {
       <div className="banner banner-info">
         <strong>Free · no keys · max power {props.maxPowerMode ? 'ON' : 'OFF'}.</strong>{' '}
         {props.maxPowerMode
-          ? 'Hammer (multi-worker OCR swarm) + Titan (on-device neural net) will push this phone hard. First Titan run downloads a free model once.'
-          : 'Lighter free team only. Turn on Max power in Settings for Hammer + Titan.'}
+          ? 'Hammer + Titan push the phone hard. After OCR, Seeker looks up SKUs on the free public web (DuckDuckGo/Wikipedia via this app host). No API keys.'
+          : 'Lighter free team. Seeker still can web-lookup products. Turn on Max power in Settings for Hammer + Titan.'}
       </div>
 
       {busy ? (
@@ -1538,7 +1538,8 @@ function SettingsScreen(props: {
         <div className="card settings-card">
           <strong>AI roster (all free · no keys)</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Every AI runs on your phone. No accounts, no API keys, no cloud billing.
+            On-device free AIs plus <strong>Seeker</strong>, which searches the free public web for
+            product/SKU info (needs network + this app&apos;s preview/dev server). No paid APIs.
           </p>
           <div className="ai-roster-list">
             {AI_ROSTER.map((ai) => (

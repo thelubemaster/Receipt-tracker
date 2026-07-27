@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.7.1'
+export const APP_VERSION = '1.8.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.8.0',
+    date: '2026-07-27',
+    title: 'Seeker free web lookup for receipts',
+    changes: [
+      'Seeker agent looks up SKUs/products on DuckDuckGo + Wikipedia (no API key)',
+      'Local free proxy /api/web-lookup on dev/preview server',
+      'Council re-debates after Seeker enriches weak product names',
+    ],
+  },
   {
     version: '1.7.1',
     date: '2026-07-27',
