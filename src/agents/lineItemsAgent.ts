@@ -8,7 +8,6 @@ const SKIP_LINE =
 
 const FEE_LINE = /\b(shipping|freight|delivery|handling)\b/i
 
-const QTY_ONLY = /^\d+\s*$/
 const PRICE_ONLY = /^\$?\s*[\d.,]+\s*$/
 const SKU_QTY_PRICE =
   /^[A-Z0-9][\w\-\/]*\s+\d+\s+\$?\d+[.,]\d{2}(?:\s+\$?\d+[.,]\d{2})?$/i
