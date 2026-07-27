@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.8.2'
+export const APP_VERSION = '1.9.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.9.0',
+    date: '2026-07-27',
+    title: 'UI polish + new logo',
+    changes: [
+      'Refined schoolie bus logo and app icons',
+      'Cleaner home hero, empty states, category dots, glass bottom bar',
+      'Verified tests/build; removed unused assets',
+    ],
+  },
   {
     version: '1.8.2',
     date: '2026-07-27',

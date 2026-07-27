@@ -562,8 +562,8 @@ function HomeScreen(props: {
               : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} logged`}
           </div>
           <div className="hero-pills">
-            <span className="pill pill-accent">Free · no keys</span>
-            <span className="pill">Hammer · Titan</span>
+            <span className="pill pill-accent">Free · on-device</span>
+            <span className="pill">Scan · track · export</span>
           </div>
         </div>
       </section>
@@ -572,12 +572,18 @@ function HomeScreen(props: {
         <span>By category</span>
       </div>
       {props.breakdown.length === 0 ? (
-        <div className="empty">Category breakdown shows up after your first purchase.</div>
+        <div className="empty empty-soft">
+          <div className="empty-icon">📊</div>
+          <p>Spending by category shows up after your first purchase.</p>
+        </div>
       ) : (
         <div className="card category-list">
           {props.breakdown.map((c) => (
             <div key={c.categoryId} className="category-row">
-              <span className="category-name">{c.label}</span>
+              <span className="category-name">
+                <span className="cat-dot" style={{ background: c.color }} />
+                {c.label}
+              </span>
               <span className="category-amount">
                 {formatMoney(c.amount)} · {c.percent}%
               </span>
@@ -608,9 +614,12 @@ function HomeScreen(props: {
       </div>
 
       {props.purchases.length === 0 ? (
-        <div className="empty">
-          Tap <strong>Scan receipt</strong> — your phone reads the photo with a low-power on-device
-          agent, then you confirm before saving.
+        <div className="empty empty-soft">
+          <div className="empty-icon">📷</div>
+          <p>
+            Tap <strong>Scan receipt</strong> to photograph a purchase. Free on-device AIs read it —
+            you confirm, then it&apos;s tracked.
+          </p>
         </div>
       ) : (
         <div className="purchase-list">
@@ -646,7 +655,7 @@ function HomeScreen(props: {
           Add
         </button>
         <button type="button" className="btn btn-primary" onClick={props.onScan}>
-          📷 Scan receipt
+          Scan receipt
         </button>
       </div>
     </>
