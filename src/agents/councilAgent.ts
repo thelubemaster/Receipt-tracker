@@ -244,41 +244,56 @@ export function runCouncilAgent(
     }
   }
 
-  // Towing / service invoice: if OCR mentions towing and we only have fees, rebuild description
-  if (/\btow(ing)?\b/i.test(rawText) && items.every((i) => isFeeDesc(i.description) || i.categoryId === 'misc')) {
+  // Towing / service invoice: rebuild as a service line (category: misc = services/labor)
+  if (/\btow(ing)?\b/i.test(rawText)) {
     const towVendor = extractVendor(rawText)
     if (subtotal != null || amount != null) {
-      const serviceAmt = subtotal ?? (amount != null && shipping != null ? roundMoney(amount - shipping) : amount)
+      const serviceAmt =
+        subtotal ?? (amount != null && shipping != null ? roundMoney(amount - shipping) : amount)
       if (serviceAmt != null) {
-        talk('council', 'answer', `This looks like a towing/service invoice — filing service line $${serviceAmt.toFixed(2)}.`)
+        talk(
+          'council',
+          'answer',
+          `Towing/service invoice detected — filing as service (Misc), not fuel/parts. $${serviceAmt.toFixed(2)}.`,
+        )
+        const feeMatch = rawText.match(/convenience fee[\s\S]{0,20}?\$?\s*([\d,]+(?:\.\d{2})?)/i)
+        let fee: number | null = null
+        if (feeMatch) {
+          const n = Number(feeMatch[1].replace(/,/g, ''))
+          if (Number.isFinite(n)) fee = roundMoney(n)
+        }
         items = [
           {
             id: 'council-tow-1',
-            description: `${towVendor || 'Towing'} service`,
+            description: `${towVendor || 'Towing'} — towing service`,
             amount: serviceAmt,
-            categoryId: 'fuel',
+            categoryId: 'misc',
           },
         ]
-        // re-add convenience fee only as note, not product, if present
+        if (fee != null && fee > 0) {
+          items.push({
+            id: 'council-tow-fee',
+            description: 'Convenience / processing fee',
+            amount: fee,
+            categoryId: 'misc',
+          })
+        }
         vendor = towVendor || vendor
       }
     }
   }
 
-  // --- Round 4: Re-categorize with full product names ---
-  items = items.map((i) => {
-    const { categoryId } = categorizeText(i.description + ' ' + rawText.slice(0, 200))
-    if (categoryId !== i.categoryId && categoryId !== 'misc') {
-      talk('ledger', 'answer', `Recategorized “${i.description.slice(0, 36)}” → ${categoryId}`)
-      return { ...i, categoryId }
-    }
-    // explicit towing
-    if (/\btow/i.test(i.description + rawText) && i.categoryId === 'misc') {
-      talk('ledger', 'answer', `Marked as Fuel & Travel (towing)`)
-      return { ...i, categoryId: 'fuel' }
-    }
-    return i
-  })
+  // --- Round 4: Re-categorize materials (not service invoices already handled) ---
+  if (!/\btow(ing)?\b/i.test(rawText)) {
+    items = items.map((i) => {
+      const { categoryId } = categorizeText(i.description)
+      if (categoryId !== i.categoryId) {
+        talk('ledger', 'answer', `Recategorized “${i.description.slice(0, 36)}” → ${categoryId}`)
+        return { ...i, categoryId }
+      }
+      return i
+    })
+  }
 
   // --- Round 5: Arithmetic agreement ---
   const finalSum = roundMoney(items.reduce((s, i) => s + i.amount, 0))

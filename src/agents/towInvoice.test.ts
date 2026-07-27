@@ -63,8 +63,13 @@ describe('Falzone towing invoice (user debug)', () => {
     const r = parseReceiptText(TOW_OCR)
     expect(r.amount).toBe(1225.9)
     expect(r.vendor.toLowerCase()).toMatch(/falzone|towing/)
-    // Prefer a service line near subtotal, not "convenience fee" alone as the story
     const blob = `${r.description} ${r.lineItems.map((i) => i.description).join(' ')}`.toLowerCase()
     expect(blob).toMatch(/tow|falzone|service/)
+  })
+
+  it('categorizes towing as misc (service), not fuel', () => {
+    const r = parseReceiptText(TOW_OCR)
+    expect(r.categoryId).toBe('misc')
+    expect(r.lineItems.every((i) => i.categoryId === 'misc')).toBe(true)
   })
 })

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.8.1'
+export const APP_VERSION = '1.8.2'
 
 export type ChangelogEntry = {
   version: string
@@ -17,6 +17,16 @@ export type ChangelogEntry = {
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.8.2',
+    date: '2026-07-27',
+    title: 'Category fixes from user debug notes',
+    changes: [
+      'Fuel filters / Racor / diesel parts → Fuel & Travel (not Tools)',
+      'Towing / service invoices → Misc (services), not Fuel',
+      'Optional convenience fee line kept as Misc on tow invoices',
+    ],
+  },
+  {
     version: '1.8.1',
     date: '2026-07-27',
     title: 'Debug recheck: Swag dupes + Falzone towing',
@@ -24,7 +34,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       'Collapse duplicate product amounts when sum exceeds subtotal',
       'Ignore address/shipping chrome in product names',
       'Invoice layout: skip Subtotal/Total/Convenience Fee as products',
-      'Towing invoices → Falzone vendor + Fuel & Travel category',
+      'Towing invoices → Falzone vendor + correct service filing',
       'Seeker detects missing web proxy (HTML responses)',
     ],
   },

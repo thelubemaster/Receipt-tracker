@@ -60,9 +60,9 @@ describe('Swag Performance Parts receipt (real user debug scan)', () => {
     expect(v.toLowerCase()).toMatch(/swag/)
   })
 
-  it('categorizes fuel filters as tools', () => {
+  it('categorizes fuel filters as fuel (vehicle fuel-system), not tools', () => {
     const { categoryId } = categorizeText('Racor fuel filter kit powerstroke')
-    expect(categoryId).toBe('tools')
+    expect(categoryId).toBe('fuel')
   })
 
   it('full parse gets grand total 76.67 and 2+ items', () => {
@@ -80,5 +80,12 @@ describe('Swag Performance Parts receipt (real user debug scan)', () => {
     expect(sums).toBeGreaterThanOrEqual(60)
     expect(sums).toBeLessThanOrEqual(70)
     expect(r.lineItems.length).toBeLessThanOrEqual(3)
+  })
+
+  it('purchase-level category is fuel for diesel filter parts', () => {
+    const r = parseReceiptText(SWAG_OCR)
+    expect(r.categoryId).toBe('fuel')
+    expect(r.lineItems.every((i) => i.categoryId === 'fuel' || i.categoryId === 'tools')).toBe(true)
+    expect(r.lineItems.some((i) => i.categoryId === 'fuel')).toBe(true)
   })
 })
