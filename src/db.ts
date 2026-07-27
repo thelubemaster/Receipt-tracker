@@ -111,9 +111,6 @@ export async function getSettings(): Promise<AppSettings> {
   const db = await getDb()
   const row = await db.get('settings', SETTINGS_KEY)
   return {
-    apiKey: row?.apiKey ?? '',
-    openaiApiKey: row?.openaiApiKey ?? '',
-    geminiApiKey: row?.geminiApiKey ?? '',
     projectName: row?.projectName ?? 'My Schoolie',
     lastSeenVersion: row?.lastSeenVersion ?? '',
   }

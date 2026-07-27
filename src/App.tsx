@@ -95,9 +95,6 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [settings, setSettings] = useState<AppSettings>({
-    apiKey: '',
-    openaiApiKey: '',
-    geminiApiKey: '',
     projectName: 'My Schoolie',
     lastSeenVersion: '',
   })
@@ -323,9 +320,6 @@ export default function App() {
 
       {screen.name === 'scan' && (
         <ScanScreen
-          apiKey={settings.apiKey}
-          openaiApiKey={settings.openaiApiKey}
-          geminiApiKey={settings.geminiApiKey}
           onBack={() => setScreen({ name: 'home' })}
           onNeedSettings={() => setScreen({ name: 'settings' })}
           onParsed={(suggestion, blob, previewUrl) => {
@@ -566,8 +560,8 @@ function HomeScreen(props: {
               : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} logged`}
           </div>
           <div className="hero-pills">
-            <span className="pill pill-accent">Free AI team</span>
-            <span className="pill">Forge + Arbiter</span>
+            <span className="pill pill-accent">Free · no keys</span>
+            <span className="pill">Forge · Lens · Quorum</span>
           </div>
         </div>
       </section>
@@ -658,9 +652,6 @@ function HomeScreen(props: {
 }
 
 function ScanScreen(props: {
-  apiKey: string
-  openaiApiKey: string
-  geminiApiKey: string
   onBack: () => void
   onNeedSettings: () => void
   onParsed: (suggestion: ScanResult, blob: Blob, previewUrl: string) => void
@@ -672,12 +663,10 @@ function ScanScreen(props: {
   const [progress, setProgress] = useState(0)
   const [activeAi, setActiveAi] = useState<{ name: string; id?: AiId } | null>(null)
 
-  const whoWillScan = useMemo(() => {
-    // Free-first roster shown before scan
-    const names = ['Forge', 'Scout', 'Ledger', 'Cashier', 'Clerk', 'Arbiter']
-    if (props.geminiApiKey.trim()) names.push('Gemini (free)')
-    return names
-  }, [props.geminiApiKey])
+  const whoWillScan = useMemo(
+    () => AI_ROSTER.map((a) => a.name),
+    [],
+  )
 
   async function handleFile(file: File | null) {
     if (!file) return
@@ -691,14 +680,10 @@ function ScanScreen(props: {
 
     setBusy(true)
     setProgress(0.02)
-    setActiveAi({ name: 'Scout', id: 'scout' })
-    setStatus('Scout is scanning the photo…')
+    setActiveAi({ name: 'Forge', id: 'forge' })
+    setStatus('Forge is deep-scanning the photo…')
     try {
       const suggestion = await scanReceipt(blob, {
-        apiKey: props.apiKey,
-        openaiApiKey: props.openaiApiKey,
-        geminiApiKey: props.geminiApiKey,
-        freeOnly: true,
         onProgress: (p) => {
           setProgress(p.progress)
           setStatus(p.message)
@@ -728,9 +713,9 @@ function ScanScreen(props: {
       </header>
 
       <div className="banner banner-info">
-        <strong>Free AIs only.</strong> You&apos;ll see names live (e.g. “Forge is deep-scanning…” /
-        “Gemini is scanning the photo…”). On-device team is always free. Optional free-tier Gemini
-        needs a free Google AI Studio key in Settings.
+        <strong>100% free · no API keys.</strong> A powerful on-device team (Forge, Lens, Sieve,
+        Quorum, …) reads the receipt on your phone. You&apos;ll see each AI&apos;s name while it
+        works.
       </div>
 
       {busy ? (
@@ -787,9 +772,9 @@ function ScanScreen(props: {
             </label>
           </div>
           <p className="muted" style={{ marginTop: 16 }}>
-            Want free-tier Gemini?{' '}
+            Check device strength?{' '}
             <button type="button" style={{ textDecoration: 'underline' }} onClick={props.onNeedSettings}>
-              Open Settings
+              Settings → Scan this device
             </button>
           </p>
         </div>
@@ -1344,9 +1329,6 @@ function SettingsScreen(props: {
   onUpdateAvailable: () => void
 }) {
   const [projectName, setProjectName] = useState(props.settings.projectName)
-  const [apiKey, setApiKey] = useState(props.settings.apiKey)
-  const [openaiApiKey, setOpenaiApiKey] = useState(props.settings.openaiApiKey)
-  const [geminiApiKey, setGeminiApiKey] = useState(props.settings.geminiApiKey)
   const [saving, setSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
   const [board, setBoard] = useState<LeaderboardMap>(defaultLeaderboard())
@@ -1387,10 +1369,7 @@ function SettingsScreen(props: {
     setStabilityRunning(true)
     setStabilityStatus('Starting free AI stability suite…')
     try {
-      const result = await runAiStabilitySuite(
-        { geminiApiKey },
-        (msg) => setStabilityStatus(msg),
-      )
+      const result = await runAiStabilitySuite({}, (msg) => setStabilityStatus(msg))
       setStability(result)
       setStabilityStatus(result.summary)
     } catch (e) {
@@ -1428,9 +1407,6 @@ function SettingsScreen(props: {
           void props
             .onSave({
               projectName: projectName.trim() || 'My Schoolie',
-              apiKey: apiKey.trim(),
-              openaiApiKey: openaiApiKey.trim(),
-              geminiApiKey: geminiApiKey.trim(),
               lastSeenVersion: props.settings.lastSeenVersion,
             })
             .finally(() => setSaving(false))
@@ -1478,9 +1454,8 @@ function SettingsScreen(props: {
         <div className="card settings-card">
           <strong>Free AI stability test</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Runs a synthetic receipt through free AIs (Forge OCR + parsers
-            {geminiApiKey.trim() ? ' + Gemini' : ''}) and reports pass/fail + speed. No personal
-            photos leave the device for on-device tests.
+            Runs a synthetic receipt through every free keyless AI (Forge, Lens, Sieve, Quorum, …)
+            and reports pass/fail + speed. Nothing leaves your phone.
           </p>
           <button
             type="button"
@@ -1503,7 +1478,7 @@ function SettingsScreen(props: {
                   <div>
                     <strong>
                       {r.name}
-                      {r.free ? ' · free' : ' · paid'}
+                      {' · free'}
                     </strong>
                     <div className="muted" style={{ fontSize: '0.78rem' }}>
                       {r.detail}
@@ -1530,46 +1505,34 @@ function SettingsScreen(props: {
         </div>
 
         <div className="card settings-card">
-          <strong>AI roster (free-first)</strong>
+          <strong>AI roster (all free · no keys)</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Free on-device AIs always run. Gemini uses Google&apos;s free AI Studio tier. Paid AIs
-            are listed but not used in free-only scan mode.
+            Every AI runs on your phone. No accounts, no API keys, no cloud billing.
           </p>
           <div className="ai-roster-list">
-            {AI_ROSTER.map((ai) => {
-              const enabled =
-                ai.kind === 'on-device' ||
-                (ai.needsKey === 'gemini' && Boolean(geminiApiKey.trim())) ||
-                (ai.needsKey === 'xai' && Boolean(apiKey.trim())) ||
-                (ai.needsKey === 'openai' && Boolean(openaiApiKey.trim()))
-              const costLabel =
-                ai.cost === 'free' ? 'free' : ai.cost === 'free-tier' ? 'free tier' : 'paid'
-              return (
-                <div key={ai.id} className="ai-roster-row">
-                  <div className="ai-roster-icon" style={{ background: `${ai.color}22`, color: ai.color }}>
-                    {ai.emoji}
+            {AI_ROSTER.map((ai) => (
+              <div key={ai.id} className="ai-roster-row">
+                <div className="ai-roster-icon" style={{ background: `${ai.color}22`, color: ai.color }}>
+                  {ai.emoji}
+                </div>
+                <div className="ai-roster-body">
+                  <div className="ai-roster-title">
+                    {ai.name}
+                    <span className="ai-cost-pill cost-free">free</span>
+                    <span className="ai-status-dot on">ready</span>
                   </div>
-                  <div className="ai-roster-body">
-                    <div className="ai-roster-title">
-                      {ai.name}
-                      <span className={`ai-cost-pill cost-${ai.cost}`}>{costLabel}</span>
-                      <span className={`ai-status-dot ${enabled ? 'on' : 'off'}`}>
-                        {ai.kind === 'on-device' ? 'ready' : enabled ? 'ready' : 'needs key'}
-                      </span>
-                    </div>
-                    <div className="muted" style={{ fontSize: '0.82rem' }}>
-                      {ai.fullName} · power {ai.power}/5
-                    </div>
-                    <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
-                      {ai.role}
-                    </div>
-                    <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
-                      Engine: {ai.engine}
-                    </div>
+                  <div className="muted" style={{ fontSize: '0.82rem' }}>
+                    {ai.fullName} · power {ai.power}/5
+                  </div>
+                  <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
+                    {ai.role}
+                  </div>
+                  <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
+                    Engine: {ai.engine}
                   </div>
                 </div>
-              )
-            })}
+              </div>
+            ))}
           </div>
         </div>
 
@@ -1708,50 +1671,6 @@ function SettingsScreen(props: {
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
             placeholder="My Schoolie"
-          />
-        </div>
-
-        <div className="field">
-          <label htmlFor="geminiApiKey">Gemini API key (Google free tier)</label>
-          <input
-            id="geminiApiKey"
-            type="password"
-            autoComplete="off"
-            value={geminiApiKey}
-            onChange={(e) => setGeminiApiKey(e.target.value)}
-            placeholder="AIza…"
-          />
-          <p className="muted" style={{ marginTop: 8 }}>
-            Free AI Studio key. When set, you&apos;ll see <strong>Gemini is scanning the photo…</strong>{' '}
-            after the free on-device team. Get a free key at{' '}
-            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-              aistudio.google.com/apikey
-            </a>
-            .
-          </p>
-        </div>
-
-        <div className="field">
-          <label htmlFor="apiKey">Grok API key (optional paid — not used in free mode)</label>
-          <input
-            id="apiKey"
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="xai-…"
-          />
-        </div>
-
-        <div className="field">
-          <label htmlFor="openaiApiKey">ChatGPT API key (optional paid — not used in free mode)</label>
-          <input
-            id="openaiApiKey"
-            type="password"
-            autoComplete="off"
-            value={openaiApiKey}
-            onChange={(e) => setOpenaiApiKey(e.target.value)}
-            placeholder="sk-…"
           />
         </div>
 

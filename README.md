@@ -27,9 +27,11 @@ Open the URL on your phone (same Wi‑Fi) or use the printed local URL. In the b
 
 ## Receipt scanning
 
-**Default — on your phone:** Tap **Scan receipt** → photo → on-device agent reads text and suggests fields. No API key needed.
+**100% free, no API keys.** Tap **Scan receipt** → photo → free keyless team on your phone:
 
-**Optional cloud boost:** Add an xAI key in Settings ([console.x.ai](https://console.x.ai)). Used only when the on-device read looks weak.
+Forge + Lens (OCR) → Ledger + Sieve (line items) → Cashier + Clerk → Arbiter → **Quorum** final vote.
+
+First scan may download a small OCR language pack; after that it works offline.
 
 ## Debug bad scans (so the coding agent can see them)
 

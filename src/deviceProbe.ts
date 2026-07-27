@@ -127,10 +127,10 @@ export async function probeDevice(): Promise<DeviceProbeResult> {
     check(
       'network',
       'Network',
-      online ? 'pass' : 'warn',
+      online ? 'pass' : 'pass',
       online
-        ? 'Online — free Gemini (and optional paid cloud) can run'
-        : 'Offline — only free on-device AIs will work',
+        ? 'Online — only needed first time for OCR language pack download'
+        : 'Offline OK — free AIs run fully on-device after language pack is cached',
     ),
   )
 
@@ -139,13 +139,12 @@ export async function probeDevice(): Promise<DeviceProbeResult> {
     .connection
   if (conn?.effectiveType) {
     const et = conn.effectiveType
-    const ok = et === '4g' || et === '3g'
     checks.push(
       check(
         'net-quality',
         'Connection quality',
-        ok ? 'pass' : 'warn',
-        `${et}${conn.saveData ? ' · data-saver on' : ''} — cloud free-tier may ${ok ? 'be fine' : 'be slow'}`,
+        'pass',
+        `${et}${conn.saveData ? ' · data-saver on' : ''} — not required for free keyless AIs`,
       ),
     )
   }
@@ -203,21 +202,21 @@ export async function probeDevice(): Promise<DeviceProbeResult> {
   }
 
   const canRunOnDeviceAi = hasWasm && hasCanvas
-  const canRunCloudAi = online
+  const canRunCloudAi = false
   const pct = maxScore ? score / maxScore : 0
   const grade =
     pct >= 0.85 ? 'excellent' : pct >= 0.65 ? 'good' : pct >= 0.45 ? 'limited' : 'poor'
 
   const recommended: string[] = []
   if (canRunOnDeviceAi) {
-    recommended.push('Scout (free)')
-    if (cores >= 2 && hasWorkers) recommended.push('Forge high-power OCR (free)')
-    recommended.push('Ledger · Cashier · Clerk · Arbiter (free)')
+    recommended.push('Forge · Lens · Scout (OCR)')
+    recommended.push('Ledger · Sieve · Cashier · Clerk')
+    recommended.push('Arbiter · Quorum (final vote)')
+    if (cores < 2) recommended.push('Tip: Forge/Lens may be slower on this CPU')
   }
-  if (canRunCloudAi) recommended.push('Gemini free-tier (needs free Google AI Studio key)')
 
   const summary = canRunOnDeviceAi
-    ? `Device looks ${grade} for free on-device AIs.${canRunCloudAi ? ' Cloud free-tier also possible.' : ' Offline — cloud skipped.'}`
+    ? `Device looks ${grade} for free keyless AIs (no API keys).`
     : 'This device may struggle with free on-device OCR (missing WASM/canvas).'
 
   return {

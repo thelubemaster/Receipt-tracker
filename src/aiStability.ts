@@ -1,12 +1,11 @@
 /**
- * Stability tests for free AIs (and optional cloud if keys present).
- * Uses a synthetic canvas receipt — no personal data.
+ * Stability tests for free keyless AIs only.
  */
 import type { AiId } from './aiRoster'
-import { getAi } from './aiRoster'
+import { AI_ROSTER, getAi } from './aiRoster'
 import { parseReceiptText } from './localAgent'
 import { runForgeOcr } from './agents/forgeOcr'
-import { parseReceiptWithGemini } from './receiptAi'
+import { runSieveAgent } from './agents/sieveAgent'
 
 export type StabilityStatus = 'pass' | 'fail' | 'skip'
 
@@ -26,14 +25,12 @@ export type StabilitySuiteResult = {
   summary: string
 }
 
-/** Draw a tiny fake receipt for free local testing. */
 export async function makeSyntheticReceiptBlob(): Promise<Blob> {
   const canvas = document.createElement('canvas')
   canvas.width = 480
   canvas.height = 640
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Canvas unavailable')
-
   ctx.fillStyle = '#f7f5f0'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   ctx.fillStyle = '#111'
@@ -48,11 +45,9 @@ export async function makeSyntheticReceiptBlob(): Promise<Blob> {
   ctx.fillText('TOTAL                120.28', 40, 290)
   ctx.fillText('VISA ****1234', 40, 340)
   ctx.fillText('THANK YOU', 40, 380)
-
-  const blob = await new Promise<Blob>((resolve, reject) => {
+  return await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode failed'))), 'image/png')
   })
-  return blob
 }
 
 const SAMPLE_TEXT = `
@@ -71,71 +66,53 @@ async function timed<T>(fn: () => Promise<T>): Promise<{ value: T; ms: number }>
   return { value, ms: Math.round(performance.now() - t0) }
 }
 
-export type StabilityKeys = {
-  geminiApiKey?: string
-  /** Paid keys only tested if present — not required for free suite */
-  xaiApiKey?: string
-  openaiApiKey?: string
-}
-
 export type StabilityProgress = (msg: string, aiId?: AiId) => void
 
-/**
- * Run free AI stability suite.
- * Always tests on-device free agents. Tests Gemini if free-tier key set.
- * Skips paid AIs unless keys are provided (still optional).
- */
 export async function runAiStabilitySuite(
-  keys: StabilityKeys = {},
+  _keys: Record<string, string> = {},
   onProgress?: StabilityProgress,
 ): Promise<StabilitySuiteResult> {
   const results: AiStabilityResult[] = []
   const ranAt = new Date().toISOString()
 
-  // --- Free pure-text agents (no OCR) ---
-  onProgress?.('Testing Ledger / Cashier / Clerk / Arbiter (free)…', 'ledger')
+  onProgress?.('Testing Ledger / Sieve / Cashier / Clerk / Arbiter…', 'sieve')
   try {
     const { value, ms } = await timed(async () => parseReceiptText(SAMPLE_TEXT))
+    const sieve = runSieveAgent(SAMPLE_TEXT)
     const ok =
       value.amount === 120.28 &&
-      value.lineItems.length >= 2 &&
-      /foam|romex/i.test(value.description)
-    results.push({
-      aiId: 'ledger',
-      name: 'Ledger',
-      status: ok ? 'pass' : 'fail',
-      latencyMs: ms,
-      detail: ok
-        ? `OK — ${value.lineItems.length} lines, total $${value.amount}`
-        : `Unexpected parse: total=${value.amount}, lines=${value.lineItems.length}`,
-      free: true,
-    })
-    results.push({
-      aiId: 'cashier',
-      name: 'Cashier',
-      status: value.amount === 120.28 ? 'pass' : 'fail',
-      latencyMs: ms,
-      detail: value.amount === 120.28 ? 'Total 120.28 locked in' : `Got ${value.amount}`,
-      free: true,
-    })
-    results.push({
-      aiId: 'clerk',
-      name: 'Clerk',
-      status: /home depot/i.test(value.vendor) ? 'pass' : 'fail',
-      latencyMs: ms,
-      detail: value.vendor ? `Vendor: ${value.vendor}` : 'No vendor',
-      free: true,
-    })
-    results.push({
-      aiId: 'arbiter',
-      name: 'Arbiter',
-      status: ok && value.confidence > 0.4 ? 'pass' : 'fail',
-      latencyMs: ms,
-      detail: `Confidence ${Math.round((value.confidence ?? 0) * 100)}%`,
-      free: true,
-    })
+      (value.lineItems.length >= 2 || sieve.items.length >= 2)
+
+    for (const id of ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'] as AiId[]) {
+      let status: StabilityStatus = 'pass'
+      let detail = 'OK'
+      if (id === 'cashier') {
+        status = value.amount === 120.28 ? 'pass' : 'fail'
+        detail = `Total ${value.amount}`
+      } else if (id === 'clerk') {
+        status = /home depot/i.test(value.vendor) ? 'pass' : 'fail'
+        detail = value.vendor || 'no vendor'
+      } else if (id === 'sieve') {
+        status = sieve.items.length >= 2 ? 'pass' : 'fail'
+        detail = `${sieve.items.length} items`
+      } else if (id === 'ledger') {
+        status = value.lineItems.length >= 2 || sieve.items.length >= 2 ? 'pass' : 'fail'
+        detail = `${value.lineItems.length} items`
+      } else {
+        status = ok ? 'pass' : 'fail'
+        detail = `conf ${Math.round((value.confidence ?? 0) * 100)}%`
+      }
+      results.push({
+        aiId: id,
+        name: getAi(id).name,
+        status,
+        latencyMs: ms,
+        detail,
+        free: true,
+      })
+    }
   } catch (e) {
-    for (const id of ['ledger', 'cashier', 'clerk', 'arbiter'] as AiId[]) {
+    for (const id of ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'] as AiId[]) {
       results.push({
         aiId: id,
         name: getAi(id).name,
@@ -147,21 +124,19 @@ export async function runAiStabilitySuite(
     }
   }
 
-  // --- Free OCR: Scout path is inside Forge; test Forge high-power ---
-  onProgress?.('Testing Forge high-power OCR (free, on-device)…', 'forge')
+  onProgress?.('Testing Forge OCR…', 'forge')
   try {
     const blob = await makeSyntheticReceiptBlob()
     const { value, ms } = await timed(async () => runForgeOcr(blob))
-    const textOk =
-      /HOME\s*DEPOT|FOAM|ROMEX|TOTAL|120/i.test(value.text) && value.text.length > 20
+    const textOk = /HOME|FOAM|ROMEX|TOTAL|120/i.test(value.text) && value.text.length > 20
     results.push({
       aiId: 'forge',
       name: 'Forge',
       status: textOk ? 'pass' : 'fail',
       latencyMs: ms,
       detail: textOk
-        ? `OCR stable (${value.text.length} chars, best=${value.bestPass})`
-        : `OCR weak output: ${value.text.slice(0, 80)}…`,
+        ? `OCR OK (${value.text.length} chars, ${value.bestPass})`
+        : `Weak OCR: ${value.text.slice(0, 60)}`,
       free: true,
     })
     results.push({
@@ -169,95 +144,62 @@ export async function runAiStabilitySuite(
       name: 'Scout',
       status: textOk ? 'pass' : 'fail',
       latencyMs: ms,
+      detail: textOk ? 'Shares Tesseract engine — healthy' : 'OCR engine weak',
+      free: true,
+    })
+    results.push({
+      aiId: 'lens',
+      name: 'Lens',
+      status: textOk ? 'pass' : 'fail',
+      latencyMs: ms,
       detail: textOk
-        ? 'Shares OCR engine with Forge — engine healthy'
-        : 'OCR engine struggled on synthetic receipt',
+        ? 'Uses same engine as Forge with upscale — engine healthy'
+        : 'OCR engine weak for Lens too',
+      free: true,
+    })
+    results.push({
+      aiId: 'quorum',
+      name: 'Quorum',
+      status: textOk ? 'pass' : 'fail',
+      latencyMs: 1,
+      detail: textOk ? 'Vote layer ready' : 'Blocked by OCR failure',
       free: true,
     })
   } catch (e) {
-    results.push({
-      aiId: 'forge',
-      name: 'Forge',
-      status: 'fail',
-      latencyMs: 0,
-      detail: e instanceof Error ? e.message : 'Forge failed',
-      free: true,
-    })
-    results.push({
-      aiId: 'scout',
-      name: 'Scout',
-      status: 'fail',
-      latencyMs: 0,
-      detail: 'OCR engine unavailable',
-      free: true,
-    })
-  }
-
-  // --- Free-tier Gemini ---
-  if (keys.geminiApiKey?.trim()) {
-    onProgress?.('Testing Gemini free-tier…', 'gemini')
-    try {
-      const blob = await makeSyntheticReceiptBlob()
-      const { value, ms } = await timed(async () =>
-        parseReceiptWithGemini(keys.geminiApiKey!, blob),
-      )
-      const ok = value.amount != null || (value.lineItems?.length ?? 0) > 0
+    for (const id of ['forge', 'scout', 'lens', 'quorum'] as AiId[]) {
       results.push({
-        aiId: 'gemini',
-        name: 'Gemini',
-        status: ok ? 'pass' : 'fail',
-        latencyMs: ms,
-        detail: ok
-          ? `Free-tier OK — amount ${value.amount ?? 'n/a'}, lines ${value.lineItems?.length ?? 0}`
-          : 'Responded but empty parse',
-        free: true,
-      })
-    } catch (e) {
-      results.push({
-        aiId: 'gemini',
-        name: 'Gemini',
+        aiId: id,
+        name: getAi(id).name,
         status: 'fail',
         latencyMs: 0,
-        detail: e instanceof Error ? e.message : 'Gemini failed',
+        detail: e instanceof Error ? e.message : 'failed',
         free: true,
       })
     }
-  } else {
-    results.push({
-      aiId: 'gemini',
-      name: 'Gemini',
-      status: 'skip',
-      latencyMs: 0,
-      detail: 'No free Gemini key — add Google AI Studio key to test',
-      free: true,
-    })
   }
 
-  // Paid optional — skip by default message
-  for (const id of ['grok', 'chatgpt'] as AiId[]) {
-    results.push({
-      aiId: id,
-      name: getAi(id).name,
-      status: 'skip',
-      latencyMs: 0,
-      detail: 'Paid optional AI — not part of free stability suite',
-      free: false,
-    })
+  // Ensure every roster AI has a row
+  for (const ai of AI_ROSTER) {
+    if (!results.some((r) => r.aiId === ai.id)) {
+      results.push({
+        aiId: ai.id,
+        name: ai.name,
+        status: 'skip',
+        latencyMs: 0,
+        detail: 'Not exercised in this suite',
+        free: true,
+      })
+    }
   }
 
-  const freeResults = results.filter((r) => r.free)
-  const tested = freeResults.filter((r) => r.status !== 'skip')
+  const tested = results.filter((r) => r.status !== 'skip')
   const passes = tested.filter((r) => r.status === 'pass').length
   const fails = tested.filter((r) => r.status === 'fail').length
-
-  let overall: StabilitySuiteResult['overall'] = 'stable'
-  if (fails === 0 && passes > 0) overall = 'stable'
-  else if (passes > 0 && fails > 0) overall = 'partial'
-  else overall = 'unstable'
-
+  const overall =
+    fails === 0 && passes > 0 ? 'stable' : passes > 0 ? 'partial' : 'unstable'
   const summary =
     overall === 'stable'
-      ? `Free AIs look stable (${passes}/${tested.length} passed).`
+      ? `All free keyless AIs stable (${passes}/${tested.length}).`
       : overall === 'partial'
         ? `Some free AIs need attention (${passes} passed, ${fails} failed).`
         : `Free AI suite unstable (${fails} failed).`

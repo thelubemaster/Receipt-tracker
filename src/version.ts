@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.5.0'
+export const APP_VERSION = '1.6.0'
 
 export type ChangelogEntry = {
   version: string
@@ -17,12 +17,22 @@ export type ChangelogEntry = {
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.6.0',
+    date: '2026-07-27',
+    title: 'Keyless free AI team only',
+    changes: [
+      'Removed all AIs that need API keys (Grok, ChatGPT, Gemini)',
+      'Added free high-power Lens (upscale OCR), Sieve (line-item ensemble), Quorum (final vote)',
+      'Forge + Lens dual OCR paths voted by Quorum — all on-device, no keys',
+      'Device scan + stability tests cover only free keyless AIs',
+    ],
+  },
+  {
     version: '1.5.0',
     date: '2026-07-27',
     title: 'Free high-power AIs + device & stability tests',
     changes: [
       'Free high-power Forge OCR (multi-preprocess on your phone)',
-      'Optional free-tier Gemini (Google AI Studio) — paid AIs not used in free scan mode',
       'Settings → Scan this device for AI capability',
       'Settings → Test free AIs stability suite (synthetic receipt)',
     ],

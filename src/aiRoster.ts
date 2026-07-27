@@ -1,36 +1,31 @@
 /**
- * Named AIs in Schoolie — free-first.
- * On-device AIs are always free. Gemini uses Google’s free AI Studio tier.
- * Grok / ChatGPT remain optional paid-cloud if you already have keys.
+ * Free, keyless AIs only — all run on-device in the browser.
  */
 
 export type AiId =
   | 'scout'
   | 'forge'
+  | 'lens'
   | 'ledger'
+  | 'sieve'
   | 'cashier'
   | 'clerk'
   | 'arbiter'
-  | 'gemini'
-  | 'grok'
-  | 'chatgpt'
+  | 'quorum'
 
-export type AiKind = 'on-device' | 'cloud'
-export type AiCost = 'free' | 'free-tier' | 'paid'
+export type AiKind = 'on-device'
 
 export interface AiProfile {
   id: AiId
   name: string
   fullName: string
   kind: AiKind
-  cost: AiCost
+  cost: 'free'
   role: string
   workingLine: string
   engine: string
   emoji: string
   color: string
-  needsKey?: 'xai' | 'openai' | 'gemini'
-  /** Higher = more thorough / “high-powered” */
   power: number
 }
 
@@ -38,12 +33,12 @@ export const AI_ROSTER: AiProfile[] = [
   {
     id: 'scout',
     name: 'Scout',
-    fullName: 'Scout · Photo Reader',
+    fullName: 'Scout · Fast OCR',
     kind: 'on-device',
     cost: 'free',
-    role: 'Fast on-device OCR (two passes) — free, runs fully on your phone.',
+    role: 'Fast dual-pass OCR fallback. No key. Fully on your phone.',
     workingLine: 'Scout is scanning the photo…',
-    engine: 'Tesseract.js (on your phone)',
+    engine: 'Tesseract.js dual-pass',
     emoji: '🔭',
     color: '#5b9fd4',
     power: 2,
@@ -54,11 +49,24 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Forge · High-Power OCR',
     kind: 'on-device',
     cost: 'free',
-    role: 'Free high-power on-device reader: multiple image preprocesses + dual OCR, picks the best text.',
+    role: 'Multi-preprocess OCR (contrast, threshold, invert) × layout modes. Picks best text.',
     workingLine: 'Forge is deep-scanning the photo…',
-    engine: 'Tesseract.js multi-preprocess (on your phone)',
+    engine: 'Tesseract.js multi-preprocess',
     emoji: '🔥',
     color: '#e07a3d',
+    power: 5,
+  },
+  {
+    id: 'lens',
+    name: 'Lens',
+    fullName: 'Lens · Multi-Scale OCR',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Upscales the receipt and re-reads tiny print; merges lines Forge may miss.',
+    workingLine: 'Lens is magnifying fine print…',
+    engine: 'Tesseract.js upscale pass',
+    emoji: '🔍',
+    color: '#6ec6ff',
     power: 4,
   },
   {
@@ -67,12 +75,25 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Ledger · Line Items',
     kind: 'on-device',
     cost: 'free',
-    role: 'Breaks text into product lines with prices and schoolie categories.',
-    workingLine: 'Ledger is listing every item on the receipt…',
+    role: 'Primary line-item extractor (description, price, schoolie category).',
+    workingLine: 'Ledger is listing every item…',
     engine: 'On-device rules agent',
     emoji: '📋',
     color: '#6b8f71',
-    power: 2,
+    power: 3,
+  },
+  {
+    id: 'sieve',
+    name: 'Sieve',
+    fullName: 'Sieve · Line-Item Ensemble',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Second line-item strategy (strict + relaxed). Merges with Ledger so fewer items are dropped.',
+    workingLine: 'Sieve is double-checking line items…',
+    engine: 'On-device multi-strategy agent',
+    emoji: '🌀',
+    color: '#4db6ac',
+    power: 4,
   },
   {
     id: 'cashier',
@@ -80,12 +101,12 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Cashier · Totals',
     kind: 'on-device',
     cost: 'free',
-    role: 'Finds grand total, subtotal, and tax with voting strategies.',
+    role: 'Votes across total/subtotal/tax strategies for the amount you paid.',
     workingLine: 'Cashier is checking the totals…',
     engine: 'On-device voting agent',
     emoji: '💵',
     color: '#e8a54b',
-    power: 2,
+    power: 3,
   },
   {
     id: 'clerk',
@@ -93,12 +114,12 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Clerk · Store & Date',
     kind: 'on-device',
     cost: 'free',
-    role: 'Identifies store/vendor and purchase date.',
+    role: 'Finds store/vendor name and purchase date.',
     workingLine: 'Clerk is reading the store and date…',
     engine: 'On-device rules agent',
     emoji: '🏪',
     color: '#9c6644',
-    power: 1,
+    power: 2,
   },
   {
     id: 'arbiter',
@@ -106,53 +127,24 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Arbiter · Cross-check',
     kind: 'on-device',
     cost: 'free',
-    role: 'Cross-checks free on-device AIs and settles disagreements.',
+    role: 'Cross-checks line sums vs totals and files the purchase.',
     workingLine: 'Arbiter is cross-checking the team…',
     engine: 'On-device consensus agent',
     emoji: '⚖️',
     color: '#b8a0d4',
-    power: 3,
+    power: 4,
   },
   {
-    id: 'gemini',
-    name: 'Gemini',
-    fullName: 'Gemini · Google (free tier)',
-    kind: 'cloud',
-    cost: 'free-tier',
-    role: 'Free-tier Google vision model — re-reads the photo and itemizes the receipt (optional free API key).',
-    workingLine: 'Gemini is scanning the photo…',
-    engine: 'gemini-2.0-flash via generativelanguage.googleapis.com',
-    emoji: '✦',
-    color: '#8ab4f8',
-    needsKey: 'gemini',
-    power: 5,
-  },
-  {
-    id: 'grok',
-    name: 'Grok',
-    fullName: 'Grok · xAI (paid)',
-    kind: 'cloud',
-    cost: 'paid',
-    role: 'Optional paid cloud vision (only if you already have an xAI key).',
-    workingLine: 'Grok is scanning the photo…',
-    engine: 'grok-4.5 via api.x.ai',
-    emoji: '⚡',
+    id: 'quorum',
+    name: 'Quorum',
+    fullName: 'Quorum · Final Vote',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Highest-power free judge: compares Forge vs Lens full parses and keeps the strongest result.',
+    workingLine: 'Quorum is voting on the final answer…',
+    engine: 'On-device dual-parse vote',
+    emoji: '👑',
     color: '#f0c36a',
-    needsKey: 'xai',
-    power: 5,
-  },
-  {
-    id: 'chatgpt',
-    name: 'ChatGPT',
-    fullName: 'ChatGPT · OpenAI (paid)',
-    kind: 'cloud',
-    cost: 'paid',
-    role: 'Optional paid cloud vision (only if you already have an OpenAI key).',
-    workingLine: 'ChatGPT is scanning the photo…',
-    engine: 'gpt-4o via api.openai.com',
-    emoji: '◎',
-    color: '#74aa9c',
-    needsKey: 'openai',
     power: 5,
   },
 ]
@@ -162,7 +154,7 @@ export function getAi(id: AiId): AiProfile {
 }
 
 export function freeAis(): AiProfile[] {
-  return AI_ROSTER.filter((a) => a.cost === 'free' || a.cost === 'free-tier')
+  return AI_ROSTER
 }
 
 export function aiNameList(ids: AiId[]): string {
