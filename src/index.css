@@ -663,6 +663,106 @@ a {
   color: #ffc5c0;
 }
 
+/* Line items + agent report */
+.agent-report-card {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+}
+
+.agent-report-toggle {
+  width: 100%;
+  text-align: left;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--accent-bright);
+}
+
+.agent-report-body {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.line-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.line-item-row {
+  display: grid;
+  grid-template-columns: 1fr 72px;
+  grid-template-rows: auto auto;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  position: relative;
+}
+
+.line-item-desc {
+  grid-column: 1 / 2;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 40px;
+}
+
+.line-item-amt {
+  grid-column: 2 / 3;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 6px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-height: 40px;
+}
+
+.line-item-cat {
+  grid-column: 1 / 2;
+  width: 100%;
+  background: var(--bg-card-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+  min-height: 36px;
+}
+
+.line-item-remove {
+  grid-column: 2 / 3;
+  justify-self: end;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(224, 90, 79, 0.12);
+  color: #ffb4ad;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.line-items-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

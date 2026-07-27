@@ -18,7 +18,7 @@ import { formatMoney, parseMoneyInput } from './money'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { categoryBreakdown, totalSpent } from './stats'
-import type { AppSettings, CategoryId, Purchase, Screen } from './types'
+import type { AppSettings, CategoryId, Purchase, ReceiptLineItem, Screen } from './types'
 import {
   checkForAppUpdates,
   type UpdateCheckStatus,
@@ -40,7 +40,7 @@ function todayISO(): string {
   return `${y}-${m}-${day}`
 }
 
-function emptyForm(partial?: Partial<Purchase>) {
+function emptyForm(partial?: Partial<Purchase> & { agentReport?: string }) {
   return {
     date: partial?.date ?? todayISO(),
     description: partial?.description ?? '',
@@ -48,6 +48,8 @@ function emptyForm(partial?: Partial<Purchase>) {
     categoryId: (partial?.categoryId ?? 'misc') as CategoryId,
     vendor: partial?.vendor ?? '',
     notes: partial?.notes ?? '',
+    lineItems: (partial?.lineItems ?? []) as ReceiptLineItem[],
+    agentReport: partial?.agentReport ?? '',
   }
 }
 
@@ -112,6 +114,7 @@ export default function App() {
     categoryId: CategoryId
     vendor: string
     notes: string
+    lineItems?: ReceiptLineItem[]
     receiptBlob?: Blob | null
     existingReceiptImageId?: string | null
   }) {
@@ -121,7 +124,7 @@ export default function App() {
       setError('Enter a valid amount.')
       return false
     }
-    if (!input.description.trim()) {
+    if (!input.description.trim() && !(input.lineItems && input.lineItems.length)) {
       setError('Add a short description of what you bought.')
       return false
     }
@@ -136,15 +139,24 @@ export default function App() {
       receiptImageId = await saveImage(input.receiptBlob)
     }
 
+    const lineItems = input.lineItems ?? []
+    const description =
+      input.description.trim() ||
+      lineItems
+        .map((l) => l.description)
+        .slice(0, 6)
+        .join('; ')
+
     const purchase: Purchase = {
       id: input.id ?? newId(),
       date: input.date,
-      description: input.description.trim(),
+      description,
       amount,
       categoryId: input.categoryId,
       vendor: input.vendor.trim(),
       notes: input.notes.trim(),
       receiptImageId,
+      lineItems,
       createdAt: input.id
         ? (purchases.find((p) => p.id === input.id)?.createdAt ?? now)
         : now,
@@ -272,6 +284,8 @@ export default function App() {
                 categoryId: suggestion.categoryId,
                 vendor: suggestion.vendor,
                 notes: suggestion.notes,
+                lineItems: suggestion.lineItems ?? [],
+                agentReport: suggestion.agentReport,
               },
               receiptBlob: blob,
               receiptPreviewUrl: previewUrl,
@@ -303,6 +317,7 @@ export default function App() {
               categoryId: form.categoryId,
               vendor: form.vendor,
               notes: form.notes,
+              lineItems: form.lineItems,
               receiptBlob,
             })
           }}
@@ -322,6 +337,7 @@ export default function App() {
               categoryId: form.categoryId,
               vendor: form.vendor,
               notes: form.notes,
+              lineItems: form.lineItems,
               existingReceiptImageId: existingId,
             })
           }}
@@ -482,8 +498,8 @@ function HomeScreen(props: {
               : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} logged`}
           </div>
           <div className="hero-pills">
-            <span className="pill pill-accent">⚡ On-device agent</span>
-            <span className="pill">Works offline</span>
+            <span className="pill pill-accent">⚡ Multi-agent team</span>
+            <span className="pill">Cross-checked</span>
           </div>
         </div>
       </section>
@@ -631,11 +647,12 @@ function ScanScreen(props: {
       </header>
 
       <div className="banner banner-info">
-        Snap the whole receipt. A <strong>low-power agent runs on your phone</strong> — it reads the
-        text, guesses total, store, and schoolie category. You confirm before anything is saved.
+        Snap the whole receipt. A <strong>multi-agent team runs on your phone</strong>: OCR (2
+        passes), line-items, totals, merchant, then an arbiter that cross-checks them. You get a full
+        item breakdown to confirm before save.
         {props.apiKey.trim()
-          ? ' Cloud boost kicks in only if the on-device read looks weak.'
-          : ' Optional cloud boost available in Settings.'}
+          ? ' Cloud agent joins when the local team is unsure or finds few lines.'
+          : ' Add an API key in Settings for an optional cloud cross-check.'}
       </div>
 
       {busy ? (
@@ -647,7 +664,7 @@ function ScanScreen(props: {
           </div>
           <div className="muted">{Math.round(progress * 100)}%</div>
           <div className="agent-badge">
-            {engine === 'on-device' ? '⚡ On-device · low power' : '☁ Cloud boost'}
+            {engine === 'on-device' ? '⚡ Agent team · on-device' : '☁ Cloud agent cross-check'}
           </div>
         </div>
       ) : (
@@ -704,10 +721,46 @@ function PurchaseFormScreen(props: {
 }) {
   const [form, setForm] = useState(props.initial)
   const [saving, setSaving] = useState(false)
+  const [showAgentReport, setShowAgentReport] = useState(Boolean(props.initial.agentReport))
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
   }
+
+  function updateLine(id: string, patch: Partial<ReceiptLineItem>) {
+    setForm((f) => ({
+      ...f,
+      lineItems: f.lineItems.map((li) => (li.id === id ? { ...li, ...patch } : li)),
+    }))
+  }
+
+  function removeLine(id: string) {
+    setForm((f) => {
+      const lineItems = f.lineItems.filter((li) => li.id !== id)
+      return {
+        ...f,
+        lineItems,
+        description: lineItems.map((l) => l.description).join('; '),
+      }
+    })
+  }
+
+  function addLine() {
+    setForm((f) => ({
+      ...f,
+      lineItems: [
+        ...f.lineItems,
+        {
+          id: `manual-${crypto.randomUUID()}`,
+          description: '',
+          amount: 0,
+          categoryId: f.categoryId,
+        },
+      ],
+    }))
+  }
+
+  const itemsSum = form.lineItems.reduce((s, li) => s + (Number(li.amount) || 0), 0)
 
   return (
     <>
@@ -723,6 +776,21 @@ function PurchaseFormScreen(props: {
         <img className="receipt-preview" src={props.receiptPreviewUrl} alt="Receipt preview" />
       )}
 
+      {form.agentReport && (
+        <div className="card agent-report-card">
+          <button
+            type="button"
+            className="agent-report-toggle"
+            onClick={() => setShowAgentReport((v) => !v)}
+          >
+            {showAgentReport ? '▼' : '▶'} Agent team report
+          </button>
+          {showAgentReport && (
+            <pre className="agent-report-body">{form.agentReport}</pre>
+          )}
+        </div>
+      )}
+
       <form
         className="form"
         onSubmit={(e) => {
@@ -733,8 +801,70 @@ function PurchaseFormScreen(props: {
             .finally(() => setSaving(false))
         }}
       >
+        {form.lineItems.length > 0 && (
+          <div className="field">
+            <label>Line items ({form.lineItems.length})</label>
+            <div className="line-items-list">
+              {form.lineItems.map((li) => (
+                <div key={li.id} className="line-item-row">
+                  <input
+                    className="line-item-desc"
+                    value={li.description}
+                    placeholder="Item"
+                    onChange={(e) => updateLine(li.id, { description: e.target.value })}
+                  />
+                  <input
+                    className="line-item-amt"
+                    inputMode="decimal"
+                    value={li.amount === 0 ? '' : String(li.amount)}
+                    placeholder="0.00"
+                    onChange={(e) => {
+                      const n = parseMoneyInput(e.target.value)
+                      updateLine(li.id, { amount: n ?? 0 })
+                    }}
+                  />
+                  <select
+                    className="line-item-cat"
+                    value={li.categoryId}
+                    onChange={(e) =>
+                      updateLine(li.id, { categoryId: e.target.value as CategoryId })
+                    }
+                    aria-label="Item category"
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="line-item-remove"
+                    aria-label="Remove line"
+                    onClick={() => removeLine(li.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="line-items-foot">
+              <span className="muted">Items sum {formatMoney(itemsSum)}</span>
+              <button type="button" className="version-link" onClick={addLine}>
+                + Add line
+              </button>
+            </div>
+          </div>
+        )}
+
+        {form.lineItems.length === 0 && (
+          <button type="button" className="btn btn-secondary" onClick={addLine}>
+            + Add line items
+          </button>
+        )}
+
         <div className="field">
-          <label htmlFor="amount">Amount</label>
+          <label htmlFor="amount">Amount (total paid)</label>
           <input
             id="amount"
             inputMode="decimal"
@@ -745,13 +875,12 @@ function PurchaseFormScreen(props: {
           />
         </div>
         <div className="field">
-          <label htmlFor="description">What did you buy?</label>
+          <label htmlFor="description">Summary</label>
           <input
             id="description"
             value={form.description}
             onChange={(e) => update('description', e.target.value)}
             placeholder="e.g. Rigid foam insulation"
-            required
           />
         </div>
         <div className="field">
@@ -937,6 +1066,27 @@ function DetailScreen(props: {
         )}
       </div>
 
+      {purchase.lineItems.length > 0 && (
+        <>
+          <div className="section-title">
+            <span>Line items</span>
+          </div>
+          <div className="card">
+            {purchase.lineItems.map((li) => (
+              <div key={li.id} className="detail-row">
+                <span className="detail-label">
+                  {li.description}
+                  <span className="muted" style={{ display: 'block', fontSize: '0.75rem' }}>
+                    {getCategory(li.categoryId).label}
+                  </span>
+                </span>
+                <span className="detail-value">{formatMoney(li.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
       <div className="row-actions" style={{ marginTop: 16 }}>
         <button type="button" className="btn btn-secondary" onClick={props.onEdit}>
           Edit
@@ -1085,10 +1235,11 @@ function SettingsScreen(props: {
         </div>
 
         <div className="card settings-card">
-          <strong>⚡ On-device agent (default)</strong>
+          <strong>⚡ Multi-agent team (on-device)</strong>
           <p className="muted" style={{ margin: 0 }}>
-            When you upload a receipt photo, OCR + a lightweight filing agent run entirely in this
-            browser — no key required, works offline after the first language pack download.
+            OCR (2 passes) → line-items agent → totals agent → merchant agent → arbiter that
+            cross-checks them. Breaks down each item on the receipt. Offline after the first
+            language pack. Optional cloud agent cross-checks when results look thin.
           </p>
         </div>
 

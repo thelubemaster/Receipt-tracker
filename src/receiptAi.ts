@@ -35,26 +35,31 @@ function buildPrompt(): string {
   const categoryList = CATEGORIES.map((c) => `- ${c.id}: ${c.label}`).join('\n')
   return `You are helping track purchases for a school bus conversion into a livable "schoolie".
 
-Read the receipt image carefully (OCR the text). Extract purchase details and choose the best conversion category.
+Read the receipt carefully. Extract EVERY line item (not just a summary), plus totals.
 
 Return ONLY valid JSON (no markdown fences) with this shape:
 {
   "date": "YYYY-MM-DD or null if unknown",
   "vendor": "store or vendor name",
   "amount": 0.00,
-  "description": "short description of what was bought",
-  "categoryId": "one category id from the list",
-  "notes": "optional extra details from the receipt"
+  "subtotal": 0.00,
+  "tax": 0.00,
+  "description": "semicolon-separated short list of items",
+  "categoryId": "primary category id by spend",
+  "notes": "optional",
+  "lineItems": [
+    { "description": "item name", "amount": 0.00, "categoryId": "one category id" }
+  ]
 }
 
 Rules:
-- amount is the total paid as a number (use the grand total / amount due).
-- categoryId MUST be one of these ids:
+- lineItems must list each purchased product/service row (skip tender/change/total/tax lines).
+- amount is the grand total / amount due.
+- categoryId values MUST be from:
 ${categoryList}
-- Prefer schoolie-build categories (e.g. lumber/plywood → structure or interior; wire/breakers → electrical; foam/wool → insulation; solar panels/batteries → solar; pipe/fittings → plumbing; etc.).
-- If unclear, use "misc".
-- description should be human-readable and useful in a spend log.
-- If multiple items, summarize the main purchase(s).`
+- Prefer schoolie-build categories per item (foam → insulation; romex → electrical; lumber → structure; etc.).
+- description = join of line item names.
+- If unclear category, use "misc".`
 }
 
 function extractOutputText(data: unknown): string {
@@ -110,13 +115,55 @@ function parseSuggestionJson(text: string): ReceiptSuggestion {
     date = parsed.date
   }
 
+  let subtotal: number | null = null
+  let tax: number | null = null
+  if (typeof parsed.subtotal === 'number' && Number.isFinite(parsed.subtotal)) {
+    subtotal = Math.round(parsed.subtotal * 100) / 100
+  }
+  if (typeof parsed.tax === 'number' && Number.isFinite(parsed.tax)) {
+    tax = Math.round(parsed.tax * 100) / 100
+  }
+
+  const lineItems: ReceiptSuggestion['lineItems'] = []
+  if (Array.isArray(parsed.lineItems)) {
+    parsed.lineItems.forEach((raw, i) => {
+      if (!raw || typeof raw !== 'object') return
+      const row = raw as Record<string, unknown>
+      const desc = typeof row.description === 'string' ? row.description.trim() : ''
+      let itemAmt: number | null = null
+      if (typeof row.amount === 'number' && Number.isFinite(row.amount)) {
+        itemAmt = Math.round(row.amount * 100) / 100
+      } else if (typeof row.amount === 'string') {
+        const n = Number(String(row.amount).replace(/[$,\s]/g, ''))
+        if (Number.isFinite(n)) itemAmt = Math.round(n * 100) / 100
+      }
+      if (!desc || itemAmt == null || itemAmt < 0) return
+      const catRaw = String(row.categoryId ?? 'misc')
+      lineItems.push({
+        id: `cloud-${i}`,
+        description: desc.slice(0, 80),
+        amount: itemAmt,
+        categoryId: isCategoryId(catRaw) ? catRaw : 'misc',
+      })
+    })
+  }
+
+  const description =
+    typeof parsed.description === 'string' && parsed.description.trim()
+      ? parsed.description
+      : lineItems.map((l) => l.description).join('; ')
+
   return {
     date,
     vendor: typeof parsed.vendor === 'string' ? parsed.vendor : '',
     amount,
-    description: typeof parsed.description === 'string' ? parsed.description : '',
+    description,
     categoryId,
     notes: typeof parsed.notes === 'string' ? parsed.notes : '',
+    lineItems,
+    subtotal,
+    tax,
+    agentReport: `Cloud agent · ${lineItems.length} line item(s)`,
   }
 }
 
@@ -184,7 +231,72 @@ export async function parseReceiptImageCloud(
   if (!text) {
     throw new Error('Cloud scan returned empty response.')
   }
-  return { ...parseSuggestionJson(text), source: 'cloud', confidence: 0.9 }
+  return {
+    ...parseSuggestionJson(text),
+    source: 'cloud',
+    confidence: 0.9,
+  }
+}
+
+function mergeLocalAndCloud(local: LocalAgentResult, cloud: ScanResult): ScanResult {
+  const localLines = local.lineItems?.length ?? 0
+  const cloudLines = cloud.lineItems?.length ?? 0
+  const useCloudLines = cloudLines > localLines
+  const lineItems = useCloudLines ? cloud.lineItems : local.lineItems
+
+  let amount = local.amount
+  let amountSource = 'on-device'
+  if (cloud.amount != null && local.amount != null) {
+    if (Math.abs(cloud.amount - local.amount) < 0.06) {
+      amount = local.amount
+      amountSource = 'agents-agree'
+    } else if ((cloud.confidence ?? 0) >= 0.85) {
+      amount = cloud.amount
+      amountSource = 'cloud'
+    }
+  } else if (cloud.amount != null && local.amount == null) {
+    amount = cloud.amount
+    amountSource = 'cloud'
+  }
+
+  const description =
+    lineItems.length > 0
+      ? lineItems
+          .map((l) => l.description)
+          .slice(0, 8)
+          .join('; ')
+      : cloud.description || local.description
+
+  const report = [
+    'Multi-agent consensus (on-device team + cloud)',
+    local.agentReport,
+    cloud.agentReport,
+    `Amount source: ${amountSource}`,
+    `Line items: ${useCloudLines ? 'cloud' : 'on-device'} (${lineItems.length})`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  return {
+    date: local.date || cloud.date,
+    vendor: local.vendor || cloud.vendor,
+    amount,
+    description,
+    categoryId: lineItems.length
+      ? local.categoryId
+      : cloud.categoryId || local.categoryId,
+    notes: [local.notes, cloud.notes, 'cross-checked'].filter(Boolean).join(' · '),
+    lineItems,
+    subtotal: local.subtotal ?? cloud.subtotal ?? null,
+    tax: local.tax ?? cloud.tax ?? null,
+    source: 'on-device',
+    confidence: Math.min(
+      0.97,
+      ((local.confidence ?? 0.5) + (cloud.confidence ?? 0.5)) / 2 + 0.1,
+    ),
+    rawText: local.rawText,
+    agentReport: report,
+  }
 }
 
 /** @deprecated use scanReceipt */
@@ -196,9 +308,9 @@ export async function parseReceiptImage(
 }
 
 /**
- * Default path: low-power on-device agent (Tesseract + local rules).
- * Optional cloud boost when API key is set and on-device confidence is low,
- * or when preferCloud is true.
+ * Multi-agent on-device team first (OCR dual-pass + line-items + totals + merchant + arbiter).
+ * If API key present, cloud agent also runs and results are cross-checked when
+ * line items are thin or confidence is low — or always when preferCloud.
  */
 export async function scanReceipt(
   imageBlob: Blob,
@@ -206,24 +318,10 @@ export async function scanReceipt(
 ): Promise<ScanResult> {
   const { apiKey = '', preferCloud = false, onProgress } = options
 
-  if (preferCloud && apiKey.trim()) {
-    onProgress?.({
-      stage: 'ocr',
-      progress: 0.2,
-      message: 'Cloud AI reading receipt…',
-      engine: 'cloud',
-    })
-    try {
-      return await parseReceiptImageCloud(apiKey, imageBlob)
-    } catch {
-      // fall through to on-device
-    }
-  }
-
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
-    message: 'Starting on-device agent…',
+    message: 'Starting multi-agent team…',
     engine: 'on-device',
   })
 
@@ -231,23 +329,23 @@ export async function scanReceipt(
     onProgress?.({ ...p, engine: 'on-device' }),
   )
 
-  const needsBoost =
-    apiKey.trim() &&
-    (local.confidence < 0.55 || local.amount == null || !local.description)
+  const wantsCloud =
+    Boolean(apiKey.trim()) &&
+    (preferCloud ||
+      local.confidence < 0.62 ||
+      local.amount == null ||
+      (local.lineItems?.length ?? 0) < 2)
 
-  if (needsBoost) {
+  if (wantsCloud) {
     onProgress?.({
       stage: 'ocr',
-      progress: 0.5,
-      message: 'Boosting with cloud AI…',
+      progress: 0.88,
+      message: 'Cloud agent cross-checking…',
       engine: 'cloud',
     })
     try {
       const cloud = await parseReceiptImageCloud(apiKey, imageBlob)
-      return {
-        ...cloud,
-        notes: [cloud.notes, 'Cloud boost after on-device pass'].filter(Boolean).join(' · '),
-      }
+      return mergeLocalAndCloud(local, cloud)
     } catch {
       return local
     }

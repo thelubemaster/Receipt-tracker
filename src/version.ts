@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.1.0'
+export const APP_VERSION = '1.2.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.2.0',
+    date: '2026-07-27',
+    title: 'Multi-agent receipt team + line items',
+    changes: [
+      'OCR dual-pass + line-items, totals, merchant, and arbiter agents cross-check each other',
+      'Full receipt line-item breakdown (edit each row, category per item)',
+      'Agent team report on the review screen shows how they agreed or disagreed',
+      'Optional cloud agent still cross-checks when local results look thin',
+    ],
+  },
   {
     version: '1.1.0',
     date: '2026-07-27',

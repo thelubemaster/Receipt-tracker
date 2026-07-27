@@ -1,0 +1,162 @@
+import type { Worker } from 'tesseract.js'
+import type { LocalAgentResult } from '../localAgent'
+import { runArbiterAgent } from './arbiterAgent'
+import { runLineItemsAgent } from './lineItemsAgent'
+import { runMerchantAgent } from './merchantAgent'
+import { runTotalsAgent } from './totalsAgent'
+
+export type AgentProgress = {
+  stage: 'prepare' | 'ocr' | 'parse' | 'arbitrate' | 'done' | string
+  progress: number
+  message: string
+}
+
+/** Downscale + grayscale for low-power OCR. */
+export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Blob> {
+  const bitmap = await createImageBitmap(blob)
+  try {
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height))
+    const w = Math.max(1, Math.round(bitmap.width * scale))
+    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('Canvas unavailable')
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    const imageData = ctx.getImageData(0, 0, w, h)
+    const d = imageData.data
+    for (let i = 0; i < d.length; i += 4) {
+      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+      const v = Math.min(255, Math.max(0, (g - 128) * 1.2 + 128))
+      d[i] = d[i + 1] = d[i + 2] = v
+    }
+    ctx.putImageData(imageData, 0, 0)
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('Image encode failed'))),
+        'image/jpeg',
+        0.88,
+      )
+    })
+  } finally {
+    bitmap.close()
+  }
+}
+
+function scoreOcrText(text: string): number {
+  const lines = text.split(/\n/).filter((l) => l.trim()).length
+  const money = (text.match(/\d+[.,]\d{2}/g) || []).length
+  const letters = (text.match(/[A-Za-z]/g) || []).length
+  return lines * 2 + money * 5 + Math.min(letters, 800) * 0.05
+}
+
+let workerPromise: Promise<Worker> | null = null
+
+async function getWorker(onProgress?: (p: AgentProgress) => void): Promise<Worker> {
+  if (!workerPromise) {
+    workerPromise = (async () => {
+      onProgress?.({
+        stage: 'ocr',
+        progress: 0.05,
+        message: 'Starting OCR agent…',
+      })
+      const Tesseract = await import('tesseract.js')
+      const worker = await Tesseract.createWorker('eng', 1, {
+        logger: (m) => {
+          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+            onProgress?.({
+              stage: 'ocr',
+              progress: 0.12 + m.progress * 0.45,
+              message: `OCR agent reading… ${Math.round(m.progress * 100)}%`,
+            })
+          } else if (m.status === 'loading language traineddata') {
+            onProgress?.({
+              stage: 'ocr',
+              progress: 0.08,
+              message: 'Loading offline language pack…',
+            })
+          }
+        },
+      })
+      await worker.setParameters({
+        preserve_interword_spaces: '1',
+      })
+      return worker
+    })()
+  }
+  return workerPromise
+}
+
+/**
+ * Dual-pass OCR: two page-segmentation modes, keep the richer read.
+ * Then line-items, totals, and merchant agents run in parallel and the arbiter reconciles.
+ */
+export async function runMultiAgentReceiptPipeline(
+  imageBlob: Blob,
+  onProgress?: (p: AgentProgress) => void,
+): Promise<LocalAgentResult> {
+  onProgress?.({
+    stage: 'prepare',
+    progress: 0.02,
+    message: 'Preparing photo for agent team…',
+  })
+  const prepared = await prepareImageForOcr(imageBlob)
+  const worker = await getWorker(onProgress)
+  const Tesseract = await import('tesseract.js')
+
+  onProgress?.({
+    stage: 'ocr',
+    progress: 0.15,
+    message: 'OCR agent pass 1/2 (auto layout)…',
+  })
+  await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.AUTO })
+  const pass1 = await worker.recognize(prepared)
+
+  onProgress?.({
+    stage: 'ocr',
+    progress: 0.45,
+    message: 'OCR agent pass 2/2 (sparse text)…',
+  })
+  await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT })
+  const pass2 = await worker.recognize(prepared)
+
+  const t1 = pass1.data.text || ''
+  const t2 = pass2.data.text || ''
+  const rawText = scoreOcrText(t1) >= scoreOcrText(t2) ? t1 : t2
+  const ocrNote =
+    scoreOcrText(t1) >= scoreOcrText(t2)
+      ? 'OCR: used auto-layout pass'
+      : 'OCR: used sparse-text pass'
+
+  onProgress?.({
+    stage: 'parse',
+    progress: 0.72,
+    message: 'Line-items, totals & merchant agents…',
+  })
+
+  const lines = runLineItemsAgent(rawText)
+  const totals = runTotalsAgent(rawText)
+  const merchant = runMerchantAgent(rawText)
+
+  onProgress?.({
+    stage: 'arbitrate',
+    progress: 0.9,
+    message: 'Arbiter cross-checking agents…',
+  })
+
+  const result = runArbiterAgent({ rawText, lines, totals, merchant })
+  result.agentReport = `${ocrNote}\n${result.agentReport}`
+  result.notes = [result.notes, `${lines.items.length} line items`].filter(Boolean).join(' · ')
+
+  onProgress?.({ stage: 'done', progress: 1, message: 'Agent team finished' })
+  return result
+}
+
+export async function disposeOnDeviceAgent(): Promise<void> {
+  if (workerPromise) {
+    const w = await workerPromise
+    await w.terminate()
+    workerPromise = null
+  }
+}

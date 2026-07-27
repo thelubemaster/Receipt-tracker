@@ -6,6 +6,7 @@ import {
   extractVendor,
   parseReceiptText,
 } from './localAgent'
+import { runLineItemsAgent } from './agents/lineItemsAgent'
 
 const SAMPLE = `
 HOME DEPOT
@@ -39,11 +40,21 @@ describe('localAgent parse', () => {
     expect(['insulation', 'electrical', 'structure']).toContain(categoryId)
   })
 
-  it('builds a full suggestion', () => {
+  it('breaks down line items', () => {
+    const lines = runLineItemsAgent(SAMPLE)
+    expect(lines.items.length).toBeGreaterThanOrEqual(2)
+    expect(lines.items.some((i) => /foam/i.test(i.description))).toBe(true)
+    expect(lines.items.some((i) => /romex/i.test(i.description))).toBe(true)
+    expect(lines.itemsSum).toBeCloseTo(111.37, 1)
+  })
+
+  it('builds a full multi-agent suggestion', () => {
     const r = parseReceiptText(SAMPLE)
     expect(r.source).toBe('on-device')
     expect(r.amount).toBe(120.28)
     expect(r.confidence).toBeGreaterThan(0.5)
-    expect(r.description.length).toBeGreaterThan(3)
+    expect(r.lineItems.length).toBeGreaterThanOrEqual(2)
+    expect(r.agentReport).toMatch(/Line items|line-items|Agents/i)
+    expect(r.description).toMatch(/foam|romex/i)
   })
 })

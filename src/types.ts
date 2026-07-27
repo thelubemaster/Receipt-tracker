@@ -16,6 +16,13 @@ export type CategoryId =
   | 'fuel'
   | 'misc'
 
+export interface ReceiptLineItem {
+  id: string
+  description: string
+  amount: number
+  categoryId: CategoryId
+}
+
 export interface Purchase {
   id: string
   date: string
@@ -25,6 +32,7 @@ export interface Purchase {
   vendor: string
   notes: string
   receiptImageId: string | null
+  lineItems: ReceiptLineItem[]
   createdAt: string
   updatedAt: string
 }
@@ -43,11 +51,20 @@ export interface ReceiptSuggestion {
   description: string
   categoryId: CategoryId
   notes: string
+  lineItems: ReceiptLineItem[]
+  subtotal?: number | null
+  tax?: number | null
+  agentReport?: string
 }
 
 export type Screen =
   | { name: 'home' }
-  | { name: 'add'; initial?: Partial<Purchase>; receiptBlob?: Blob; receiptPreviewUrl?: string }
+  | {
+      name: 'add'
+      initial?: Partial<Purchase> & { agentReport?: string }
+      receiptBlob?: Blob
+      receiptPreviewUrl?: string
+    }
   | { name: 'edit'; purchaseId: string }
   | { name: 'detail'; purchaseId: string }
   | { name: 'scan' }

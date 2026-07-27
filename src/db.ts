@@ -42,23 +42,33 @@ export function newId(): string {
   return crypto.randomUUID()
 }
 
+function normalizePurchase(p: Purchase): Purchase {
+  return {
+    ...p,
+    lineItems: Array.isArray(p.lineItems) ? p.lineItems : [],
+  }
+}
+
 export async function listPurchases(): Promise<Purchase[]> {
   const db = await getDb()
   const all = await db.getAll('purchases')
-  return all.sort((a, b) => {
-    if (a.date !== b.date) return b.date.localeCompare(a.date)
-    return b.createdAt.localeCompare(a.createdAt)
-  })
+  return all
+    .map(normalizePurchase)
+    .sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date)
+      return b.createdAt.localeCompare(a.createdAt)
+    })
 }
 
 export async function getPurchase(id: string): Promise<Purchase | undefined> {
   const db = await getDb()
-  return db.get('purchases', id)
+  const p = await db.get('purchases', id)
+  return p ? normalizePurchase(p) : undefined
 }
 
 export async function savePurchase(purchase: Purchase): Promise<void> {
   const db = await getDb()
-  await db.put('purchases', purchase)
+  await db.put('purchases', normalizePurchase(purchase))
 }
 
 export async function deletePurchase(id: string): Promise<void> {
