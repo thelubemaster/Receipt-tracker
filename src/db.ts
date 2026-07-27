@@ -113,6 +113,7 @@ export async function getSettings(): Promise<AppSettings> {
   return {
     projectName: row?.projectName ?? 'My Schoolie',
     lastSeenVersion: row?.lastSeenVersion ?? '',
+    maxPowerMode: row?.maxPowerMode !== false,
   }
 }
 

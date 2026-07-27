@@ -1,11 +1,13 @@
 /**
- * Free, keyless AIs only — all run on-device in the browser.
+ * Free, keyless AIs only — all run on-device. Higher power = more CPU/GPU work.
  */
 
 export type AiId =
   | 'scout'
   | 'forge'
   | 'lens'
+  | 'hammer'
+  | 'titan'
   | 'ledger'
   | 'sieve'
   | 'cashier'
@@ -26,6 +28,7 @@ export interface AiProfile {
   engine: string
   emoji: string
   color: string
+  /** 1–10 phone load / thoroughness */
   power: number
 }
 
@@ -36,7 +39,7 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Scout · Fast OCR',
     kind: 'on-device',
     cost: 'free',
-    role: 'Fast dual-pass OCR fallback. No key. Fully on your phone.',
+    role: 'Light dual-pass OCR fallback.',
     workingLine: 'Scout is scanning the photo…',
     engine: 'Tesseract.js dual-pass',
     emoji: '🔭',
@@ -46,10 +49,10 @@ export const AI_ROSTER: AiProfile[] = [
   {
     id: 'forge',
     name: 'Forge',
-    fullName: 'Forge · High-Power OCR',
+    fullName: 'Forge · Multi-preprocess OCR',
     kind: 'on-device',
     cost: 'free',
-    role: 'Multi-preprocess OCR (contrast, threshold, invert) × layout modes. Picks best text.',
+    role: 'Contrast / threshold / invert preprocess × layout modes.',
     workingLine: 'Forge is deep-scanning the photo…',
     engine: 'Tesseract.js multi-preprocess',
     emoji: '🔥',
@@ -59,15 +62,41 @@ export const AI_ROSTER: AiProfile[] = [
   {
     id: 'lens',
     name: 'Lens',
-    fullName: 'Lens · Multi-Scale OCR',
+    fullName: 'Lens · Multi-scale OCR',
     kind: 'on-device',
     cost: 'free',
-    role: 'Upscales the receipt and re-reads tiny print; merges lines Forge may miss.',
+    role: 'Upscales the image and re-reads fine print.',
     workingLine: 'Lens is magnifying fine print…',
     engine: 'Tesseract.js upscale pass',
     emoji: '🔍',
     color: '#6ec6ff',
-    power: 4,
+    power: 5,
+  },
+  {
+    id: 'hammer',
+    name: 'Hammer',
+    fullName: 'Hammer · Max-CPU OCR swarm',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Spawns multiple OCR workers in parallel across many image variants — heavy on battery/CPU, no API key.',
+    workingLine: 'Hammer is smashing the receipt with parallel OCR…',
+    engine: 'Tesseract.js multi-worker parallel swarm',
+    emoji: '🔨',
+    color: '#ff7043',
+    power: 9,
+  },
+  {
+    id: 'titan',
+    name: 'Titan',
+    fullName: 'Titan · Neural OCR (on-device)',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Runs a free neural text-recognition model in the browser (WebGPU/WASM). First run downloads the model once, then offline.',
+    workingLine: 'Titan neural net is reading the photo…',
+    engine: 'Transformers.js · TrOCR (local neural)',
+    emoji: '🦾',
+    color: '#ab47bc',
+    power: 10,
   },
   {
     id: 'ledger',
@@ -75,7 +104,7 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Ledger · Line Items',
     kind: 'on-device',
     cost: 'free',
-    role: 'Primary line-item extractor (description, price, schoolie category).',
+    role: 'Primary line-item extractor.',
     workingLine: 'Ledger is listing every item…',
     engine: 'On-device rules agent',
     emoji: '📋',
@@ -88,7 +117,7 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Sieve · Line-Item Ensemble',
     kind: 'on-device',
     cost: 'free',
-    role: 'Second line-item strategy (strict + relaxed). Merges with Ledger so fewer items are dropped.',
+    role: 'Second strategy merge so fewer products are dropped.',
     workingLine: 'Sieve is double-checking line items…',
     engine: 'On-device multi-strategy agent',
     emoji: '🌀',
@@ -101,7 +130,7 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Cashier · Totals',
     kind: 'on-device',
     cost: 'free',
-    role: 'Votes across total/subtotal/tax strategies for the amount you paid.',
+    role: 'Votes across total strategies.',
     workingLine: 'Cashier is checking the totals…',
     engine: 'On-device voting agent',
     emoji: '💵',
@@ -114,7 +143,7 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Clerk · Store & Date',
     kind: 'on-device',
     cost: 'free',
-    role: 'Finds store/vendor name and purchase date.',
+    role: 'Finds store and date.',
     workingLine: 'Clerk is reading the store and date…',
     engine: 'On-device rules agent',
     emoji: '🏪',
@@ -127,7 +156,7 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Arbiter · Cross-check',
     kind: 'on-device',
     cost: 'free',
-    role: 'Cross-checks line sums vs totals and files the purchase.',
+    role: 'Cross-checks line sums vs totals.',
     workingLine: 'Arbiter is cross-checking the team…',
     engine: 'On-device consensus agent',
     emoji: '⚖️',
@@ -140,12 +169,12 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Quorum · Final Vote',
     kind: 'on-device',
     cost: 'free',
-    role: 'Highest-power free judge: compares Forge vs Lens full parses and keeps the strongest result.',
+    role: 'Merges every OCR path (Forge, Lens, Hammer, Titan) into one answer.',
     workingLine: 'Quorum is voting on the final answer…',
-    engine: 'On-device dual-parse vote',
+    engine: 'On-device multi-parse vote',
     emoji: '👑',
     color: '#f0c36a',
-    power: 5,
+    power: 6,
   },
 ]
 

@@ -1057,6 +1057,24 @@ code {
   color: var(--text-muted);
 }
 
+.power-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--accent-soft);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.power-toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

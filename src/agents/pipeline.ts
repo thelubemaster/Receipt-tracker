@@ -2,6 +2,7 @@ import type { AiId } from '../aiRoster'
 import type { ReceiptSuggestion } from '../types'
 import { runArbiterAgent } from './arbiterAgent'
 import { runForgeOcr } from './forgeOcr'
+import { runHammerOcr } from './hammerOcr'
 import { mergeOcrTexts, runLensOcr } from './lensOcr'
 import { runLineItemsAgent } from './lineItemsAgent'
 import { runMerchantAgent } from './merchantAgent'
@@ -32,49 +33,6 @@ function scoreOcrText(text: string): number {
   return lines * 2 + money * 5 + Math.min(letters, 800) * 0.05
 }
 
-/** Quick Scout dual-pass OCR (free). */
-async function runScoutOcr(
-  imageBlob: Blob,
-  onProgress?: (p: AgentProgress) => void,
-): Promise<string> {
-  onProgress?.({
-    stage: 'ocr',
-    progress: 0.12,
-    message: 'Scout is scanning the photo…',
-    aiId: 'scout',
-    aiName: 'Scout',
-  })
-  const Tesseract = await import('tesseract.js')
-  const worker = await Tesseract.createWorker('eng', 1)
-  try {
-    await worker.setParameters({ preserve_interword_spaces: '1' })
-    // simple prep
-    const bitmap = await createImageBitmap(imageBlob)
-    const maxEdge = 1400
-    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height))
-    const w = Math.max(1, Math.round(bitmap.width * scale))
-    const h = Math.max(1, Math.round(bitmap.height * scale))
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')!
-    ctx.drawImage(bitmap, 0, 0, w, h)
-    bitmap.close()
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', 0.88)
-    })
-    await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.AUTO })
-    const p1 = await worker.recognize(blob)
-    await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT })
-    const p2 = await worker.recognize(blob)
-    const t1 = p1.data.text || ''
-    const t2 = p2.data.text || ''
-    return scoreOcrText(t1) >= scoreOcrText(t2) ? t1 : t2
-  } finally {
-    await worker.terminate()
-  }
-}
-
 function parseFromText(
   rawText: string,
   label: string,
@@ -82,18 +40,15 @@ function parseFromText(
   extraAis: AiId[],
 ): LocalAgentResult {
   const sieve = runSieveAgent(rawText)
-  // Prefer sieve items (includes ledger-style + relaxed)
-  const lines = sieve
   const totals = runTotalsAgent(rawText)
   const merchant = runMerchantAgent(rawText)
-  // Also run pure ledger for report comparison
   const ledgerOnly = runLineItemsAgent(rawText)
 
   const result = runArbiterAgent({
     rawText,
     lines: {
-      ...lines,
-      notes: [...lines.notes, `Ledger alone: ${ledgerOnly.items.length} items`],
+      ...sieve,
+      notes: [...sieve.notes, `Ledger alone: ${ledgerOnly.items.length} items`],
     },
     totals,
     merchant,
@@ -106,55 +61,144 @@ function parseFromText(
   result.agentReport = [
     `Free parse path: ${label}`,
     ocrNote,
-    `Ledger: ${ledgerOnly.items.length} items · Sieve: ${sieve.items.length} items`,
+    `Ledger: ${ledgerOnly.items.length} · Sieve: ${sieve.items.length}`,
     result.agentReport,
   ].join('\n')
   return result
 }
 
+export type PipelineOptions = {
+  /** Default true — run Hammer swarm + Titan neural (heavy phone load) */
+  maxPower?: boolean
+}
+
 /**
- * Free keyless multi-agent pipeline:
- * Forge + Lens OCR → Sieve/Ledger/Cashier/Clerk/Arbiter on each text → Quorum vote.
+ * Free keyless multi-agent pipeline with optional max-power engines.
+ * Forge + Lens always; Hammer (parallel OCR) + Titan (neural) when maxPower.
+ * Quorum votes across all successful OCR paths.
  */
 export async function runMultiAgentReceiptPipeline(
   imageBlob: Blob,
   onProgress?: (p: AgentProgress) => void,
+  options: PipelineOptions = {},
 ): Promise<LocalAgentResult> {
+  const maxPower = options.maxPower !== false
+
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
-    message: 'Starting free keyless AI team…',
-    aiId: 'forge',
-    aiName: 'Forge',
+    message: maxPower
+      ? 'Starting MAX-POWER free AI team (Hammer + Titan)…'
+      : 'Starting free AI team…',
+    aiId: 'hammer',
+    aiName: 'Hammer',
   })
 
-  // --- Forge (high-power preprocess OCR) ---
-  let forgeText = ''
-  let forgeNote = 'Forge unavailable'
+  const ocrTexts: { label: string; text: string; note: string; ais: AiId[] }[] = []
+
+  // --- Forge ---
   try {
     const forge = await runForgeOcr(imageBlob, onProgress)
-    forgeText = forge.text
-    forgeNote = `Forge best pass: ${forge.bestPass}`
+    if (forge.text.trim()) {
+      ocrTexts.push({
+        label: 'Forge path',
+        text: forge.text,
+        note: `Forge best: ${forge.bestPass}`,
+        ais: ['forge'],
+      })
+    }
   } catch (e) {
-    forgeNote = `Forge failed: ${e instanceof Error ? e.message : 'error'}`
+    ocrTexts.push({
+      label: 'Forge path',
+      text: '',
+      note: `Forge failed: ${e instanceof Error ? e.message : 'error'}`,
+      ais: ['forge'],
+    })
   }
 
-  // --- Lens (upscale OCR) ---
-  let lensText = ''
-  let lensNote = 'Lens unavailable'
+  // --- Lens ---
   try {
     const lens = await runLensOcr(imageBlob, onProgress)
-    lensText = lens.text
-    lensNote = `Lens best pass: ${lens.bestPass}`
+    if (lens.text.trim()) {
+      ocrTexts.push({
+        label: 'Lens path',
+        text: lens.text,
+        note: `Lens best: ${lens.bestPass}`,
+        ais: ['lens'],
+      })
+    }
   } catch (e) {
-    lensNote = `Lens failed: ${e instanceof Error ? e.message : 'error'}`
+    /* optional */
   }
 
-  // --- Scout fallback if both empty ---
-  if (!forgeText.trim() && !lensText.trim()) {
+  // --- Hammer (max power parallel swarm) ---
+  if (maxPower) {
     try {
-      forgeText = await runScoutOcr(imageBlob, onProgress)
-      forgeNote = 'Scout fallback OCR'
+      const hammer = await runHammerOcr(imageBlob, onProgress)
+      if (hammer.text.trim()) {
+        ocrTexts.push({
+          label: 'Hammer path',
+          text: hammer.text,
+          note: `Hammer: ${hammer.workersUsed} workers × ${hammer.variantsRun} jobs · best ${hammer.bestPass}`,
+          ais: ['hammer'],
+        })
+      }
+    } catch (e) {
+      onProgress?.({
+        stage: 'ocr',
+        progress: 0.5,
+        message: `Hammer failed: ${e instanceof Error ? e.message : 'error'}`,
+        aiId: 'hammer',
+        aiName: 'Hammer',
+      })
+    }
+  }
+
+  // --- Titan neural ---
+  if (maxPower) {
+    try {
+      const { runTitanNeural } = await import('./titanNeural')
+      const titan = await runTitanNeural(imageBlob, onProgress)
+      if (titan.text.trim()) {
+        ocrTexts.push({
+          label: 'Titan neural path',
+          text: titan.text,
+          note: `Titan ${titan.model} on ${titan.device} · ${titan.strips} strips`,
+          ais: ['titan'],
+        })
+      }
+    } catch (e) {
+      onProgress?.({
+        stage: 'ocr',
+        progress: 0.55,
+        message: `Titan skipped: ${e instanceof Error ? e.message : 'unavailable'}`,
+        aiId: 'titan',
+        aiName: 'Titan',
+      })
+    }
+  }
+
+  const usable = ocrTexts.filter((o) => o.text.trim().length > 10)
+  if (!usable.length) {
+    // last-ditch scout
+    try {
+      const Tesseract = await import('tesseract.js')
+      onProgress?.({
+        stage: 'ocr',
+        progress: 0.6,
+        message: 'Scout emergency fallback…',
+        aiId: 'scout',
+        aiName: 'Scout',
+      })
+      const worker = await Tesseract.createWorker('eng')
+      const r = await worker.recognize(imageBlob)
+      await worker.terminate()
+      usable.push({
+        label: 'Scout fallback',
+        text: r.data.text || '',
+        note: 'Scout emergency',
+        ais: ['scout'],
+      })
     } catch (e) {
       throw new Error(
         e instanceof Error ? e.message : 'All free OCR engines failed on this device',
@@ -164,66 +208,51 @@ export async function runMultiAgentReceiptPipeline(
 
   onProgress?.({
     stage: 'parse',
-    progress: 0.72,
-    message: 'Ledger & Sieve are listing items…',
+    progress: 0.7,
+    message: `Parsing ${usable.length} OCR paths with Ledger/Sieve…`,
     aiId: 'sieve',
     aiName: 'Sieve',
   })
 
-  const parseA = parseFromText(
-    forgeText || lensText,
-    'Forge path',
-    forgeNote,
-    forgeText ? ['forge'] : ['scout'],
-  )
+  const parses = usable.map((u) => parseFromText(u.text, u.label, u.note, u.ais))
 
-  onProgress?.({
-    stage: 'parse',
-    progress: 0.8,
-    message: 'Cashier & Clerk on Lens text…',
-    aiId: 'cashier',
-    aiName: 'Cashier',
-  })
-
-  const parseB = parseFromText(
-    lensText || forgeText,
-    'Lens path',
-    lensNote,
-    lensText ? ['lens'] : forgeText ? ['forge'] : ['scout'],
-  )
-
-  // Optional: also parse merged OCR for more coverage
-  const mergedText = mergeOcrTexts(forgeText, lensText)
-  const parseM =
-    mergedText && mergedText !== forgeText && mergedText !== lensText
-      ? parseFromText(mergedText, 'Merged OCR path', 'Forge+Lens line merge', [
-          'forge',
-          'lens',
-        ])
-      : null
+  // Merged OCR super-text
+  let merged = usable[0].text
+  for (let i = 1; i < usable.length; i++) {
+    merged = mergeOcrTexts(merged, usable[i].text)
+  }
+  if (usable.length > 1 && scoreOcrText(merged) > scoreOcrText(usable[0].text)) {
+    parses.push(
+      parseFromText(
+        merged,
+        'Merged multi-OCR path',
+        `Merged ${usable.length} OCR engines`,
+        usable.flatMap((u) => u.ais),
+      ),
+    )
+  }
 
   onProgress?.({
     stage: 'arbitrate',
     progress: 0.9,
-    message: 'Quorum is voting on the final answer…',
+    message: `Quorum is voting across ${parses.length} full parses…`,
     aiId: 'quorum',
     aiName: 'Quorum',
   })
 
-  let final = runQuorumAgent(parseA, parseB)
-  if (parseM) {
-    final = runQuorumAgent(final, parseM)
+  let final = parses[0]
+  for (let i = 1; i < parses.length; i++) {
+    final = runQuorumAgent(final, parses[i])
   }
 
-  // Ensure scout tag if used
-  if (!forgeText && !lensText) {
-    final.aisUsed = Array.from(new Set([...(final.aisUsed ?? []), 'scout' as AiId]))
-  }
   final.aisUsed = Array.from(
     new Set<AiId>([
       ...(final.aisUsed ?? []),
       'forge',
       'lens',
+      'hammer',
+      'titan',
+      'scout',
       'ledger',
       'sieve',
       'cashier',
@@ -232,11 +261,14 @@ export async function runMultiAgentReceiptPipeline(
       'quorum',
     ]),
   )
-  final.activeAiLabel = 'Free keyless team (Quorum)'
+  final.activeAiLabel = maxPower
+    ? 'Max-power free team (Hammer + Titan + Quorum)'
+    : 'Free on-device team (Quorum)'
   final.agentReport = [
-    'Free keyless AIs: Forge, Lens, Scout, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum',
-    forgeNote,
-    lensNote,
+    maxPower
+      ? 'MAX POWER free AIs: Forge, Lens, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum'
+      : 'Free AIs: Forge, Lens, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum',
+    ...usable.map((u) => u.note),
     final.agentReport,
   ].join('\n')
   final.source = 'on-device'
@@ -273,10 +305,9 @@ export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Bl
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('Canvas unavailable')
     ctx.drawImage(bitmap, 0, 0, w, h)
-    const out = await new Promise<Blob>((resolve, reject) => {
+    return await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', 0.88)
     })
-    return out
   } finally {
     bitmap.close()
   }

@@ -44,6 +44,8 @@ export interface Purchase {
 export interface AppSettings {
   projectName: string
   lastSeenVersion: string
+  /** Run Hammer + Titan heavy engines (default true) */
+  maxPowerMode: boolean
 }
 
 export interface ReceiptSuggestion {

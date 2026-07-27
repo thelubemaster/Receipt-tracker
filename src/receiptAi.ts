@@ -13,6 +13,8 @@ export type ScanResult = ReceiptSuggestion & {
 }
 
 export type ScanOptions = {
+  /** Default true — Hammer parallel OCR + Titan neural (heavy phone load) */
+  maxPower?: boolean
   onProgress?: (
     p: AgentProgress & {
       engine: 'on-device'
@@ -23,26 +25,30 @@ export type ScanOptions = {
 }
 
 /**
- * Free keyless scan only — Forge, Lens, Sieve, Quorum, etc. on your phone.
- * No API keys. No cloud.
+ * Free keyless scan — Forge, Lens, Hammer, Titan, Quorum, etc. on your phone.
+ * No API keys. maxPower (default on) runs the heavy engines.
  */
 export async function scanReceipt(
   imageBlob: Blob,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  const { onProgress } = options
+  const { onProgress, maxPower = true } = options
 
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
-    message: 'Starting free keyless AI team…',
+    message: maxPower
+      ? 'Starting MAX-POWER free AI team…'
+      : 'Starting free AI team…',
     engine: 'on-device',
-    aiId: 'forge',
-    aiName: 'Forge',
+    aiId: 'hammer',
+    aiName: 'Hammer',
   })
 
-  const local: LocalAgentResult = await runOnDeviceReceiptAgent(imageBlob, (p) =>
-    onProgress?.({ ...p, engine: 'on-device', aiId: p.aiId, aiName: p.aiName }),
+  const local: LocalAgentResult = await runOnDeviceReceiptAgent(
+    imageBlob,
+    (p) => onProgress?.({ ...p, engine: 'on-device', aiId: p.aiId, aiName: p.aiName }),
+    { maxPower },
   )
 
   onProgress?.({
@@ -60,6 +66,8 @@ export async function scanReceipt(
     aisUsed: local.aisUsed ?? [
       'forge',
       'lens',
+      'hammer',
+      'titan',
       'scout',
       'ledger',
       'sieve',
@@ -68,6 +76,6 @@ export async function scanReceipt(
       'arbiter',
       'quorum',
     ],
-    activeAiLabel: local.activeAiLabel ?? 'Free keyless team',
+    activeAiLabel: local.activeAiLabel ?? 'Max-power free team',
   }
 }

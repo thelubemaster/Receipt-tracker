@@ -192,6 +192,19 @@ export async function probeDevice(): Promise<DeviceProbeResult> {
     ),
   )
 
+  // WebGPU for Titan neural
+  const hasGpu = Boolean((navigator as Navigator & { gpu?: unknown }).gpu)
+  checks.push(
+    check(
+      'webgpu',
+      'WebGPU',
+      hasGpu ? 'pass' : 'warn',
+      hasGpu
+        ? 'Available — Titan neural OCR can use GPU acceleration'
+        : 'Missing — Titan falls back to WASM (still free, more CPU)',
+    ),
+  )
+
   // Score
   let score = 0
   let maxScore = 0
@@ -209,14 +222,15 @@ export async function probeDevice(): Promise<DeviceProbeResult> {
 
   const recommended: string[] = []
   if (canRunOnDeviceAi) {
-    recommended.push('Forge · Lens · Scout (OCR)')
-    recommended.push('Ledger · Sieve · Cashier · Clerk')
-    recommended.push('Arbiter · Quorum (final vote)')
-    if (cores < 2) recommended.push('Tip: Forge/Lens may be slower on this CPU')
+    recommended.push('Hammer max-CPU OCR swarm (free)')
+    recommended.push('Titan neural OCR on-device (free, first download)')
+    recommended.push('Forge · Lens · Quorum')
+    if (cores >= 4) recommended.push('This phone can handle max power mode')
+    else recommended.push('Max power will work but may run warm/slow')
   }
 
   const summary = canRunOnDeviceAi
-    ? `Device looks ${grade} for free keyless AIs (no API keys).`
+    ? `Device looks ${grade} for free max-power AIs (no API keys).`
     : 'This device may struggle with free on-device OCR (missing WASM/canvas).'
 
   return {

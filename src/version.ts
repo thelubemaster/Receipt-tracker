@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.6.1'
+export const APP_VERSION = '1.7.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.7.0',
+    date: '2026-07-27',
+    title: 'Max-power free AIs — Hammer + Titan',
+    changes: [
+      'Hammer: multi-worker parallel OCR swarm (heavy CPU, no key)',
+      'Titan: free on-device neural OCR via Transformers.js / TrOCR (WebGPU or WASM)',
+      'Max power mode ON by default — pushes the phone hard on every scan',
+      'Still 100% free — no API keys, no cloud billing',
+    ],
+  },
   {
     version: '1.6.1',
     date: '2026-07-27',

@@ -39,6 +39,7 @@ export function extractAmount(text: string): number | null {
 export async function runOnDeviceReceiptAgent(
   imageBlob: Blob,
   onProgress?: (p: AgentProgress) => void,
+  options?: { maxPower?: boolean },
 ): Promise<LocalAgentResult> {
-  return runMultiAgentReceiptPipeline(imageBlob, onProgress)
+  return runMultiAgentReceiptPipeline(imageBlob, onProgress, options)
 }

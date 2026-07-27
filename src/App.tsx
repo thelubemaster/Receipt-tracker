@@ -97,6 +97,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>({
     projectName: 'My Schoolie',
     lastSeenVersion: '',
+    maxPowerMode: true,
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -320,6 +321,7 @@ export default function App() {
 
       {screen.name === 'scan' && (
         <ScanScreen
+          maxPowerMode={settings.maxPowerMode}
           onBack={() => setScreen({ name: 'home' })}
           onNeedSettings={() => setScreen({ name: 'settings' })}
           onParsed={(suggestion, blob, previewUrl) => {
@@ -561,7 +563,7 @@ function HomeScreen(props: {
           </div>
           <div className="hero-pills">
             <span className="pill pill-accent">Free · no keys</span>
-            <span className="pill">Forge · Lens · Quorum</span>
+            <span className="pill">Hammer · Titan</span>
           </div>
         </div>
       </section>
@@ -652,6 +654,7 @@ function HomeScreen(props: {
 }
 
 function ScanScreen(props: {
+  maxPowerMode: boolean
   onBack: () => void
   onNeedSettings: () => void
   onParsed: (suggestion: ScanResult, blob: Blob, previewUrl: string) => void
@@ -663,10 +666,13 @@ function ScanScreen(props: {
   const [progress, setProgress] = useState(0)
   const [activeAi, setActiveAi] = useState<{ name: string; id?: AiId } | null>(null)
 
-  const whoWillScan = useMemo(
-    () => AI_ROSTER.map((a) => a.name),
-    [],
-  )
+  const whoWillScan = useMemo(() => {
+    const base = AI_ROSTER.map((a) => a.name)
+    if (!props.maxPowerMode) {
+      return base.filter((n) => n !== 'Hammer' && n !== 'Titan')
+    }
+    return base
+  }, [props.maxPowerMode])
 
   async function handleFile(file: File | null) {
     if (!file) return
@@ -680,10 +686,15 @@ function ScanScreen(props: {
 
     setBusy(true)
     setProgress(0.02)
-    setActiveAi({ name: 'Forge', id: 'forge' })
-    setStatus('Forge is deep-scanning the photo…')
+    setActiveAi({ name: props.maxPowerMode ? 'Hammer' : 'Forge', id: props.maxPowerMode ? 'hammer' : 'forge' })
+    setStatus(
+      props.maxPowerMode
+        ? 'Hammer is spinning up parallel OCR workers…'
+        : 'Forge is deep-scanning the photo…',
+    )
     try {
       const suggestion = await scanReceipt(blob, {
+        maxPower: props.maxPowerMode,
         onProgress: (p) => {
           setProgress(p.progress)
           setStatus(p.message)
@@ -713,9 +724,10 @@ function ScanScreen(props: {
       </header>
 
       <div className="banner banner-info">
-        <strong>100% free · no API keys.</strong> A powerful on-device team (Forge, Lens, Sieve,
-        Quorum, …) reads the receipt on your phone. You&apos;ll see each AI&apos;s name while it
-        works.
+        <strong>Free · no keys · max power {props.maxPowerMode ? 'ON' : 'OFF'}.</strong>{' '}
+        {props.maxPowerMode
+          ? 'Hammer (multi-worker OCR swarm) + Titan (on-device neural net) will push this phone hard. First Titan run downloads a free model once.'
+          : 'Lighter free team only. Turn on Max power in Settings for Hammer + Titan.'}
       </div>
 
       {busy ? (
@@ -1329,6 +1341,7 @@ function SettingsScreen(props: {
   onUpdateAvailable: () => void
 }) {
   const [projectName, setProjectName] = useState(props.settings.projectName)
+  const [maxPowerMode, setMaxPowerMode] = useState(props.settings.maxPowerMode !== false)
   const [saving, setSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
   const [board, setBoard] = useState<LeaderboardMap>(defaultLeaderboard())
@@ -1408,10 +1421,28 @@ function SettingsScreen(props: {
             .onSave({
               projectName: projectName.trim() || 'My Schoolie',
               lastSeenVersion: props.settings.lastSeenVersion,
+              maxPowerMode,
             })
             .finally(() => setSaving(false))
         }}
       >
+        <div className="card settings-card">
+          <strong>Max power mode</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            When on, every scan runs <strong>Hammer</strong> (parallel multi-worker OCR) and{' '}
+            <strong>Titan</strong> (free on-device neural OCR). Uses more CPU/GPU and battery — no
+            API key. First Titan run downloads a model (~tens of MB), then offline.
+          </p>
+          <label className="power-toggle">
+            <input
+              type="checkbox"
+              checked={maxPowerMode}
+              onChange={(e) => setMaxPowerMode(e.target.checked)}
+            />
+            <span>{maxPowerMode ? 'ON — push the phone hard' : 'OFF — lighter free team only'}</span>
+          </label>
+        </div>
+
         <div className="card settings-card">
           <strong>Device AI scan</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
