@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.8.0'
+export const APP_VERSION = '1.8.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,18 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.8.1',
+    date: '2026-07-27',
+    title: 'Debug recheck: Swag dupes + Falzone towing',
+    changes: [
+      'Collapse duplicate product amounts when sum exceeds subtotal',
+      'Ignore address/shipping chrome in product names',
+      'Invoice layout: skip Subtotal/Total/Convenience Fee as products',
+      'Towing invoices → Falzone vendor + Fuel & Travel category',
+      'Seeker detects missing web proxy (HTML responses)',
+    ],
+  },
   {
     version: '1.8.0',
     date: '2026-07-27',

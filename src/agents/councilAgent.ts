@@ -8,7 +8,7 @@ import type { AiId } from '../aiRoster'
 import type { ReceiptLineItem } from '../types'
 import { Blackboard } from './blackboard'
 import { categorizeText } from './keywords'
-import { primaryCategoryFromItems } from './lineItemsAgent'
+import { dedupeItemsByAmount, primaryCategoryFromItems } from './lineItemsAgent'
 import { extractVendor } from './merchantAgent'
 import { parseMoneyTokens, roundMoney } from './moneyParse'
 import type { LocalAgentResult } from './pipeline'
@@ -43,7 +43,9 @@ function contextAroundAmount(text: string, amount: number): string {
 }
 
 function isFeeDesc(s: string): boolean {
-  return /\b(shipping|freight|delivery|tax|subtotal|total|handling)\b/i.test(s)
+  return /\b(shipping|freight|delivery|tax|subtotal|total|handling|convenience fee|service fee|payment date|created date|payer)\b/i.test(
+    s,
+  )
 }
 
 /**
@@ -209,19 +211,71 @@ export function runCouncilAgent(
     talk('sieve', 'finding', 'No obvious missing product amounts in OCR after filters.')
   }
 
-  // Drop shipping-as-product if still present
+  // Drop shipping/fee rows mistaken as products
   const before = items.length
   items = items.filter((i) => !isFeeDesc(i.description))
   if (items.length < before) {
-    talk('arbiter', 'decision', 'Removed shipping/tax-like rows from product list.')
+    talk('arbiter', 'decision', 'Removed shipping/tax/fee rows from product list.')
+  }
+
+  // Deduplicate inflated merges (same $39.97 three times, etc.)
+  const sumBefore = roundMoney(items.reduce((s, i) => s + i.amount, 0))
+  if (subtotal != null && sumBefore > subtotal * 1.08) {
+    talk(
+      'arbiter',
+      'challenge',
+      `Product sum $${sumBefore.toFixed(2)} > subtotal $${subtotal.toFixed(2)} — collapsing duplicate amounts.`,
+    )
+    items = dedupeItemsByAmount(items, subtotal)
+    talk(
+      'arbiter',
+      'decision',
+      `After dedupe: ${items.length} item(s) sum $${roundMoney(items.reduce((s, i) => s + i.amount, 0)).toFixed(2)}`,
+    )
+  } else if (amount != null && sumBefore > amount * 1.15) {
+    talk('arbiter', 'challenge', `Product sum inflated vs total — deduping by amount.`)
+    items = dedupeItemsByAmount(items, amount)
+  } else {
+    // still collapse exact amount dupes
+    const deduped = dedupeItemsByAmount(items, subtotal)
+    if (deduped.length < items.length) {
+      talk('arbiter', 'decision', `Collapsed ${items.length - deduped.length} duplicate amount row(s).`)
+      items = deduped
+    }
+  }
+
+  // Towing / service invoice: if OCR mentions towing and we only have fees, rebuild description
+  if (/\btow(ing)?\b/i.test(rawText) && items.every((i) => isFeeDesc(i.description) || i.categoryId === 'misc')) {
+    const towVendor = extractVendor(rawText)
+    if (subtotal != null || amount != null) {
+      const serviceAmt = subtotal ?? (amount != null && shipping != null ? roundMoney(amount - shipping) : amount)
+      if (serviceAmt != null) {
+        talk('council', 'answer', `This looks like a towing/service invoice — filing service line $${serviceAmt.toFixed(2)}.`)
+        items = [
+          {
+            id: 'council-tow-1',
+            description: `${towVendor || 'Towing'} service`,
+            amount: serviceAmt,
+            categoryId: 'fuel',
+          },
+        ]
+        // re-add convenience fee only as note, not product, if present
+        vendor = towVendor || vendor
+      }
+    }
   }
 
   // --- Round 4: Re-categorize with full product names ---
   items = items.map((i) => {
-    const { categoryId } = categorizeText(i.description)
+    const { categoryId } = categorizeText(i.description + ' ' + rawText.slice(0, 200))
     if (categoryId !== i.categoryId && categoryId !== 'misc') {
       talk('ledger', 'answer', `Recategorized “${i.description.slice(0, 36)}” → ${categoryId}`)
       return { ...i, categoryId }
+    }
+    // explicit towing
+    if (/\btow/i.test(i.description + rawText) && i.categoryId === 'misc') {
+      talk('ledger', 'answer', `Marked as Fuel & Travel (towing)`)
+      return { ...i, categoryId: 'fuel' }
     }
     return i
   })

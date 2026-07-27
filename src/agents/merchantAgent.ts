@@ -65,6 +65,20 @@ function titleCaseVendor(s: string): string {
 export function extractVendor(text: string): string {
   const lower = text.toLowerCase()
 
+  // 0) "Payment details for Company Name" / invoice headers
+  const payFor = text.match(/payment details for\s*\n?\s*([A-Za-z0-9][A-Za-z0-9 .,&'-]{3,60})/i)
+  if (payFor?.[1]) {
+    const name = payFor[1].trim().split(/\n/)[0].trim()
+    if (name.length >= 3 && !/^payer$/i.test(name)) return titleCaseVendor(name)
+  }
+  // Company line with Inc/LLC/Service
+  const company = text.match(
+    /\b([A-Z][A-Za-z0-9 .,&'-]{2,50}\b(?:Inc|LLC|Ltd|Service|Services|Towing|Motors|Parts)\.?)\b/,
+  )
+  if (company?.[1] && !/payment method|credit card/i.test(company[1])) {
+    return titleCaseVendor(company[1])
+  }
+
   // 1) Known big-box hints
   for (const hint of VENDOR_HINTS) {
     if (lower.includes(hint)) {
@@ -106,18 +120,19 @@ export function extractVendor(text: string): string {
     return titleCaseVendor(capsCandidates[capsCandidates.length - 1])
   }
 
-  // 4) First clean early line (legacy) — but skip OCR garbage (few vowels, brackets)
+  // 4) First clean early line (legacy) — skip OCR garbage & payer-only names
   for (const line of lines.slice(0, 12)) {
-    if (line.length < 3 || line.length > 40) continue
+    if (line.length < 3 || line.length > 48) continue
     if (/^\d+$/.test(line)) continue
     if (/[\[\]{}|\\]/.test(line)) continue
     if (totalNoise(line)) continue
+    if (/^payer$|^bradley$|^payment/i.test(line.trim())) continue
     if (/\d{2,}[\/\-]\d/.test(line)) continue
     if (/\$/.test(line)) continue
     const letters = (line.match(/[A-Za-z]/g) || []).length
     const vowels = (line.match(/[aeiouAEIOU]/g) || []).length
     if (letters < 4) continue
-    if (vowels < 2 && letters > 6) continue // garbage OCR like VITCEVRVITvIeen
+    if (vowels < 2 && letters > 6) continue
     if (/[A-Za-z]{3,}/.test(line)) {
       return titleCaseVendor(line)
     }

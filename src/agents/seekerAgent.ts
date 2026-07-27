@@ -75,10 +75,19 @@ export async function webLookup(query: string): Promise<WebLookupResult> {
     const res = await fetch(`/api/web-lookup?q=${encodeURIComponent(query)}`, {
       cache: 'no-store',
     })
+    const text = await res.text()
+    // SPA hosts without proxy return index.html
+    if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) {
+      return {
+        ok: false,
+        query,
+        error: 'Web lookup proxy not available on this host (got HTML). Use project preview server.',
+      }
+    }
     if (!res.ok) {
       return { ok: false, error: `lookup HTTP ${res.status}`, query }
     }
-    return (await res.json()) as WebLookupResult
+    return JSON.parse(text) as WebLookupResult
   } catch (e) {
     return {
       ok: false,

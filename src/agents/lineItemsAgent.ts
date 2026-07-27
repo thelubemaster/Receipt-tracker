@@ -4,9 +4,13 @@ import { lastMoneyOnLine, parseMoneyTokens, roundMoney } from './moneyParse'
 
 /** Not product rows — fees, totals, chrome UI, etc. */
 const SKIP_LINE =
-  /\b(subtotal|sub total|total|grand total|tax|sales tax|vat|gst|hst|shipping|freight|delivery|cash|change|visa|mastercard|debit|credit|auth|approval|balance due|amount due|payment method|tender|thank|store\s*#|tel|phone|www\.|http|https|cashier|register|tran|invoice|receipt|member|rewards|savings|you saved|coupon|promo|discount|card\s*#|\*{4}|xxxx|aid\s|tc#|ref\s?#|cart items|item price|item total|qty|sku|order contains|items shipped|powered by|launch your own|bigcommerce|reply|forward)\b/i
+  /\b(subtotal|sub total|total|grand total|tax|sales tax|vat|gst|hst|shipping|freight|delivery|convenience fee|service fee|processing fee|cash|change|visa|mastercard|debit|credit|auth|approval|balance due|amount due|payment method|payment date|payment details|created date|payer|tender|thank|store\s*#|tel|phone|www\.|http|https|cashier|register|tran|invoice|receipt|member|rewards|savings|you saved|coupon|promo|discount|card\s*#|\*{4}|xxxx|aid\s|tc#|ref\s?#|cart items|item price|item total|qty|sku|order contains|items shipped|powered by|launch your own|bigcommerce|reply|forward)\b/i
 
-const FEE_LINE = /\b(shipping|freight|delivery|handling)\b/i
+const FEE_LINE =
+  /\b(shipping|freight|delivery|handling|convenience fee|service fee|processing fee)\b/i
+
+const ADDRESS_LINE =
+  /\b(shipped to|pennsylvania|bangor|street| st\b| rd,| road|ave|avenue|zip|,\s*\d{5}|\bus\b)\b/i
 
 const PRICE_ONLY = /^\$?\s*[\d.,]+\s*$/
 const SKU_QTY_PRICE =
@@ -24,14 +28,14 @@ export type LineItemsAgentResult = {
 
 function cleanDescription(raw: string): string {
   let s = raw
-    // strip all money tokens
     .replace(/\$\s*\d{1,5}(?:[.,]\d{3})*(?:[.,]\d{2})/g, ' ')
     .replace(/\b\d+[.,]\d{2}\b/g, ' ')
-    // strip lone qty near end
     .replace(/\s+\d+\s*$/g, ' ')
+    // strip address fragments
+    .replace(/\b\d{5}(?:-\d{4})?\b/g, ' ')
+    .replace(/\b(pennsylvania|bangor|shipped to|united states)\b/gi, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim()
-  // strip pure SKU-looking short tokens only when we still have words
   if (/[A-Za-z]{4,}/.test(s)) {
     s = s.replace(/\b[A-Z0-9]{2,}-\d{3,}\b/g, ' ').replace(/\s{2,}/g, ' ').trim()
   }
@@ -41,9 +45,10 @@ function cleanDescription(raw: string): string {
 function isNoiseDescLine(line: string): boolean {
   if (!line || line.length < 2) return true
   if (SKIP_LINE.test(line)) return true
+  if (FEE_LINE.test(line)) return true
+  if (ADDRESS_LINE.test(line) && !/filter|kit|ford|part|pump|wire/i.test(line)) return true
   if (PRICE_ONLY.test(line)) return true
   if (/^[\W\d]+$/.test(line)) return true
-  // phone chrome
   if (/^\d{1,2}:\d{2}/.test(line)) return true
   if (/^[.\W]{1,6}$/.test(line)) return true
   return false
@@ -53,29 +58,33 @@ function looksLikeProductName(line: string): boolean {
   if (isNoiseDescLine(line)) return false
   if (line.length > 80) return false
   if (!/[A-Za-z]{2,}/.test(line)) return false
-  // year ranges ok: 1994-1997 FORD
   return true
 }
 
-/**
- * Build product description from buffered name lines + the priced row.
- */
+function isFeeOrMetaLabel(line: string): boolean {
+  return (
+    SKIP_LINE.test(line) ||
+    FEE_LINE.test(line) ||
+    /^(subtotal|total|tax|shipping|convenience fee|payment date|created date|payer)$/i.test(
+      line.trim(),
+    )
+  )
+}
+
 function assembleDescription(buffer: string[], pricedLine: string): string {
-  const parts = [...buffer]
-  // If priced line has real words (not only SKU/qty/prices), include them
+  const parts = buffer.filter((p) => !ADDRESS_LINE.test(p) && !isFeeOrMetaLabel(p))
   const withoutMoney = pricedLine
     .replace(/\$\s*\d{1,5}(?:[.,]\d{3})*(?:[.,]\d{2})/g, ' ')
     .replace(/\b\d+[.,]\d{2}\b/g, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim()
-  // Drop trailing qty
   const maybeWords = withoutMoney.replace(/^\d+\s+/, '').replace(/\s+\d+$/, '').trim()
   if (
     maybeWords.length >= 4 &&
     /[A-Za-z]{3,}/.test(maybeWords) &&
-    !SKU_QTY_PRICE.test(pricedLine.trim())
+    !SKU_QTY_PRICE.test(pricedLine.trim()) &&
+    !isFeeOrMetaLabel(maybeWords)
   ) {
-    // Prefer not duplicating SKU-only fragments already in buffer
     if (!parts.some((p) => p.toLowerCase().includes(maybeWords.toLowerCase().slice(0, 12)))) {
       parts.push(maybeWords)
     }
@@ -84,8 +93,50 @@ function assembleDescription(buffer: string[], pricedLine: string): string {
 }
 
 /**
- * Agent A — Line-item extractor (multi-line e-commerce + store receipts).
+ * Prefer one unique product per amount; keep the best description.
  */
+export function dedupeItemsByAmount(
+  items: ReceiptLineItem[],
+  targetSum?: number | null,
+): ReceiptLineItem[] {
+  const byAmount = new Map<string, ReceiptLineItem[]>()
+  for (const it of items) {
+    const k = it.amount.toFixed(2)
+    const arr = byAmount.get(k) ?? []
+    arr.push(it)
+    byAmount.set(k, arr)
+  }
+
+  const scoreDesc = (d: string): number => {
+    let s = d.length
+    if (/filter|kit|ford|racor|caterpillar|powerstroke|fuel|wire|pump|tow/i.test(d)) s += 40
+    if (ADDRESS_LINE.test(d)) s -= 50
+    if (/\b(pennsylvania|18013|shipped)\b/i.test(d)) s -= 40
+    if (isFeeOrMetaLabel(d)) s -= 80
+    if (/^pff\d+/i.test(d) && d.length < 20) s -= 10
+    return s
+  }
+
+  const picked: ReceiptLineItem[] = []
+  for (const [, group] of byAmount) {
+    group.sort((a, b) => scoreDesc(b.description) - scoreDesc(a.description))
+    picked.push(group[0])
+  }
+
+  // If still over target sum, drop worst extras (shouldn't happen after amount-dedupe)
+  let sum = roundMoney(picked.reduce((s, i) => s + i.amount, 0))
+  if (targetSum != null && sum > targetSum * 1.05) {
+    picked.sort((a, b) => scoreDesc(a.description) - scoreDesc(b.description))
+    while (picked.length > 1 && sum > targetSum * 1.05) {
+      const drop = picked.shift()!
+      sum = roundMoney(sum - drop.amount)
+    }
+  }
+
+  // restore product-ish order by amount descending (or keep stable)
+  return picked.sort((a, b) => b.amount - a.amount)
+}
+
 export function runLineItemsAgent(text: string): LineItemsAgentResult {
   const lines = text
     .split(/\r?\n/)
@@ -96,6 +147,7 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
   const notes: string[] = []
   let buffer: string[] = []
   let shipping: number | null = null
+  let pendingFeeLabel: string | null = null
 
   const flushBuffer = () => {
     buffer = []
@@ -106,29 +158,49 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     const amounts = parseMoneyTokens(line)
     const amount = amounts.length ? amounts[amounts.length - 1] : null
 
-    // Shipping / freight fee — record but not a product
+    // Label-only fee/meta lines (amount may be next)
+    if (amount == null && isFeeOrMetaLabel(line)) {
+      pendingFeeLabel = line
+      if (/\b(subtotal|grand total|payment|cart items)\b/i.test(line)) flushBuffer()
+      continue
+    }
+
+    // Amount after fee/meta label (invoice style)
+    if (amount != null && (pendingFeeLabel || isFeeOrMetaLabel(line))) {
+      const label = pendingFeeLabel || line
+      pendingFeeLabel = null
+      if (FEE_LINE.test(label) || FEE_LINE.test(line)) {
+        if (/\bshipping|freight|delivery\b/i.test(label + line)) {
+          shipping = roundMoney(amount)
+        }
+        // convenience fee etc. — not product
+        flushBuffer()
+        continue
+      }
+      if (SKIP_LINE.test(label) || SKIP_LINE.test(line)) {
+        flushBuffer()
+        continue
+      }
+    }
+    pendingFeeLabel = null
+
     if (amount != null && FEE_LINE.test(line)) {
       shipping = roundMoney(amount)
       flushBuffer()
       continue
     }
 
-    // Totals / tax / payment chrome
     if (SKIP_LINE.test(line) && amount != null) {
       flushBuffer()
       continue
     }
     if (SKIP_LINE.test(line) && amount == null) {
-      // header rows shouldn't wipe product buffer mid-item... only clear if clearly section chrome
-      if (/\b(subtotal|grand total|payment|cart items|item price)\b/i.test(line)) {
-        flushBuffer()
-      }
+      if (/\b(subtotal|grand total|payment|cart items|item price)\b/i.test(line)) flushBuffer()
       continue
     }
 
     if (amount == null) {
       if (looksLikeProductName(line)) {
-        // Accumulate multi-line product titles (max 6 lines)
         if (buffer.length < 6) buffer.push(line)
         else {
           buffer.shift()
@@ -142,35 +214,34 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     const isPriceOnly = PRICE_ONLY.test(line) || QTY_DUAL_PRICE.test(line) || SKU_QTY_PRICE.test(line)
     const letters = (line.match(/[A-Za-z]/g) || []).length
 
-    // Need either a buffer of product names or words on this line
+    // Buffer is only fee labels → not a product
+    if (buffer.length && buffer.every(isFeeOrMetaLabel)) {
+      flushBuffer()
+      continue
+    }
+
+    if (buffer.length === 0 && letters < 3 && isPriceOnly) {
+      continue
+    }
     if (buffer.length === 0 && letters < 3 && !isPriceOnly) {
       continue
     }
-    if (buffer.length === 0 && letters < 3 && isPriceOnly) {
-      // orphan price — skip
-      continue
-    }
 
-    // Prefer item total: if two similar prices, last is usually line total
     let itemAmount = roundMoney(amount)
-    if (amounts.length >= 2) {
-      itemAmount = roundMoney(amounts[amounts.length - 1])
-    }
-
+    if (amounts.length >= 2) itemAmount = roundMoney(amounts[amounts.length - 1])
     if (itemAmount <= 0 || itemAmount > 50000) {
       flushBuffer()
       continue
     }
 
     let desc = assembleDescription(buffer, line)
-    // If description still looks like only a SKU, try previous non-buffer line context
     if (desc.length < 4 || !/[A-Za-z]{3,}/.test(desc)) {
-      // look back up to 4 lines
       const back: string[] = []
-      for (let j = i - 1; j >= 0 && back.length < 4; j--) {
-        if (looksLikeProductName(lines[j]) && !lastMoneyOnLine(lines[j])) {
+      for (let j = i - 1; j >= 0 && back.length < 5; j--) {
+        if (looksLikeProductName(lines[j]) && lastMoneyOnLine(lines[j]) == null) {
           back.unshift(lines[j])
         } else if (lastMoneyOnLine(lines[j]) != null) break
+        else if (isFeeOrMetaLabel(lines[j])) break
       }
       if (back.length) desc = cleanDescription(back.join(' '))
     }
@@ -179,9 +250,7 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
       flushBuffer()
       continue
     }
-
-    // Don't treat pure "Shipping" style as product (belt-and-suspenders)
-    if (FEE_LINE.test(desc) || /\bsubtotal\b|\btax\b|\btotal\b/i.test(desc)) {
+    if (FEE_LINE.test(desc) || isFeeOrMetaLabel(desc) || ADDRESS_LINE.test(desc) && !/filter|kit|ford/i.test(desc)) {
       flushBuffer()
       continue
     }
@@ -196,46 +265,33 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     flushBuffer()
   }
 
-  // Deduplicate consecutive identical
-  const deduped: ReceiptLineItem[] = []
-  for (const item of items) {
-    const prev = deduped[deduped.length - 1]
-    if (
-      prev &&
-      prev.description.toLowerCase() === item.description.toLowerCase() &&
-      prev.amount === item.amount
-    ) {
-      continue
+  // Extract subtotal from text for dedupe target
+  let subtotalTarget: number | null = null
+  for (const line of lines) {
+    if (/\bsub\s*-?\s*total\b/i.test(line)) {
+      const a = parseMoneyTokens(line)
+      if (a.length) subtotalTarget = roundMoney(a[a.length - 1])
     }
-    // Also drop if same amount+overlapping desc within list
-    const dup = deduped.find(
-      (d) =>
-        d.amount === item.amount &&
-        (d.description.toLowerCase().includes(item.description.toLowerCase().slice(0, 12)) ||
-          item.description.toLowerCase().includes(d.description.toLowerCase().slice(0, 12))),
-    )
-    if (dup) {
-      if (item.description.length > dup.description.length) {
-        dup.description = item.description
-        dup.categoryId = item.categoryId
-      }
-      continue
+  }
+  // label/value style
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^subtotal$/i.test(lines[i].trim())) {
+      const a = parseMoneyTokens(lines[i + 1])
+      if (a.length) subtotalTarget = roundMoney(a[a.length - 1])
     }
-    deduped.push(item)
   }
 
-  const filtered = deduped.filter((it) => {
-    if (/\btotal\b/i.test(it.description)) return false
-    if (FEE_LINE.test(it.description)) return false
-    return true
-  })
+  const filtered = dedupeItemsByAmount(
+    items.filter((it) => !FEE_LINE.test(it.description) && !isFeeOrMetaLabel(it.description)),
+    subtotalTarget,
+  )
 
   const itemsSum = roundMoney(filtered.reduce((s, it) => s + it.amount, 0))
   let confidence = 0.2
   if (filtered.length >= 1) confidence += 0.25
   if (filtered.length >= 2) confidence += 0.2
-  if (filtered.length >= 3) confidence += 0.1
-  confidence = Math.min(0.92, confidence)
+  if (subtotalTarget != null && Math.abs(itemsSum - subtotalTarget) < 0.1) confidence += 0.2
+  confidence = Math.min(0.93, confidence)
 
   if (!filtered.length) notes.push('No line items confidently detected')
   else notes.push(`Found ${filtered.length} line item(s), sum ${itemsSum.toFixed(2)}`)

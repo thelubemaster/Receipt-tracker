@@ -26,7 +26,25 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
   let subtotal: number | null = null
   let tax: number | null = null
 
-  for (const line of lines) {
+  // Support label on one line, $amount on the next (invoice apps)
+  const effective: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const amts = parseMoneyTokens(line)
+    if (
+      !amts.length &&
+      /^(subtotal|total|tax|grand total|convenience fee|shipping)$/i.test(line.trim()) &&
+      i + 1 < lines.length &&
+      parseMoneyTokens(lines[i + 1]).length
+    ) {
+      effective.push(`${line} ${lines[i + 1]}`)
+      i++
+      continue
+    }
+    effective.push(line)
+  }
+
+  for (const line of effective) {
     const amounts = parseMoneyTokens(line)
     if (!amounts.length) continue
     const amount = Math.max(...amounts.map(Math.abs))
@@ -49,7 +67,7 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
       votes.push({ label: 'total-line', total: roundMoney(amount), weight: 10 })
     } else if (/\b(visa|mastercard|amex|debit|credit)\b/i.test(line)) {
       votes.push({ label: 'card-charge-line', total: roundMoney(amount), weight: 7 })
-    } else if (/\b(paid|payment|tender)\b/i.test(line)) {
+    } else if (/\b(paid|payment|tender)\b/i.test(line) && !/payment date|payment method|payment details/i.test(line)) {
       votes.push({ label: 'payment-line', total: roundMoney(amount), weight: 6 })
     }
   }

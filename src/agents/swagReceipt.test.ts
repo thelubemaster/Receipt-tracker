@@ -74,9 +74,11 @@ describe('Swag Performance Parts receipt (real user debug scan)', () => {
 
   it('council debate log shows agents talking', () => {
     const r = parseReceiptText(SWAG_OCR)
-    expect(r.agentReport || '').toMatch(/Council debate|cashier|challenge|hunted|missing/i)
+    expect(r.agentReport || '').toMatch(/Council debate|cashier|challenge|hunted|missing|dedupe|Collapsed/i)
     const sums = r.lineItems.reduce((s, i) => s + i.amount, 0)
-    // products should approach subtotal 66.72 (39.97+26.75)
+    // products should approach subtotal 66.72 (39.97+26.75) — not 3x duplicates
     expect(sums).toBeGreaterThanOrEqual(60)
+    expect(sums).toBeLessThanOrEqual(70)
+    expect(r.lineItems.length).toBeLessThanOrEqual(3)
   })
 })
