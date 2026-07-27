@@ -32,6 +32,8 @@ export interface Purchase {
 export interface AppSettings {
   apiKey: string
   projectName: string
+  /** Last app version the user acknowledged (What's new). */
+  lastSeenVersion: string
 }
 
 export interface ReceiptSuggestion {

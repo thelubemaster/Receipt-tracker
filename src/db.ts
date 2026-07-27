@@ -89,6 +89,7 @@ export async function getSettings(): Promise<AppSettings> {
   return {
     apiKey: row?.apiKey ?? '',
     projectName: row?.projectName ?? 'My Schoolie',
+    lastSeenVersion: row?.lastSeenVersion ?? '',
   }
 }
 

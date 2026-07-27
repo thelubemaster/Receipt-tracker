@@ -15,9 +15,17 @@ import {
 import { downloadCsv, downloadPdfSummary } from './exportData'
 import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
+import { setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { categoryBreakdown, totalSpent } from './stats'
 import type { AppSettings, CategoryId, Purchase, Screen } from './types'
+import {
+  APP_VERSION,
+  CHANGELOG,
+  formatVersionLabel,
+  getUpdatesSince,
+  type ChangelogEntry,
+} from './version'
 import './index.css'
 
 function todayISO(): string {
@@ -45,22 +53,49 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>({
     apiKey: '',
     projectName: 'My Schoolie',
+    lastSeenVersion: '',
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
+  const [whatsNew, setWhatsNew] = useState<ChangelogEntry[] | null>(null)
+  const [whatsNewMode, setWhatsNewMode] = useState<'update' | 'history'>('update')
+  const [pendingSwUpdate, setPendingSwUpdate] = useState<(() => void) | null>(null)
 
   const refresh = useCallback(async () => {
     const [p, s] = await Promise.all([listPurchases(), getSettings()])
     setPurchases(p)
     setSettings(s)
+    return s
   }, [])
 
   useEffect(() => {
     refresh()
+      .then((s) => {
+        if (s.lastSeenVersion !== APP_VERSION) {
+          const entries = getUpdatesSince(s.lastSeenVersion || null)
+          if (entries.length) {
+            setWhatsNewMode(s.lastSeenVersion ? 'update' : 'update')
+            setWhatsNew(entries)
+          }
+        }
+      })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load data'))
       .finally(() => setLoading(false))
   }, [refresh])
+
+  useEffect(() => {
+    setupPwaUpdates({
+      onNeedRefresh: (apply) => setPendingSwUpdate(() => apply),
+    })
+  }, [])
+
+  async function acknowledgeVersion() {
+    const next = { ...settings, lastSeenVersion: APP_VERSION }
+    await saveSettings(next)
+    setSettings(next)
+    setWhatsNew(null)
+  }
 
   const total = useMemo(() => totalSpent(purchases), [purchases])
   const breakdown = useMemo(() => categoryBreakdown(purchases), [purchases])
@@ -132,6 +167,29 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {pendingSwUpdate && (
+        <div className="banner banner-update" role="status">
+          <strong>New version ready</strong>
+          <div className="muted" style={{ margin: '6px 0 10px' }}>
+            A newer build of Schoolie is available. Reload to switch to {formatVersionLabel()} and
+            see what changed.
+          </div>
+          <div className="row-actions">
+            <button type="button" className="btn btn-secondary" onClick={() => setPendingSwUpdate(null)}>
+              Later
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                pendingSwUpdate()
+              }}
+            >
+              Reload update
+            </button>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="banner banner-error" role="alert">
           {error}
@@ -157,6 +215,16 @@ export default function App() {
         </div>
       )}
 
+      {whatsNew && (
+        <WhatsNewModal
+          entries={whatsNew}
+          mode={whatsNewMode}
+          previousVersion={settings.lastSeenVersion}
+          onClose={() => void acknowledgeVersion()}
+          onDismissOnly={() => setWhatsNew(null)}
+        />
+      )}
+
       {screen.name === 'home' && (
         <HomeScreen
           projectName={settings.projectName}
@@ -178,6 +246,10 @@ export default function App() {
           onSettings={() => setScreen({ name: 'settings' })}
           onExportCsv={() => downloadCsv(purchases, settings.projectName)}
           onExportPdf={() => downloadPdfSummary(purchases, settings.projectName)}
+          onShowVersion={() => {
+            setWhatsNewMode('history')
+            setWhatsNew(CHANGELOG)
+          }}
         />
       )}
 
@@ -286,8 +358,76 @@ export default function App() {
             setInfo('All purchase data cleared.')
             setScreen({ name: 'home' })
           }}
+          onShowWhatsNew={() => {
+            setWhatsNewMode('history')
+            setWhatsNew(CHANGELOG)
+          }}
         />
       )}
+    </div>
+  )
+}
+
+function WhatsNewModal(props: {
+  entries: ChangelogEntry[]
+  mode: 'update' | 'history'
+  previousVersion: string
+  onClose: () => void
+  onDismissOnly: () => void
+}) {
+  const isHistory = props.mode === 'history'
+  const title = isHistory
+    ? 'Version history'
+    : props.previousVersion
+      ? `Updated to ${formatVersionLabel()}`
+      : `You're on ${formatVersionLabel()}`
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="whats-new-title">
+      <div className="modal-sheet">
+        <div className="modal-header">
+          <div>
+            <div className="hero-label">{isHistory ? 'App versions' : 'What changed'}</div>
+            <h2 id="whats-new-title">{title}</h2>
+          </div>
+          <span className="version-chip version-chip-lg">{formatVersionLabel()}</span>
+        </div>
+
+        {!isHistory && props.previousVersion && (
+          <p className="muted" style={{ marginTop: 0 }}>
+            Previous build you had: {formatVersionLabel(props.previousVersion)}
+          </p>
+        )}
+
+        <div className="changelog-list">
+          {props.entries.map((entry) => (
+            <article key={entry.version} className="changelog-entry">
+              <div className="changelog-meta">
+                <strong>{formatVersionLabel(entry.version)}</strong>
+                <span className="muted">{entry.date}</span>
+              </div>
+              <div className="changelog-title">{entry.title}</div>
+              <ul>
+                {entry.changes.map((c) => (
+                  <li key={c}>{c}</li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+
+        <div className="row-actions stack" style={{ marginTop: 16 }}>
+          {isHistory ? (
+            <button type="button" className="btn btn-primary" onClick={props.onDismissOnly}>
+              Close
+            </button>
+          ) : (
+            <button type="button" className="btn btn-primary" onClick={props.onClose}>
+              Got it — I&apos;m on {formatVersionLabel()}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -304,14 +444,25 @@ function HomeScreen(props: {
   onSettings: () => void
   onExportCsv: () => void
   onExportPdf: () => void
+  onShowVersion: () => void
 }) {
   return (
     <>
       <header className="topbar">
         <BrandLockup title={props.projectName} subtitle="Schoolie conversion costs" />
-        <button type="button" className="icon-btn" aria-label="Settings" onClick={props.onSettings}>
-          ⚙
-        </button>
+        <div className="topbar-actions">
+          <button
+            type="button"
+            className="version-chip"
+            onClick={props.onShowVersion}
+            title="App version and release notes"
+          >
+            {formatVersionLabel()}
+          </button>
+          <button type="button" className="icon-btn" aria-label="Settings" onClick={props.onSettings}>
+            ⚙
+          </button>
+        </div>
       </header>
 
       <section className="hero-card">
@@ -395,6 +546,13 @@ function HomeScreen(props: {
           ))}
         </div>
       )}
+
+      <p className="app-version-foot">
+        Schoolie Cost Tracker{' '}
+        <button type="button" className="version-link" onClick={props.onShowVersion}>
+          {formatVersionLabel()}
+        </button>
+      </p>
 
       <div className="fab-bar">
         <button type="button" className="btn btn-secondary" onClick={props.onAdd}>
@@ -789,6 +947,7 @@ function SettingsScreen(props: {
   onBack: () => void
   onSave: (s: AppSettings) => Promise<void>
   onClear: () => Promise<void>
+  onShowWhatsNew: () => void
 }) {
   const [projectName, setProjectName] = useState(props.settings.projectName)
   const [apiKey, setApiKey] = useState(props.settings.apiKey)
@@ -801,7 +960,7 @@ function SettingsScreen(props: {
           ←
         </button>
         <h1>Settings</h1>
-        <span style={{ width: 44 }} />
+        <span className="version-chip">{formatVersionLabel()}</span>
       </header>
 
       <form
@@ -810,10 +969,26 @@ function SettingsScreen(props: {
           e.preventDefault()
           setSaving(true)
           void props
-            .onSave({ projectName: projectName.trim() || 'My Schoolie', apiKey: apiKey.trim() })
+            .onSave({
+              projectName: projectName.trim() || 'My Schoolie',
+              apiKey: apiKey.trim(),
+              lastSeenVersion: props.settings.lastSeenVersion,
+            })
             .finally(() => setSaving(false))
         }}
       >
+        <div className="card settings-card">
+          <strong>App version</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            You are running <strong style={{ color: 'var(--text)' }}>{formatVersionLabel()}</strong>
+            {props.settings.lastSeenVersion
+              ? ` · last acknowledged ${formatVersionLabel(props.settings.lastSeenVersion)}`
+              : ' · release notes not acknowledged yet'}
+          </p>
+          <button type="button" className="btn btn-secondary" onClick={props.onShowWhatsNew}>
+            What&apos;s new / version history
+          </button>
+        </div>
         <div className="field">
           <label htmlFor="projectName">Project name</label>
           <input
