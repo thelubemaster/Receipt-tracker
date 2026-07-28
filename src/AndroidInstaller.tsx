@@ -1,55 +1,32 @@
 /**
- * Full-page Android installer.
- * Browser PWA install is flaky on HTTP; this page walks the user through a
- * correct install and tries the native install prompt when available.
+ * Full-page Android installer — downloads a real APK so Android installs
+ * Schoolie like any normal app (not a browser bookmark).
  */
-import { useEffect, useState } from 'react'
-import {
-  hasNativeInstallPrompt,
-  isAndroid,
-  isStandaloneApp,
-  promptInstall,
-  subscribeInstallPrompt,
-} from './installApp'
+import { useState } from 'react'
+import { isAndroid, isStandaloneApp } from './installApp'
 import { formatVersionLabel } from './version'
 
 type Props = {
   onContinueInBrowser: () => void
 }
 
+const APK_HREF = './downloads/schoolie.apk'
+
 export function AndroidInstaller(props: Props) {
-  const [canPrompt, setCanPrompt] = useState(() => hasNativeInstallPrompt())
-  const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<string | null>(null)
-  const [step, setStep] = useState(1)
+  const [downloading, setDownloading] = useState(false)
 
-  useEffect(() => {
-    return subscribeInstallPrompt(() => setCanPrompt(hasNativeInstallPrompt()))
-  }, [])
-
-  async function tryInstall() {
-    setBusy(true)
-    setStatus(null)
-    try {
-      const outcome = await promptInstall()
-      if (outcome === 'accepted') {
-        setStatus('Installed. Open Schoolie from your home screen / app tray.')
-        setStep(3)
-        return
-      }
-      if (outcome === 'dismissed') {
-        setStatus('Install was cancelled. Use the steps below, or try again.')
-        setStep(2)
-        return
-      }
-      // Native prompt not available (common on HTTP / in-app browsers)
-      setStep(2)
-      setStatus(
-        'Chrome did not offer automatic install. Use the menu steps below — that still puts the app icon on your phone.',
-      )
-    } finally {
-      setBusy(false)
-    }
+  function downloadApk() {
+    setDownloading(true)
+    // Trigger download of real Android package
+    const a = document.createElement('a')
+    a.href = APK_HREF
+    a.download = 'schoolie.apk'
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // Android will open the package installer when the download finishes
+    setTimeout(() => setDownloading(false), 1500)
   }
 
   return (
@@ -62,74 +39,52 @@ export function AndroidInstaller(props: Props) {
           width={96}
           height={96}
         />
-        <p className="installer-kicker">Android app installer · {formatVersionLabel()}</p>
+        <p className="installer-kicker">Android app · {formatVersionLabel()}</p>
         <h1 className="installer-title">Install Schoolie</h1>
         <p className="installer-lead">
-          This page installs Schoolie as a real app icon on your phone. Do not rely on random browser
-          shortcuts — follow the button or the exact steps below.
+          Download the real Android app (APK). Your phone will open the normal Android installer —
+          same as installing any other app. No Play Store required.
         </p>
 
-        {step === 1 && (
-          <>
-            <button
-              type="button"
-              className="btn btn-primary installer-cta"
-              disabled={busy}
-              onClick={() => void tryInstall()}
-            >
-              {busy ? 'Opening installer…' : canPrompt ? 'Install Schoolie now' : 'Start install'}
-            </button>
-            <p className="muted installer-hint">
-              Use <strong>Chrome</strong> (not Instagram, Facebook, or Samsung Internet private mode
-              if install fails). Stay on this Wi‑Fi page until the icon appears.
-            </p>
-          </>
-        )}
+        <button
+          type="button"
+          className="btn btn-primary installer-cta"
+          disabled={downloading}
+          onClick={downloadApk}
+        >
+          {downloading ? 'Starting download…' : 'Download & install app'}
+        </button>
 
-        {step >= 2 && (
-          <div className="installer-steps-block">
-            <h2>Install with Chrome menu (works when the button cannot)</h2>
-            <ol className="installer-ol">
-              <li>
-                Confirm you are in <strong>Chrome</strong> — address bar should show the Schoolie URL.
-              </li>
-              <li>
-                Tap the <strong>⋮</strong> three-dot menu (top right).
-              </li>
-              <li>
-                Tap <strong>Install app</strong>. If you do not see that, tap{' '}
-                <strong>Add to Home screen</strong> / <strong>Add to phone</strong>.
-              </li>
-              <li>
-                Tap <strong>Install</strong> / <strong>Add</strong> on the confirmation sheet.
-              </li>
-              <li>
-                Leave the browser and open the <strong>Schoolie</strong> bus icon from your home
-                screen or app tray.
-              </li>
-            </ol>
-            <button
-              type="button"
-              className="btn btn-primary installer-cta"
-              disabled={busy}
-              onClick={() => void tryInstall()}
-            >
-              {busy ? 'Trying…' : 'Try automatic install again'}
-            </button>
-          </div>
-        )}
-
-        {status && <p className="installer-status">{status}</p>}
+        <div className="installer-steps-block" style={{ marginTop: 20 }}>
+          <h2>After the download</h2>
+          <ol className="installer-ol">
+            <li>
+              Open the downloaded file <strong>schoolie.apk</strong> (notification or Files app).
+            </li>
+            <li>
+              If Android asks, allow <strong>Install unknown apps</strong> for Chrome / Files.
+            </li>
+            <li>
+              Tap <strong>Install</strong> on the system installer screen.
+            </li>
+            <li>
+              Tap <strong>Open</strong> — Schoolie is now in your app tray with the bus logo.
+            </li>
+          </ol>
+        </div>
 
         <div className="installer-checks">
-          <h3>Checklist if the icon is missing</h3>
+          <h3>Tips</h3>
           <ul>
-            <li>You used Chrome, not an in-app browser</li>
-            <li>You chose Install / Add — not “Bookmark”</li>
-            <li>Look in the app tray for “Schoolie”, not only the home screen</li>
-            <li>Open the new icon once so Android finishes installing it</li>
+            <li>Use Chrome or your default browser on this Wi‑Fi</li>
+            <li>If install is blocked, Settings → Apps → Special access → Install unknown apps</li>
+            <li>This is a free offline app — data stays on your phone</li>
           </ul>
         </div>
+
+        <a className="installer-apk-link" href={APK_HREF} download="schoolie.apk">
+          Direct link: schoolie.apk
+        </a>
 
         <button type="button" className="installer-skip" onClick={props.onContinueInBrowser}>
           Continue in browser without installing

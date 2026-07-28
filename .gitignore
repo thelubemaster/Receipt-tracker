@@ -11,3 +11,11 @@ debug-scans
 
 .schoolie-preview.pid
 .schoolie-preview.log
+.certs/
+android/.gradle/
+android/app/build/
+android/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+android/.idea/
+release/
