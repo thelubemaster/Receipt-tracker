@@ -17,6 +17,13 @@ export function AndroidInstaller(props: Props) {
 
   function downloadApk() {
     setDownloading(true)
+    // Remember this server so the installed app can OTA-update later
+    try {
+      const base = `${window.location.protocol}//${window.location.host}`
+      localStorage.setItem('schoolie-update-server', base)
+    } catch {
+      /* ignore */
+    }
     // Trigger download of real Android package
     const a = document.createElement('a')
     a.href = APK_HREF
@@ -78,7 +85,11 @@ export function AndroidInstaller(props: Props) {
           <ul>
             <li>Use Chrome or your default browser on this Wi‑Fi</li>
             <li>If install is blocked, Settings → Apps → Special access → Install unknown apps</li>
-            <li>This is a free offline app — data stays on your phone</li>
+            <li>After install, open Schoolie → Settings → set update server if needed</li>
+            <li>
+              Later updates: keep the PC on <code>npm run start:android</code>, then{' '}
+              <strong>Check for updates</strong> in the app (no new APK)
+            </li>
           </ul>
         </div>
 

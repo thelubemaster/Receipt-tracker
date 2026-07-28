@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.21.1'
+export const APP_VERSION = '1.22.0'
 
 export type ChangelogEntry = {
   version: string
