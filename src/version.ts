@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.10.0'
+export const APP_VERSION = '1.10.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.10.1',
+    date: '2026-07-28',
+    title: 'Shipping as its own line section',
+    changes: [
+      'When a receipt has a shipping price, it becomes its own Shipping line (not dropped)',
+      'Review screen groups Products and Shipping separately',
+      'Manual “+ Shipping” on the form; products still drive the main category',
+    ],
+  },
   {
     version: '1.10.0',
     date: '2026-07-28',

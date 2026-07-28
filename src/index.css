@@ -759,6 +759,41 @@ a {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.line-section {
+  margin-bottom: 12px;
+}
+
+.line-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted, #9aa3b5);
+  margin: 4px 2px 8px;
+}
+
+.line-section-shipping .line-section-head {
+  color: #8ec8ff;
+}
+
+.line-item-row-shipping {
+  border-color: rgba(66, 165, 245, 0.35);
+  background: rgba(66, 165, 245, 0.08);
+}
+
+.line-item-row-fee {
+  border-color: rgba(255, 183, 77, 0.28);
+}
+
+.line-items-foot-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .line-items-list {
   display: flex;
   flex-direction: column;

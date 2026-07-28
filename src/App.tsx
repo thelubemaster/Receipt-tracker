@@ -26,6 +26,7 @@ import {
   recordScanParticipation,
   type LeaderboardMap,
 } from './leaderboard'
+import { isShippingLineItem, partitionLineItems } from './agents/lineItemsAgent'
 import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
@@ -1061,6 +1062,56 @@ function PurchaseFormScreen(props: {
   }
 
   const itemsSum = form.lineItems.reduce((s, li) => s + (Number(li.amount) || 0), 0)
+  const { products: productLines, shipping: shippingLines, other: otherFeeLines } =
+    partitionLineItems(form.lineItems)
+  const productSum = productLines.reduce((s, li) => s + (Number(li.amount) || 0), 0)
+  const shippingSum = shippingLines.reduce((s, li) => s + (Number(li.amount) || 0), 0)
+
+  function renderLineRow(li: (typeof form.lineItems)[0], tone?: 'shipping' | 'fee') {
+    return (
+      <div
+        key={li.id}
+        className={`line-item-row${tone === 'shipping' ? ' line-item-row-shipping' : ''}${tone === 'fee' ? ' line-item-row-fee' : ''}`}
+      >
+        <input
+          className="line-item-desc"
+          value={li.description}
+          placeholder="Item"
+          onChange={(e) => updateLine(li.id, { description: e.target.value })}
+        />
+        <input
+          className="line-item-amt"
+          inputMode="decimal"
+          value={li.amount === 0 ? '' : String(li.amount)}
+          placeholder="0.00"
+          onChange={(e) => {
+            const n = parseMoneyInput(e.target.value)
+            updateLine(li.id, { amount: n ?? 0 })
+          }}
+        />
+        <select
+          className="line-item-cat"
+          value={li.categoryId}
+          onChange={(e) => updateLine(li.id, { categoryId: e.target.value as CategoryId })}
+          aria-label="Item category"
+        >
+          {CATEGORIES.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="line-item-remove"
+          aria-label="Remove line"
+          onClick={() => removeLine(li.id)}
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -1175,55 +1226,82 @@ function PurchaseFormScreen(props: {
         {form.lineItems.length > 0 && (
           <div className="field">
             <label>Line items ({form.lineItems.length})</label>
-            <div className="line-items-list">
-              {form.lineItems.map((li) => (
-                <div key={li.id} className="line-item-row">
-                  <input
-                    className="line-item-desc"
-                    value={li.description}
-                    placeholder="Item"
-                    onChange={(e) => updateLine(li.id, { description: e.target.value })}
-                  />
-                  <input
-                    className="line-item-amt"
-                    inputMode="decimal"
-                    value={li.amount === 0 ? '' : String(li.amount)}
-                    placeholder="0.00"
-                    onChange={(e) => {
-                      const n = parseMoneyInput(e.target.value)
-                      updateLine(li.id, { amount: n ?? 0 })
-                    }}
-                  />
-                  <select
-                    className="line-item-cat"
-                    value={li.categoryId}
-                    onChange={(e) =>
-                      updateLine(li.id, { categoryId: e.target.value as CategoryId })
-                    }
-                    aria-label="Item category"
-                  >
-                    {CATEGORIES.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="line-item-remove"
-                    aria-label="Remove line"
-                    onClick={() => removeLine(li.id)}
-                  >
-                    ×
-                  </button>
+
+            {productLines.length > 0 && (
+              <div className="line-section">
+                <div className="line-section-head">
+                  <span>Products</span>
+                  <span className="muted">{formatMoney(productSum)}</span>
                 </div>
-              ))}
-            </div>
+                <div className="line-items-list">{productLines.map((li) => renderLineRow(li))}</div>
+              </div>
+            )}
+
+            {shippingLines.length > 0 && (
+              <div className="line-section line-section-shipping">
+                <div className="line-section-head">
+                  <span>Shipping</span>
+                  <span className="muted">{formatMoney(shippingSum)}</span>
+                </div>
+                <div className="line-items-list">
+                  {shippingLines.map((li) => renderLineRow(li, 'shipping'))}
+                </div>
+              </div>
+            )}
+
+            {otherFeeLines.length > 0 && (
+              <div className="line-section">
+                <div className="line-section-head">
+                  <span>Other fees</span>
+                </div>
+                <div className="line-items-list">
+                  {otherFeeLines.map((li) => renderLineRow(li, 'fee'))}
+                </div>
+              </div>
+            )}
+
+            {/* Fallback if partitions empty but items exist (manual edge cases) */}
+            {productLines.length === 0 &&
+              shippingLines.length === 0 &&
+              otherFeeLines.length === 0 && (
+                <div className="line-items-list">
+                  {form.lineItems.map((li) => renderLineRow(li))}
+                </div>
+              )}
+
             <div className="line-items-foot">
-              <span className="muted">Items sum {formatMoney(itemsSum)}</span>
-              <button type="button" className="version-link" onClick={addLine}>
-                + Add line
-              </button>
+              <span className="muted">
+                All lines {formatMoney(itemsSum)}
+                {shippingSum > 0 ? ` · ship ${formatMoney(shippingSum)}` : ''}
+              </span>
+              <div className="line-items-foot-actions">
+                <button
+                  type="button"
+                  className="version-link"
+                  onClick={() => {
+                    setForm((f) => {
+                      if (f.lineItems.some((li) => isShippingLineItem(li.description))) return f
+                      return {
+                        ...f,
+                        lineItems: [
+                          ...f.lineItems,
+                          {
+                            id: `ship-${crypto.randomUUID()}`,
+                            description: 'Shipping',
+                            amount: 0,
+                            categoryId: 'misc' as CategoryId,
+                          },
+                        ],
+                      }
+                    })
+                  }}
+                >
+                  + Shipping
+                </button>
+                <button type="button" className="version-link" onClick={addLine}>
+                  + Add line
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1489,17 +1567,33 @@ function DetailScreen(props: {
             <span>Line items</span>
           </div>
           <div className="card">
-            {purchase.lineItems.map((li) => (
-              <div key={li.id} className="detail-row">
-                <span className="detail-label">
-                  {li.description}
-                  <span className="muted" style={{ display: 'block', fontSize: '0.75rem' }}>
-                    {getCategory(li.categoryId).label}
+            {(() => {
+              const parts = partitionLineItems(purchase.lineItems)
+              const ordered = [
+                ...parts.products,
+                ...parts.shipping,
+                ...parts.other,
+              ]
+              // if partition missed any (edge cases), fall back to original order
+              const shown =
+                ordered.length === purchase.lineItems.length
+                  ? ordered
+                  : purchase.lineItems
+              return shown.map((li) => (
+                <div
+                  key={li.id}
+                  className={`detail-row${isShippingLineItem(li.description) ? ' detail-row-shipping' : ''}`}
+                >
+                  <span className="detail-label">
+                    {isShippingLineItem(li.description) ? `🚚 ${li.description}` : li.description}
+                    <span className="muted" style={{ display: 'block', fontSize: '0.75rem' }}>
+                      {getCategory(li.categoryId).label}
+                    </span>
                   </span>
-                </span>
-                <span className="detail-value">{formatMoney(li.amount)}</span>
-              </div>
-            ))}
+                  <span className="detail-value">{formatMoney(li.amount)}</span>
+                </div>
+              ))
+            })()}
           </div>
         </>
       )}

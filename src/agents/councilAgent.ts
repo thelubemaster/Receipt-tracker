@@ -8,7 +8,12 @@ import type { AiId } from '../aiRoster'
 import type { ReceiptLineItem } from '../types'
 import { Blackboard } from './blackboard'
 import { categorizeText } from './keywords'
-import { dedupeItemsByAmount, primaryCategoryFromItems } from './lineItemsAgent'
+import {
+  dedupeItemsByAmount,
+  isShippingLineItem,
+  makeShippingLineItem,
+  primaryCategoryFromItems,
+} from './lineItemsAgent'
 import { extractVendor } from './merchantAgent'
 import { parseMoneyTokens, roundMoney } from './moneyParse'
 import type { LocalAgentResult } from './pipeline'
@@ -42,9 +47,17 @@ function contextAroundAmount(text: string, amount: number): string {
   return ''
 }
 
-function isFeeDesc(s: string): boolean {
-  return /\b(shipping|freight|delivery|tax|subtotal|total|handling|convenience fee|service fee|payment date|created date|payer)\b/i.test(
+/** Drop tax/total chrome — but keep shipping as a real tracked line. */
+function isNonShippingFeeDesc(s: string): boolean {
+  if (isShippingLineItem(s)) return false
+  return /\b(tax|subtotal|grand total|^total$|handling|convenience fee|service fee|payment date|created date|payer)\b/i.test(
     s,
+  )
+}
+
+function productSum(items: ReceiptLineItem[]): number {
+  return roundMoney(
+    items.filter((i) => !isShippingLineItem(i.description)).reduce((s, i) => s + i.amount, 0),
   )
 }
 
@@ -60,8 +73,8 @@ export function huntMissingItems(
   const monies = allMoneyInText(rawText)
   const found: ReceiptLineItem[] = []
 
-  // Preferred: amounts that help close subtotal gap
-  const itemSum = roundMoney(existing.reduce((s, i) => s + i.amount, 0))
+  // Preferred: amounts that help close subtotal gap (products only)
+  const itemSum = productSum(existing)
   const need =
     targets.subtotal != null
       ? roundMoney(targets.subtotal - itemSum)
@@ -91,7 +104,7 @@ export function huntMissingItems(
   for (const amount of candidates) {
     const ctx = contextAroundAmount(rawText, amount)
     if (!ctx || ctx.length < 3) continue
-    if (isFeeDesc(ctx)) continue
+    if (isNonShippingFeeDesc(ctx) || isShippingLineItem(ctx)) continue
     // skip pure address-ish
     if (/\b(shipped to|pennsylvania|street|road|rd,|ave)\b/i.test(ctx) && !/filter|kit|ford|part/i.test(ctx)) {
       continue
@@ -152,9 +165,11 @@ export function runCouncilAgent(
   talk(
     'ledger',
     'finding',
-    `I have ${items.length} product line(s) summing to $${roundMoney(items.reduce((s, i) => s + i.amount, 0)).toFixed(2)}`,
+    `I have ${items.filter((i) => !isShippingLineItem(i.description)).length} product line(s) summing to $${productSum(items).toFixed(2)}`,
   )
-  if (shipping != null) talk('clerk', 'finding', `Shipping fee: $${shipping.toFixed(2)} (not a product)`)
+  if (shipping != null) {
+    talk('clerk', 'finding', `Shipping: $${shipping.toFixed(2)} — keep as its own section`)
+  }
   talk('clerk', 'finding', vendor ? `Vendor: ${vendor}` : 'Vendor unclear — scanning footer/domain…')
 
   // Fix vendor via shared OCR if garbage
@@ -165,7 +180,7 @@ export function runCouncilAgent(
   }
 
   // --- Round 2: Cashier challenges Ledger ---
-  const itemSum = roundMoney(items.reduce((s, i) => s + i.amount, 0))
+  const itemSum = productSum(items)
   if (subtotal != null && !nearlyEqual(itemSum, subtotal)) {
     talk(
       'cashier',
@@ -178,20 +193,24 @@ export function runCouncilAgent(
       'challenge',
       `Total $${amount.toFixed(2)} ≠ products $${itemSum.toFixed(2)} + shipping $${shipping.toFixed(2)}. Hunt missing products.`,
     )
-  } else if (amount != null && !nearlyEqual(itemSum, amount) && items.length < 2) {
+  } else if (amount != null && !nearlyEqual(itemSum, amount) && items.filter((i) => !isShippingLineItem(i.description)).length < 2) {
     talk(
       'cashier',
       'challenge',
-      `Only ${items.length} product line(s) for total $${amount.toFixed(2)}. Look harder for more items.`,
+      `Only ${items.filter((i) => !isShippingLineItem(i.description)).length} product line(s) for total $${amount.toFixed(2)}. Look harder for more items.`,
     )
   }
 
   // --- Round 3: Hunt missing amounts ---
-  const hunted = huntMissingItems(rawText, items, {
-    subtotal,
-    total: amount,
-    shipping,
-  })
+  const hunted = huntMissingItems(
+    rawText,
+    items.filter((i) => !isShippingLineItem(i.description)),
+    {
+      subtotal,
+      total: amount,
+      shipping,
+    },
+  )
   if (hunted.length) {
     talk(
       'sieve',
@@ -200,7 +219,7 @@ export function runCouncilAgent(
     )
     // merge
     for (const h of hunted) {
-      const dup = items.find((i) => nearlyEqual(i.amount, h.amount))
+      const dup = items.find((i) => nearlyEqual(i.amount, h.amount) && !isShippingLineItem(i.description))
       if (!dup) items.push(h)
       else if (h.description.length > dup.description.length) {
         dup.description = h.description
@@ -211,38 +230,62 @@ export function runCouncilAgent(
     talk('sieve', 'finding', 'No obvious missing product amounts in OCR after filters.')
   }
 
-  // Drop shipping/fee rows mistaken as products
+  // Drop tax/total chrome mistaken as products — keep shipping
   const before = items.length
-  items = items.filter((i) => !isFeeDesc(i.description))
+  items = items.filter((i) => !isNonShippingFeeDesc(i.description))
   if (items.length < before) {
-    talk('arbiter', 'decision', 'Removed shipping/tax/fee rows from product list.')
+    talk('arbiter', 'decision', 'Removed tax/fee chrome from line items (shipping kept).')
   }
 
-  // Deduplicate inflated merges (same $39.97 three times, etc.)
-  const sumBefore = roundMoney(items.reduce((s, i) => s + i.amount, 0))
+  // Ensure shipping has its own line when OCR had a price
+  if (shipping != null && shipping > 0) {
+    const hasShip = items.some(
+      (i) => isShippingLineItem(i.description) && nearlyEqual(i.amount, shipping!),
+    )
+    if (!hasShip) {
+      // remove any wrong shipping-ish rows with different amounts first
+      items = items.filter((i) => !isShippingLineItem(i.description))
+      items.push(makeShippingLineItem(shipping))
+      talk('clerk', 'decision', `Added Shipping section: $${shipping.toFixed(2)}`)
+    }
+  }
+
+  // Deduplicate inflated product merges (same $39.97 three times, etc.) — keep shipping aside
+  let shipRows = items.filter((i) => isShippingLineItem(i.description))
+  let productsOnly = items.filter((i) => !isShippingLineItem(i.description))
+  const sumBefore = productSum(items)
   if (subtotal != null && sumBefore > subtotal * 1.08) {
     talk(
       'arbiter',
       'challenge',
       `Product sum $${sumBefore.toFixed(2)} > subtotal $${subtotal.toFixed(2)} — collapsing duplicate amounts.`,
     )
-    items = dedupeItemsByAmount(items, subtotal)
+    productsOnly = dedupeItemsByAmount(productsOnly, subtotal)
     talk(
       'arbiter',
       'decision',
-      `After dedupe: ${items.length} item(s) sum $${roundMoney(items.reduce((s, i) => s + i.amount, 0)).toFixed(2)}`,
+      `After dedupe: ${productsOnly.length} product(s) + ${shipRows.length} shipping`,
     )
   } else if (amount != null && sumBefore > amount * 1.15) {
     talk('arbiter', 'challenge', `Product sum inflated vs total — deduping by amount.`)
-    items = dedupeItemsByAmount(items, amount)
+    productsOnly = dedupeItemsByAmount(productsOnly, amount)
   } else {
-    // still collapse exact amount dupes
-    const deduped = dedupeItemsByAmount(items, subtotal)
-    if (deduped.length < items.length) {
-      talk('arbiter', 'decision', `Collapsed ${items.length - deduped.length} duplicate amount row(s).`)
-      items = deduped
+    const deduped = dedupeItemsByAmount(productsOnly, subtotal)
+    if (deduped.length < productsOnly.length) {
+      talk(
+        'arbiter',
+        'decision',
+        `Collapsed ${productsOnly.length - deduped.length} duplicate product row(s).`,
+      )
+      productsOnly = deduped
     }
   }
+  // One shipping row max
+  if (shipRows.length > 1) {
+    const keep = shipRows.sort((a, b) => b.amount - a.amount)[0]
+    shipRows = [makeShippingLineItem(keep.amount, keep.id)]
+  }
+  items = [...productsOnly, ...shipRows]
 
   // Towing / service invoice: rebuild as a service line (category: misc = services/labor)
   if (/\btow(ing)?\b/i.test(rawText)) {
@@ -286,6 +329,9 @@ export function runCouncilAgent(
   // --- Round 4: Re-categorize materials (not service invoices already handled) ---
   if (!/\btow(ing)?\b/i.test(rawText)) {
     items = items.map((i) => {
+      if (isShippingLineItem(i.description)) {
+        return { ...i, description: 'Shipping', categoryId: 'misc' as const }
+      }
       const { categoryId } = categorizeText(i.description)
       if (categoryId !== i.categoryId) {
         talk('ledger', 'answer', `Recategorized “${i.description.slice(0, 36)}” → ${categoryId}`)
@@ -296,22 +342,28 @@ export function runCouncilAgent(
   }
 
   // --- Round 5: Arithmetic agreement ---
+  const finalProductSum = productSum(items)
   const finalSum = roundMoney(items.reduce((s, i) => s + i.amount, 0))
-  if (subtotal != null && nearlyEqual(finalSum, subtotal)) {
-    talk('quorum', 'decision', `✓ Products $${finalSum.toFixed(2)} match subtotal.`)
-  } else if (amount != null && shipping != null && nearlyEqual(finalSum + shipping, amount)) {
+  const shipAmt =
+    shipping ??
+    items.find((i) => isShippingLineItem(i.description))?.amount ??
+    null
+  if (subtotal != null && nearlyEqual(finalProductSum, subtotal)) {
+    talk('quorum', 'decision', `✓ Products $${finalProductSum.toFixed(2)} match subtotal.`)
+  }
+  if (amount != null && shipAmt != null && nearlyEqual(finalProductSum + shipAmt, amount)) {
     talk(
       'quorum',
       'decision',
-      `✓ Products $${finalSum.toFixed(2)} + shipping $${shipping.toFixed(2)} = total $${amount.toFixed(2)}.`,
+      `✓ Products $${finalProductSum.toFixed(2)} + shipping $${shipAmt.toFixed(2)} = total $${amount.toFixed(2)}.`,
     )
   } else if (amount != null && nearlyEqual(finalSum, amount)) {
-    talk('quorum', 'decision', `✓ Products sum equals grand total $${amount.toFixed(2)}.`)
+    talk('quorum', 'decision', `✓ All lines (products + shipping) = grand total $${amount.toFixed(2)}.`)
   } else {
     talk(
       'quorum',
       'finding',
-      `Soft match: products $${finalSum.toFixed(2)}, subtotal ${subtotal ?? '—'}, total ${amount ?? '—'}, shipping ${shipping ?? '—'}.`,
+      `Soft match: products $${finalProductSum.toFixed(2)}, all lines $${finalSum.toFixed(2)}, subtotal ${subtotal ?? '—'}, total ${amount ?? '—'}, shipping ${shipAmt ?? '—'}.`,
     )
   }
 
@@ -327,7 +379,10 @@ export function runCouncilAgent(
   const categoryId = items.length ? primaryCategoryFromItems(items) : draft.categoryId
   let confidence = draft.confidence ?? 0.5
   if (hunted.length) confidence = Math.min(0.96, confidence + 0.08)
-  if (subtotal != null && nearlyEqual(finalSum, subtotal)) confidence = Math.min(0.97, confidence + 0.06)
+  if (subtotal != null && nearlyEqual(finalProductSum, subtotal)) {
+    confidence = Math.min(0.97, confidence + 0.06)
+  }
+  if (shipAmt != null) confidence = Math.min(0.97, confidence + 0.02)
 
   talk('quorum', 'decision', `Final: ${items.length} items, total $${(amount ?? finalSum).toFixed(2)}, vendor ${vendor || '—'}`)
 

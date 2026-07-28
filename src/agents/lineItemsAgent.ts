@@ -2,12 +2,20 @@ import type { CategoryId, ReceiptLineItem } from '../types'
 import { categorizeText } from './keywords'
 import { lastMoneyOnLine, parseMoneyTokens, roundMoney } from './moneyParse'
 
-/** Not product rows — fees, totals, chrome UI, etc. */
+/** Not product rows — fees, totals, chrome UI, etc. (shipping is handled separately as its own line) */
 const SKIP_LINE =
-  /\b(subtotal|sub total|total|grand total|tax|sales tax|vat|gst|hst|shipping|freight|delivery|convenience fee|service fee|processing fee|cash|change|visa|mastercard|debit|credit|auth|approval|balance due|amount due|payment method|payment date|payment details|created date|payer|tender|thank|store\s*#|tel|phone|www\.|http|https|cashier|register|tran|invoice|receipt|member|rewards|savings|you saved|coupon|promo|discount|card\s*#|\*{4}|xxxx|aid\s|tc#|ref\s?#|cart items|item price|item total|qty|sku|order contains|items shipped|powered by|launch your own|bigcommerce|reply|forward)\b/i
+  /\b(subtotal|sub total|total|grand total|tax|sales tax|vat|gst|hst|convenience fee|service fee|processing fee|cash|change|visa|mastercard|debit|credit|auth|approval|balance due|amount due|payment method|payment date|payment details|created date|payer|tender|thank|store\s*#|tel|phone|www\.|http|https|cashier|register|tran|invoice|receipt|member|rewards|savings|you saved|coupon|promo|discount|card\s*#|\*{4}|xxxx|aid\s|tc#|ref\s?#|cart items|item price|item total|qty|sku|order contains|items shipped|powered by|launch your own|bigcommerce|reply|forward)\b/i
+
+/** Shipping / delivery — kept as its own tracked line item, not a product */
+const SHIPPING_LINE =
+  /\b(shipping|freight|delivery|postage|ship\s*fee|delivery\s*fee)\b/i
 
 const FEE_LINE =
-  /\b(shipping|freight|delivery|handling|convenience fee|service fee|processing fee)\b/i
+  /\b(shipping|freight|delivery|handling|convenience fee|service fee|processing fee|postage)\b/i
+
+/** Non-shipping fees we still skip as products */
+const NON_SHIP_FEE =
+  /\b(convenience fee|service fee|processing fee|handling)\b/i
 
 const ADDRESS_LINE =
   /\b(shipped to|pennsylvania|bangor|street| st\b| rd,| road|ave|avenue|zip|,\s*\d{5}|\bus\b)\b/i
@@ -42,10 +50,46 @@ function cleanDescription(raw: string): string {
   return s.slice(0, 100)
 }
 
+/** True when description is a shipping / delivery charge (own section). */
+export function isShippingLineItem(desc: string): boolean {
+  if (!desc) return false
+  if (/\bshipped to\b/i.test(desc)) return false
+  return SHIPPING_LINE.test(desc)
+}
+
+export function makeShippingLineItem(amount: number, id = 'li-shipping'): ReceiptLineItem {
+  return {
+    id,
+    description: 'Shipping',
+    amount: roundMoney(amount),
+    // Track under Misc so it has its own clear bucket (not mixed into a parts category)
+    categoryId: 'misc',
+  }
+}
+
+/** Split line items into products vs shipping (and other tracked fee rows). */
+export function partitionLineItems(items: ReceiptLineItem[]): {
+  products: ReceiptLineItem[]
+  shipping: ReceiptLineItem[]
+  other: ReceiptLineItem[]
+} {
+  const products: ReceiptLineItem[] = []
+  const shipping: ReceiptLineItem[] = []
+  const other: ReceiptLineItem[] = []
+  for (const it of items) {
+    if (isShippingLineItem(it.description)) shipping.push(it)
+    else if (NON_SHIP_FEE.test(it.description)) other.push(it)
+    else products.push(it)
+  }
+  return { products, shipping, other }
+}
+
 function isNoiseDescLine(line: string): boolean {
   if (!line || line.length < 2) return true
   if (SKIP_LINE.test(line)) return true
-  if (FEE_LINE.test(line)) return true
+  // Shipping lines are not "noise" for product buffering — handled when priced
+  if (SHIPPING_LINE.test(line)) return true
+  if (NON_SHIP_FEE.test(line)) return true
   if (ADDRESS_LINE.test(line) && !/filter|kit|ford|part|pump|wire/i.test(line)) return true
   if (PRICE_ONLY.test(line)) return true
   if (/^[\W\d]+$/.test(line)) return true
@@ -69,6 +113,15 @@ function isFeeOrMetaLabel(line: string): boolean {
       line.trim(),
     )
   )
+}
+
+function captureShipping(
+  label: string,
+  amount: number,
+  current: number | null,
+): number {
+  if (!SHIPPING_LINE.test(label)) return current ?? amount
+  return roundMoney(amount)
 }
 
 function assembleDescription(buffer: string[], pricedLine: string): string {
@@ -169,11 +222,13 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     if (amount != null && (pendingFeeLabel || isFeeOrMetaLabel(line))) {
       const label = pendingFeeLabel || line
       pendingFeeLabel = null
-      if (FEE_LINE.test(label) || FEE_LINE.test(line)) {
-        if (/\bshipping|freight|delivery\b/i.test(label + line)) {
-          shipping = roundMoney(amount)
-        }
-        // convenience fee etc. — not product
+      if (SHIPPING_LINE.test(label) || SHIPPING_LINE.test(line)) {
+        shipping = captureShipping(`${label} ${line}`, amount, shipping)
+        flushBuffer()
+        continue
+      }
+      if (NON_SHIP_FEE.test(label) || NON_SHIP_FEE.test(line)) {
+        // convenience fee etc. — not a product or shipping section
         flushBuffer()
         continue
       }
@@ -184,8 +239,13 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     }
     pendingFeeLabel = null
 
-    if (amount != null && FEE_LINE.test(line)) {
-      shipping = roundMoney(amount)
+    if (amount != null && SHIPPING_LINE.test(line)) {
+      shipping = captureShipping(line, amount, shipping)
+      flushBuffer()
+      continue
+    }
+
+    if (amount != null && NON_SHIP_FEE.test(line)) {
       flushBuffer()
       continue
     }
@@ -250,7 +310,12 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
       flushBuffer()
       continue
     }
-    if (FEE_LINE.test(desc) || isFeeOrMetaLabel(desc) || ADDRESS_LINE.test(desc) && !/filter|kit|ford/i.test(desc)) {
+    if (SHIPPING_LINE.test(desc)) {
+      shipping = captureShipping(desc, itemAmount, shipping)
+      flushBuffer()
+      continue
+    }
+    if (NON_SHIP_FEE.test(desc) || isFeeOrMetaLabel(desc) || (ADDRESS_LINE.test(desc) && !/filter|kit|ford/i.test(desc))) {
       flushBuffer()
       continue
     }
@@ -265,7 +330,7 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     flushBuffer()
   }
 
-  // Extract subtotal from text for dedupe target
+  // Extract subtotal from text for dedupe target (products only — not shipping)
   let subtotalTarget: number | null = null
   for (const line of lines) {
     if (/\bsub\s*-?\s*total\b/i.test(line)) {
@@ -281,21 +346,59 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     }
   }
 
-  const filtered = dedupeItemsByAmount(
-    items.filter((it) => !FEE_LINE.test(it.description) && !isFeeOrMetaLabel(it.description)),
+  // Also catch "Shipping: $9.95" if we missed it in the main loop
+  if (shipping == null) {
+    for (const line of lines) {
+      if (SHIPPING_LINE.test(line)) {
+        const a = parseMoneyTokens(line)
+        if (a.length) {
+          shipping = roundMoney(a[a.length - 1])
+          break
+        }
+      }
+    }
+    for (let i = 0; i < lines.length - 1 && shipping == null; i++) {
+      if (/^shipping$/i.test(lines[i].trim()) || /^freight$/i.test(lines[i].trim())) {
+        const a = parseMoneyTokens(lines[i + 1])
+        if (a.length) shipping = roundMoney(a[a.length - 1])
+      }
+    }
+  }
+
+  const products = dedupeItemsByAmount(
+    items.filter(
+      (it) =>
+        !isShippingLineItem(it.description) &&
+        !NON_SHIP_FEE.test(it.description) &&
+        !isFeeOrMetaLabel(it.description),
+    ),
     subtotalTarget,
   )
 
+  // Shipping gets its own section/line — always include when we found a price
+  const filtered = [...products]
+  if (shipping != null && shipping > 0) {
+    const already = filtered.some(
+      (it) => isShippingLineItem(it.description) && Math.abs(it.amount - shipping!) < 0.02,
+    )
+    if (!already) filtered.push(makeShippingLineItem(shipping))
+  }
+
+  const productSum = roundMoney(products.reduce((s, it) => s + it.amount, 0))
   const itemsSum = roundMoney(filtered.reduce((s, it) => s + it.amount, 0))
   let confidence = 0.2
-  if (filtered.length >= 1) confidence += 0.25
-  if (filtered.length >= 2) confidence += 0.2
-  if (subtotalTarget != null && Math.abs(itemsSum - subtotalTarget) < 0.1) confidence += 0.2
+  if (products.length >= 1) confidence += 0.25
+  if (products.length >= 2) confidence += 0.2
+  if (subtotalTarget != null && Math.abs(productSum - subtotalTarget) < 0.1) confidence += 0.2
+  if (shipping != null) confidence = Math.min(0.95, confidence + 0.03)
   confidence = Math.min(0.93, confidence)
 
-  if (!filtered.length) notes.push('No line items confidently detected')
-  else notes.push(`Found ${filtered.length} line item(s), sum ${itemsSum.toFixed(2)}`)
-  if (shipping != null) notes.push(`Shipping fee ${shipping.toFixed(2)} (not a product line)`)
+  if (!products.length) notes.push('No product line items confidently detected')
+  else notes.push(`Found ${products.length} product(s), sum $${productSum.toFixed(2)}`)
+  if (shipping != null) {
+    notes.push(`Shipping section: $${shipping.toFixed(2)}`)
+  }
+  notes.push(`All lines (products + shipping): $${itemsSum.toFixed(2)}`)
 
   return {
     agent: 'line-items',
@@ -308,9 +411,12 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
 }
 
 export function primaryCategoryFromItems(items: ReceiptLineItem[]): CategoryId {
-  if (!items.length) return 'misc'
+  // Purchase-level category from products only (don't let shipping tip it to Misc)
+  const forCat = items.filter((it) => !isShippingLineItem(it.description))
+  const pool = forCat.length ? forCat : items
+  if (!pool.length) return 'misc'
   const spend = new Map<CategoryId, number>()
-  for (const it of items) {
+  for (const it of pool) {
     spend.set(it.categoryId, (spend.get(it.categoryId) ?? 0) + it.amount)
   }
   let best: CategoryId = 'misc'

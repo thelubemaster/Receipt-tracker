@@ -39,13 +39,15 @@ Bigcommerce.
 `
 
 describe('Swag Performance Parts receipt (real user debug scan)', () => {
-  it('extracts both product line items and not shipping', () => {
+  it('extracts both product line items and a Shipping section', () => {
     const lines = runLineItemsAgent(SWAG_OCR)
-    expect(lines.items.length).toBeGreaterThanOrEqual(2)
+    expect(lines.items.length).toBeGreaterThanOrEqual(3)
     const amounts = lines.items.map((i) => i.amount).sort((a, b) => a - b)
     expect(amounts).toContain(26.75)
     expect(amounts).toContain(39.97)
-    expect(lines.items.every((i) => !/shipping/i.test(i.description))).toBe(true)
+    expect(amounts).toContain(9.95)
+    const ship = lines.items.find((i) => /shipping/i.test(i.description))
+    expect(ship?.amount).toBe(9.95)
     expect(lines.shipping).toBe(9.95)
   })
 
@@ -74,18 +76,22 @@ describe('Swag Performance Parts receipt (real user debug scan)', () => {
 
   it('council debate log shows agents talking', () => {
     const r = parseReceiptText(SWAG_OCR)
-    expect(r.agentReport || '').toMatch(/Council debate|cashier|challenge|hunted|missing|dedupe|Collapsed/i)
-    const sums = r.lineItems.reduce((s, i) => s + i.amount, 0)
+    expect(r.agentReport || '').toMatch(/Council debate|cashier|challenge|hunted|missing|dedupe|Collapsed|Shipping/i)
+    const products = r.lineItems.filter((i) => !/shipping/i.test(i.description))
+    const productSum = products.reduce((s, i) => s + i.amount, 0)
     // products should approach subtotal 66.72 (39.97+26.75) — not 3x duplicates
-    expect(sums).toBeGreaterThanOrEqual(60)
-    expect(sums).toBeLessThanOrEqual(70)
-    expect(r.lineItems.length).toBeLessThanOrEqual(3)
+    expect(productSum).toBeGreaterThanOrEqual(60)
+    expect(productSum).toBeLessThanOrEqual(70)
+    expect(products.length).toBeLessThanOrEqual(3)
+    // shipping is its own line
+    expect(r.lineItems.some((i) => /shipping/i.test(i.description) && i.amount === 9.95)).toBe(true)
   })
 
   it('purchase-level category is fuel for diesel filter parts', () => {
     const r = parseReceiptText(SWAG_OCR)
     expect(r.categoryId).toBe('fuel')
-    expect(r.lineItems.every((i) => i.categoryId === 'fuel' || i.categoryId === 'tools')).toBe(true)
-    expect(r.lineItems.some((i) => i.categoryId === 'fuel')).toBe(true)
+    const products = r.lineItems.filter((i) => !/shipping/i.test(i.description))
+    expect(products.every((i) => i.categoryId === 'fuel' || i.categoryId === 'tools')).toBe(true)
+    expect(products.some((i) => i.categoryId === 'fuel')).toBe(true)
   })
 })
