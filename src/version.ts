@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.16.1'
+export const APP_VERSION = '1.17.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.17.0',
+    date: '2026-07-28',
+    title: 'Category groups on the home screen',
+    changes: [
+      'Main screen groups receipts under the categories the free AIs invent',
+      'Regroup button re-sorts all saved receipts and line items anytime',
+      'Hero shows how many groups you have; expand/collapse each group',
+    ],
+  },
   {
     version: '1.16.1',
     date: '2026-07-28',

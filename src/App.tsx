@@ -61,7 +61,8 @@ import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
-import { categoryBreakdown, totalSpent } from './stats'
+import { regroupAllPurchases } from './regroup'
+import { categoryBreakdown, groupPurchasesByCategory, totalSpent } from './stats'
 import type {
   AppSettings,
   CategoryId,
@@ -219,6 +220,49 @@ export default function App() {
     () => categoryBreakdown(purchases, customCats),
     [purchases, customCats],
   )
+  const purchaseGroups = useMemo(
+    () => groupPurchasesByCategory(purchases, customCats),
+    [purchases, customCats],
+  )
+
+  async function handleRegroup() {
+    if (!purchases.length) {
+      setInfo('Scan a receipt first — then Regroup can sort it into categories.')
+      return
+    }
+    setError(null)
+    const { purchases: next, changed, labels } = regroupAllPurchases(purchases)
+    const groupCount = new Set(next.map((p) => p.categoryId || 'misc')).size
+    const nextCustom = absorbCategoryLabels(settings.customCategories ?? [], labels)
+    if (
+      nextCustom.length !== (settings.customCategories ?? []).length ||
+      nextCustom.some((c, i) => c.id !== (settings.customCategories ?? [])[i]?.id)
+    ) {
+      const nextSettings = { ...settings, customCategories: nextCustom }
+      await saveSettings(nextSettings)
+      setSettings(nextSettings)
+    }
+    // Only rewrite receipts that actually moved
+    const byId = new Map(purchases.map((p) => [p.id, p]))
+    let saved = 0
+    for (const p of next) {
+      const prev = byId.get(p.id)
+      if (
+        !prev ||
+        prev.categoryId !== p.categoryId ||
+        JSON.stringify(prev.lineItems) !== JSON.stringify(p.lineItems)
+      ) {
+        await savePurchase(p)
+        saved++
+      }
+    }
+    await refresh()
+    setInfo(
+      changed === 0
+        ? `Groups already match the AI categories — ${groupCount} group${groupCount === 1 ? '' : 's'} on the home screen.`
+        : `Regrouped ${changed} receipt${changed === 1 ? '' : 's'} into ${groupCount} group${groupCount === 1 ? '' : 's'}.`,
+    )
+  }
 
   async function handleSavePurchase(input: {
     id?: string
@@ -393,8 +437,10 @@ export default function App() {
           total={total}
           purchaseCount={purchases.length}
           breakdown={breakdown}
+          groups={purchaseGroups}
           purchases={purchases}
           customCategories={customCats}
+          onRegroup={handleRegroup}
           onScan={() => {
             setError(null)
             setInfo(null)
@@ -696,8 +742,10 @@ function HomeScreen(props: {
   total: number
   purchaseCount: number
   breakdown: ReturnType<typeof categoryBreakdown>
+  groups: ReturnType<typeof groupPurchasesByCategory>
   purchases: Purchase[]
   customCategories: Category[]
+  onRegroup: () => void | Promise<void>
   onScan: () => void
   onAdd: () => void
   onOpen: (id: string) => void
@@ -706,6 +754,28 @@ function HomeScreen(props: {
   onExportPdf: () => void
   onShowVersion: () => void
 }) {
+  // Groups start expanded so the main screen shows receipts under each category
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  const [regroupBusy, setRegroupBusy] = useState(false)
+
+  const isOpen = (id: string) => openGroups[id] !== false
+
+  function toggleGroup(id: string) {
+    setOpenGroups((prev) => {
+      const currentlyOpen = prev[id] !== false
+      return { ...prev, [id]: !currentlyOpen }
+    })
+  }
+
+  async function runRegroup() {
+    setRegroupBusy(true)
+    try {
+      await Promise.resolve(props.onRegroup())
+    } finally {
+      setRegroupBusy(false)
+    }
+  }
+
   return (
     <>
       <header className="topbar">
@@ -732,22 +802,34 @@ function HomeScreen(props: {
           <div className="hero-sub">
             {props.purchaseCount === 0
               ? 'No purchases yet — scan a receipt to start'
-              : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} logged`}
+              : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} · ${props.groups.length} group${props.groups.length === 1 ? '' : 's'}`}
           </div>
           <div className="hero-pills">
             <span className="pill pill-accent">Free · on-device</span>
-            <span className="pill">Scan · track · export</span>
+            <span className="pill">Scan · group · export</span>
           </div>
         </div>
       </section>
 
       <div className="section-title">
         <span>By category</span>
+        <button
+          type="button"
+          className="regroup-btn"
+          disabled={regroupBusy || props.purchases.length === 0}
+          onClick={() => void runRegroup()}
+          title="Re-run free AI categories on saved receipts and rebuild groups"
+        >
+          {regroupBusy ? 'Regrouping…' : 'Regroup'}
+        </button>
       </div>
       {props.breakdown.length === 0 ? (
         <div className="empty empty-soft">
           <div className="empty-icon">📊</div>
-          <p>Spending by category shows up after your first purchase.</p>
+          <p>
+            After you scan, receipts land in groups the AI invents (engine parts, electrical, etc.).
+            Tap <strong>Regroup</strong> anytime to re-sort.
+          </p>
         </div>
       ) : (
         <div className="card category-list">
@@ -771,11 +853,15 @@ function HomeScreen(props: {
               </div>
             </div>
           ))}
+          <p className="group-hint">
+            Groups use the categories the free AIs assign when you scan. Press{' '}
+            <strong>Regroup</strong> to re-apply that logic to everything already saved.
+          </p>
         </div>
       )}
 
       <div className="section-title">
-        <span>Recent</span>
+        <span>Groups</span>
         <span className="export-links">
           <button type="button" onClick={props.onExportCsv}>
             CSV
@@ -786,35 +872,66 @@ function HomeScreen(props: {
         </span>
       </div>
 
-      {props.purchases.length === 0 ? (
+      {props.groups.length === 0 ? (
         <div className="empty empty-soft">
           <div className="empty-icon">📷</div>
           <p>
-            Tap <strong>Scan receipt</strong> to photograph a purchase. Free on-device AIs read it —
-            you confirm, then it&apos;s tracked.
+            Tap <strong>Scan receipt</strong> to photograph a purchase. Free on-device AIs read it,
+            pick a category, and it shows up in a group here.
           </p>
         </div>
       ) : (
-        <div className="purchase-list">
-          {props.purchases.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className="purchase-item"
-              onClick={() => props.onOpen(p.id)}
-            >
-              <span className="purchase-title">{p.description || 'Purchase'}</span>
-              <span className="purchase-amount">{formatMoney(p.amount)}</span>
-              <span className="purchase-cat">
-                {getCategory(p.categoryId, props.customCategories).label}
-              </span>
-              <span className="purchase-meta">
-                {p.date}
-                {p.vendor ? ` · ${p.vendor}` : ''}
-                {p.receiptImageId ? ' · 📷' : ''}
-              </span>
-            </button>
-          ))}
+        <div className="group-list">
+          {props.groups.map((g) => {
+            const open = isOpen(g.categoryId)
+            return (
+              <section key={g.categoryId} className="group-card">
+                <button
+                  type="button"
+                  className="group-header"
+                  onClick={() => toggleGroup(g.categoryId)}
+                  aria-expanded={open}
+                >
+                  <span className="group-header-left">
+                    <span className="group-chevron" aria-hidden>
+                      {open ? '▼' : '▶'}
+                    </span>
+                    <span className="cat-dot" style={{ background: g.color }} />
+                    <span className="group-title">{g.label}</span>
+                  </span>
+                  <span className="group-header-right">
+                    <span className="group-total">{formatMoney(g.amount)}</span>
+                    <span className="group-count">
+                      {g.count} receipt{g.count === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                </button>
+                {open && (
+                  <div className="group-purchases">
+                    {g.purchases.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="purchase-item purchase-item-in-group"
+                        onClick={() => props.onOpen(p.id)}
+                      >
+                        <span className="purchase-title">{p.description || 'Purchase'}</span>
+                        <span className="purchase-amount">{formatMoney(p.amount)}</span>
+                        <span className="purchase-meta">
+                          {p.date}
+                          {p.vendor ? ` · ${p.vendor}` : ''}
+                          {p.lineItems?.length
+                            ? ` · ${p.lineItems.length} item${p.lineItems.length === 1 ? '' : 's'}`
+                            : ''}
+                          {p.receiptImageId ? ' · 📷' : ''}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )
+          })}
         </div>
       )}
 

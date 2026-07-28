@@ -351,6 +351,117 @@ a {
   box-shadow: 0 0 12px currentColor;
 }
 
+.group-hint {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.regroup-btn {
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(232, 165, 75, 0.45);
+  background: rgba(232, 165, 75, 0.12);
+  color: var(--accent-bright);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.regroup-btn:disabled {
+  opacity: 0.45;
+}
+
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.group-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(12px);
+}
+
+.group-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+}
+
+.group-header:active {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.group-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.group-chevron {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  width: 1em;
+  flex-shrink: 0;
+}
+
+.group-title {
+  font-weight: 650;
+  font-size: 0.98rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-header-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.group-total {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-bright);
+  font-size: 0.95rem;
+}
+
+.group-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.group-purchases {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 10px;
+}
+
+.purchase-item-in-group {
+  box-shadow: none;
+  background: rgba(0, 0, 0, 0.18);
+}
+
 .purchase-list {
   display: flex;
   flex-direction: column;
