@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.17.3'
+export const APP_VERSION = '1.18.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,18 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.18.0',
+    date: '2026-07-28',
+    title: 'Smarter free AI — still 100% local',
+    changes: [
+      'On-device memory learns stores, fees, and categories when you save',
+      'Local smart pass repairs totals, fees, and free-form categories after OCR',
+      'Layout-first OCR: deskew + document rows first; heavy engines only if needed',
+      'Better photo prep (contrast) + capture tips on the scan screen',
+      'No cloud keys — everything stays on your phone',
+    ],
+  },
   {
     version: '1.17.3',
     date: '2026-07-28',

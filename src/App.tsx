@@ -36,7 +36,11 @@ import {
   saveSettings,
   clearAllData,
   getLeaderboard,
+  getReceiptMemory,
+  saveReceiptMemory,
+  clearReceiptMemory,
 } from './db'
+import { learnFromPurchase, memoryStats } from './receiptMemory'
 import { downloadCsv, downloadPdfSummary } from './exportData'
 import {
   defaultLeaderboard,
@@ -353,14 +357,21 @@ export default function App() {
     }
 
     await savePurchase(purchase)
+    // On-device memory: learn vendor / fee habits / categories from what you confirmed
+    try {
+      const mem = await getReceiptMemory()
+      await saveReceiptMemory(learnFromPurchase(mem, purchase))
+    } catch {
+      /* memory is best-effort */
+    }
     if (input.bestAiId) {
       await recordAiWin(input.bestAiId, 5)
     }
     await refresh()
     setInfo(
       input.bestAiId
-        ? `Purchase saved · ${getAi(input.bestAiId).name} got a win on the leaderboard`
-        : 'Purchase saved.',
+        ? `Purchase saved · ${getAi(input.bestAiId).name} got a win · phone memory updated`
+        : 'Purchase saved · on-device memory updated for next scan.',
     )
     setScreen({ name: 'home' })
     return true
@@ -811,8 +822,8 @@ function HomeScreen(props: {
               : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} · ${props.groups.length} group${props.groups.length === 1 ? '' : 's'}`}
           </div>
           <div className="hero-pills">
-            <span className="pill pill-accent">Free · on-device</span>
-            <span className="pill">Scan · group · export</span>
+            <span className="pill pill-accent">Free · local only</span>
+            <span className="pill">Scan · remember · group</span>
           </div>
         </div>
       </section>
@@ -1088,17 +1099,28 @@ function ScanScreen(props: {
             {props.rejected.amount != null
               ? `$${props.rejected.amount.toFixed(2)}`
               : 'and those line items'}
-            .
+            . Still 100% on your phone.
           </>
         ) : (
           <>
-            <strong>Free · no keys · max power {props.maxPowerMode ? 'ON' : 'OFF'}.</strong>{' '}
-            {props.maxPowerMode
-              ? 'Hammer + Titan push the phone hard. After OCR, Seeker looks up SKUs on the free public web (DuckDuckGo/Wikipedia via this app host). No API keys.'
-              : 'Lighter free team. Seeker still can web-lookup products. Turn on Max power in Settings for Hammer + Titan.'}
+            <strong>Free · local only · max power {props.maxPowerMode ? 'ON' : 'OFF'}.</strong>{' '}
+            Layout-first OCR + on-device memory. No cloud keys. Photo never leaves this device for the
+            free team.
           </>
         )}
       </div>
+
+      {!busy && !props.rejected && (
+        <div className="card capture-tips">
+          <strong>Better photo = better read</strong>
+          <ul className="tips-list">
+            <li>Fill the frame with the receipt; crop out the table/hand</li>
+            <li>Flatten the paper; avoid glare and shadows</li>
+            <li>Include the total and any fee lines at the bottom</li>
+            <li>After you save a fix, the phone remembers that store for next time</li>
+          </ul>
+        </div>
+      )}
 
       {busy ? (
         <div className="card agent-status">
@@ -2394,6 +2416,56 @@ function DetailScreen(props: {
   )
 }
 
+/** On-device learnings from saved receipts — never uploaded */
+function OnDeviceMemoryCard() {
+  const [stats, setStats] = useState<{ vendors: number; hints: number } | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    void getReceiptMemory()
+      .then((m) => setStats(memoryStats(m)))
+      .catch(() => setStats({ vendors: 0, hints: 0 }))
+  }, [])
+
+  async function clearMem() {
+    if (!confirm('Clear on-device receipt memory? The free AIs will forget store habits you taught them.')) {
+      return
+    }
+    setBusy(true)
+    try {
+      await clearReceiptMemory()
+      setStats({ vendors: 0, hints: 0 })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card settings-card">
+      <strong>On-device memory</strong>
+      <p className="muted" style={{ margin: '6px 0 12px' }}>
+        When you save a receipt (or fix fees / category), this phone remembers that store and
+        product words for the next scan. <strong>Nothing is uploaded</strong> — free and local only.
+      </p>
+      <p style={{ margin: '0 0 12px', fontSize: '0.9rem' }}>
+        {stats == null
+          ? 'Loading…'
+          : stats.vendors === 0 && stats.hints === 0
+            ? 'No memories yet — save a few receipts to teach the phone.'
+            : `${stats.vendors} store${stats.vendors === 1 ? '' : 's'} · ${stats.hints} category hint${stats.hints === 1 ? '' : 's'}`}
+      </p>
+      <button
+        type="button"
+        className="btn btn-secondary"
+        disabled={busy || (stats != null && stats.vendors === 0 && stats.hints === 0)}
+        onClick={() => void clearMem()}
+      >
+        {busy ? 'Clearing…' : 'Clear memory'}
+      </button>
+    </div>
+  )
+}
+
 function SettingsScreen(props: {
   settings: AppSettings
   onBack: () => void
@@ -2497,8 +2569,7 @@ function SettingsScreen(props: {
           <strong>Max power mode</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
             Quick switch: when off, all <strong>heavy</strong> free AIs are skipped (Hammer, Titan,
-            Mosaic, Bloom, Prism, Council, …). No API keys either way. Turn individual AIs on/off
-            below if your phone struggles.
+            Mosaic, Bloom, Prism, Council, …). Everything stays on this phone — no API keys.
           </p>
           <label className="power-toggle">
             <input
@@ -2509,6 +2580,8 @@ function SettingsScreen(props: {
             <span>{maxPowerMode ? 'ON — heavy free AIs allowed' : 'OFF — light free team only'}</span>
           </label>
         </div>
+
+        <OnDeviceMemoryCard />
 
         <div className="card settings-card">
           <strong>Free AIs — enable / disable</strong>

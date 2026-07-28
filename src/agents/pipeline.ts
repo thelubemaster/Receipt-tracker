@@ -26,6 +26,8 @@ import {
 import { applySeekerToDraft, runSeekerAgent } from './seekerAgent'
 import { runSieveAgent } from './sieveAgent'
 import { runTotalsAgent } from './totalsAgent'
+import { runLocalSmartPass } from './localSmartPass'
+import type { ReceiptMemory } from '../receiptMemory'
 
 export type LocalAgentResult = ReceiptSuggestion & {
   source: 'on-device'
@@ -112,6 +114,11 @@ export type PipelineOptions = {
   rejected?: RejectedScanSnapshot
   /** Reliability weights from user ✓/✗ history (boost trusted AIs) */
   reliability?: Partial<Record<AiId, number>>
+  /**
+   * On-device memory learned from saved receipts (local only).
+   * When omitted, pipeline loads from IndexedDB if available.
+   */
+  memory?: ReceiptMemory | null
 }
 
 function scoreParseCandidate(
@@ -183,6 +190,13 @@ export async function runMultiAgentReceiptPipeline(
     })
   }
 
+  // Local image prep (contrast + size) before any OCR — free, on-device
+  try {
+    workBlob = await prepareImageForOcr(workBlob, maxPower ? 1600 : 1400)
+  } catch {
+    /* keep original */
+  }
+
   const ocrTexts: { label: string; text: string; note: string; ais: AiId[] }[] = []
   const skipped: string[] = []
 
@@ -211,19 +225,30 @@ export async function runMultiAgentReceiptPipeline(
     }
   }
 
-  // --- Forge ---
-  await runOcrIfEnabled('forge', 'Forge path', async () => {
-    const forge = await runForgeOcr(workBlob, onProgress)
-    return { text: forge.text, note: `Forge best: ${forge.bestPass}` }
+  const layoutish = (t: string) =>
+    t.split(/\n/).filter((l) => /[A-Za-z]{3,}/.test(l) && /\d+[.,]\d{2}/.test(l)).length
+
+  function bestOcrQuality(): number {
+    if (!ocrTexts.length) return 0
+    return Math.max(
+      ...ocrTexts.map(
+        (o) =>
+          scoreOcrText(o.text) +
+          layoutish(o.text) * 8 +
+          (o.ais.includes('ruler') ? 12 : 0) +
+          (o.ais.includes('wedge') ? 4 : 0),
+      ),
+    )
+  }
+
+  // ── Phase 1: layout-first free OCR (deskew → layout → solid general) ──
+  // Order matters: crooked photos first, then row mapping, then multi-preprocess.
+  await runOcrIfEnabled('wedge', 'Wedge deskew path', async () => {
+    const { runWedgeOcr } = await import('./wedgeOcr')
+    const wedge = await runWedgeOcr(workBlob, onProgress)
+    return { text: wedge.text, note: `Wedge deskew ${wedge.angleDeg.toFixed(1)}° · ${wedge.bestPass}` }
   })
 
-  // --- Lens ---
-  await runOcrIfEnabled('lens', 'Lens path', async () => {
-    const lens = await runLensOcr(workBlob, onProgress)
-    return { text: lens.text, note: `Lens best: ${lens.bestPass}` }
-  })
-
-  // --- Ruler ---
   await runOcrIfEnabled('ruler', 'Ruler layout path', async () => {
     const { runRulerOcr } = await import('./rulerOcr')
     const ruler = await runRulerOcr(workBlob, onProgress)
@@ -233,61 +258,73 @@ export async function runMultiAgentReceiptPipeline(
     }
   })
 
-  // --- Wedge (deskew) ---
-  await runOcrIfEnabled('wedge', 'Wedge deskew path', async () => {
-    const { runWedgeOcr } = await import('./wedgeOcr')
-    const wedge = await runWedgeOcr(workBlob, onProgress)
-    return { text: wedge.text, note: `Wedge deskew ${wedge.angleDeg.toFixed(1)}° · ${wedge.bestPass}` }
+  await runOcrIfEnabled('forge', 'Forge path', async () => {
+    const forge = await runForgeOcr(workBlob, onProgress)
+    return { text: forge.text, note: `Forge best: ${forge.bestPass}` }
   })
 
-  // --- Prism (multi-PSM) ---
-  await runOcrIfEnabled('prism', 'Prism multi-layout path', async () => {
-    const { runPrismOcr } = await import('./prismOcr')
-    const prism = await runPrismOcr(workBlob, onProgress)
-    return { text: prism.text, note: `Prism ${prism.modesRun} modes · ${prism.bestPass}` }
-  })
+  // ── Phase 2: only if phase 1 is thin (saves time, less garbage votes) ──
+  let q = bestOcrQuality()
+  const bestPhase1Text = ocrTexts.length
+    ? [...ocrTexts].sort((a, b) => scoreOcrText(b.text) - scoreOcrText(a.text))[0].text
+    : ''
+  const strongEnough = q >= 55 && layoutish(bestPhase1Text) >= 2
+  const needMore = !strongEnough || Boolean(rejected)
 
-  // --- Bloom (2× upscale) ---
-  await runOcrIfEnabled('bloom', 'Bloom upscale path', async () => {
-    const { runBloomOcr } = await import('./bloomOcr')
-    const bloom = await runBloomOcr(workBlob, onProgress)
-    return { text: bloom.text, note: `Bloom ×${bloom.scale} · ${bloom.bestPass}` }
-  })
+  if (needMore) {
+    await runOcrIfEnabled('lens', 'Lens path', async () => {
+      const lens = await runLensOcr(workBlob, onProgress)
+      return { text: lens.text, note: `Lens best: ${lens.bestPass}` }
+    })
+    await runOcrIfEnabled('prism', 'Prism multi-layout path', async () => {
+      const { runPrismOcr } = await import('./prismOcr')
+      const prism = await runPrismOcr(workBlob, onProgress)
+      return { text: prism.text, note: `Prism ${prism.modesRun} modes · ${prism.bestPass}` }
+    })
+  } else {
+    skipped.push('Lens/Prism skipped (layout OCR already strong)')
+  }
 
-  // --- Mosaic (tile) ---
-  await runOcrIfEnabled('mosaic', 'Mosaic tile path', async () => {
-    const { runMosaicOcr } = await import('./mosaicOcr')
-    const mosaic = await runMosaicOcr(workBlob, onProgress)
-    return { text: mosaic.text, note: `Mosaic ${mosaic.tiles} tiles · ${mosaic.bestPass}` }
-  })
-
-  // --- Hammer ---
-  await runOcrIfEnabled('hammer', 'Hammer path', async () => {
-    const hammer = await runHammerOcr(workBlob, onProgress)
-    return {
-      text: hammer.text,
-      note: `Hammer: ${hammer.workersUsed} workers × ${hammer.variantsRun} jobs · best ${hammer.bestPass}`,
-    }
-  })
-
-  // --- Titan neural (soft-fail: ONNX graph errors must not kill the scan) ---
-  await runOcrIfEnabled('titan', 'Titan neural path', async () => {
-    const { runTitanNeural } = await import('./titanNeural')
-    const titan = await runTitanNeural(workBlob, onProgress)
-    if (titan.unavailable || !titan.text.trim()) {
-      // Return empty so path is ignored; note explains ONNX skip
-      skipped.push(
-        titan.reason
-          ? `Titan off (${titan.reason.slice(0, 80)})`
-          : 'Titan produced no text',
-      )
-      return { text: '', note: `Titan unavailable · ${titan.device}` }
-    }
-    return {
-      text: titan.text,
-      note: `Titan ${titan.model} on ${titan.device} · ${titan.strips} strips`,
-    }
-  })
+  // ── Phase 3: heavy free engines only when still weak or max-power retry ──
+  q = bestOcrQuality()
+  const stillWeak = q < 70 || layoutish(ocrTexts[0]?.text || '') < 2
+  if (stillWeak || (maxPower && rejected)) {
+    await runOcrIfEnabled('bloom', 'Bloom upscale path', async () => {
+      const { runBloomOcr } = await import('./bloomOcr')
+      const bloom = await runBloomOcr(workBlob, onProgress)
+      return { text: bloom.text, note: `Bloom ×${bloom.scale} · ${bloom.bestPass}` }
+    })
+    await runOcrIfEnabled('mosaic', 'Mosaic tile path', async () => {
+      const { runMosaicOcr } = await import('./mosaicOcr')
+      const mosaic = await runMosaicOcr(workBlob, onProgress)
+      return { text: mosaic.text, note: `Mosaic ${mosaic.tiles} tiles · ${mosaic.bestPass}` }
+    })
+    await runOcrIfEnabled('hammer', 'Hammer path', async () => {
+      const hammer = await runHammerOcr(workBlob, onProgress)
+      return {
+        text: hammer.text,
+        note: `Hammer: ${hammer.workersUsed} workers × ${hammer.variantsRun} jobs · best ${hammer.bestPass}`,
+      }
+    })
+    await runOcrIfEnabled('titan', 'Titan neural path', async () => {
+      const { runTitanNeural } = await import('./titanNeural')
+      const titan = await runTitanNeural(workBlob, onProgress)
+      if (titan.unavailable || !titan.text.trim()) {
+        skipped.push(
+          titan.reason
+            ? `Titan off (${titan.reason.slice(0, 80)})`
+            : 'Titan produced no text',
+        )
+        return { text: '', note: `Titan unavailable · ${titan.device}` }
+      }
+      return {
+        text: titan.text,
+        note: `Titan ${titan.model} on ${titan.device} · ${titan.strips} strips`,
+      }
+    })
+  } else {
+    skipped.push('Heavy OCR (Hammer/Bloom/Mosaic/Titan) skipped — layout path was solid')
+  }
 
   const usable = ocrTexts.filter((o) => o.text.trim().length > 10)
   if (!usable.length) {
@@ -317,12 +354,10 @@ export async function runMultiAgentReceiptPipeline(
     }
   }
 
-  // Prefer Ruler (layout) when it found more product+price rows
-  const layoutish = (t: string) =>
-    t.split(/\n/).filter((l) => /[A-Za-z]{3,}/.test(l) && /\d+[.,]\d{2}/.test(l)).length
+  // Prefer Ruler / layout-rich OCR when ranking paths
   usable.sort((a, b) => {
-    const la = (a.ais.includes('ruler') ? 4 : 0) + layoutish(a.text) * 2 + scoreOcrText(a.text) * 0.01
-    const lb = (b.ais.includes('ruler') ? 4 : 0) + layoutish(b.text) * 2 + scoreOcrText(b.text) * 0.01
+    const la = (a.ais.includes('ruler') ? 4 : 0) + (a.ais.includes('wedge') ? 2 : 0) + layoutish(a.text) * 2 + scoreOcrText(a.text) * 0.01
+    const lb = (b.ais.includes('ruler') ? 4 : 0) + (b.ais.includes('wedge') ? 2 : 0) + layoutish(b.text) * 2 + scoreOcrText(b.text) * 0.01
     return lb - la
   })
 
@@ -581,6 +616,25 @@ export async function runMultiAgentReceiptPipeline(
     final = applyUserMarksToResult(final, rejected)
   }
 
+  // ── Local smart pass + on-device memory (never leaves the phone) ──
+  onProgress?.({
+    stage: 'arbitrate',
+    progress: 0.985,
+    message: 'Local smart pass — memory + fee/total repair on your phone…',
+    aiId: 'arbiter',
+    aiName: 'Arbiter',
+  })
+  let memory = options.memory
+  if (memory === undefined) {
+    try {
+      const { getReceiptMemory } = await import('../db')
+      memory = await getReceiptMemory()
+    } catch {
+      memory = null
+    }
+  }
+  final = runLocalSmartPass(final, councilText || final.rawText || '', memory)
+
   final.source = 'on-device'
 
   onProgress?.({
@@ -588,7 +642,7 @@ export async function runMultiAgentReceiptPipeline(
     progress: 1,
     message: rejected?.marks
       ? 'Retry finished using your ✓/✗ marks…'
-      : 'On-device team huddle finished — agents agreed',
+      : 'On-device team finished (layout-first + local memory)',
     aiId: 'council',
     aiName: 'Council',
   })
@@ -611,6 +665,9 @@ export async function disposeOnDeviceAgent(): Promise<void> {
   }
 }
 
+/**
+ * Free local preprocess: resize + mild contrast so thermal / phone photos OCR better.
+ */
 export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Blob> {
   const bitmap = await createImageBitmap(blob)
   try {
@@ -620,11 +677,34 @@ export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Bl
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) throw new Error('Canvas unavailable')
     ctx.drawImage(bitmap, 0, 0, w, h)
+    try {
+      const img = ctx.getImageData(0, 0, w, h)
+      const d = img.data
+      // Mild contrast + lift dark greys (thermal receipts)
+      const contrast = 1.18
+      const intercept = 128 * (1 - contrast)
+      for (let i = 0; i < d.length; i += 4) {
+        let r = d[i] * contrast + intercept
+        let g = d[i + 1] * contrast + intercept
+        let b = d[i + 2] * contrast + intercept
+        // Soft grayscale mix helps Tesseract on tinted photos
+        const y = 0.299 * r + 0.587 * g + 0.114 * b
+        r = y * 0.85 + r * 0.15
+        g = y * 0.85 + g * 0.15
+        b = y * 0.85 + b * 0.15
+        d[i] = Math.max(0, Math.min(255, r))
+        d[i + 1] = Math.max(0, Math.min(255, g))
+        d[i + 2] = Math.max(0, Math.min(255, b))
+      }
+      ctx.putImageData(img, 0, 0)
+    } catch {
+      /* putImageData may fail on huge images — resized draw is still fine */
+    }
     return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', 0.88)
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', 0.9)
     })
   } finally {
     bitmap.close()

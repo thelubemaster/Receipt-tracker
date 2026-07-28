@@ -1,5 +1,9 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { LeaderboardMap } from './leaderboard'
+import {
+  emptyReceiptMemory,
+  type ReceiptMemory,
+} from './receiptMemory'
 import type { AppSettings, Purchase } from './types'
 
 interface SchoolieDB extends DBSchema {
@@ -18,14 +22,20 @@ interface SchoolieDB extends DBSchema {
   }
   meta: {
     key: string
-    value: { id: string; leaderboard?: LeaderboardMap }
+    value: {
+      id: string
+      leaderboard?: LeaderboardMap
+      /** On-device learnings from saved receipts — free, never leaves the phone */
+      receiptMemory?: ReceiptMemory
+    }
   }
 }
 
 const DB_NAME = 'schoolie-tracker'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const SETTINGS_KEY = 'app'
 const META_KEY = 'meta'
+const MEMORY_KEY = 'receipt-memory'
 
 let dbPromise: Promise<IDBPDatabase<SchoolieDB>> | null = null
 
@@ -45,6 +55,7 @@ function getDb() {
             db.createObjectStore('meta', { keyPath: 'id' })
           }
         }
+        // v3: receiptMemory lives on meta rows (no new store required)
       },
     })
   }
@@ -151,11 +162,39 @@ export async function getLeaderboard(): Promise<LeaderboardMap | null> {
 
 export async function saveLeaderboard(leaderboard: LeaderboardMap): Promise<void> {
   const db = await getDb()
-  await db.put('meta', { id: META_KEY, leaderboard })
+  const existing = await db.get('meta', META_KEY)
+  await db.put('meta', { ...existing, id: META_KEY, leaderboard })
+}
+
+export async function getReceiptMemory(): Promise<ReceiptMemory> {
+  const db = await getDb()
+  const row = await db.get('meta', MEMORY_KEY)
+  if (row?.receiptMemory && row.receiptMemory.version === 1) {
+    return row.receiptMemory
+  }
+  // Also allow memory nested under main meta (older experiments)
+  const main = await db.get('meta', META_KEY)
+  if (main?.receiptMemory && main.receiptMemory.version === 1) {
+    return main.receiptMemory
+  }
+  return emptyReceiptMemory()
+}
+
+export async function saveReceiptMemory(memory: ReceiptMemory): Promise<void> {
+  const db = await getDb()
+  await db.put('meta', {
+    id: MEMORY_KEY,
+    receiptMemory: { ...memory, updatedAt: new Date().toISOString() },
+  })
+}
+
+export async function clearReceiptMemory(): Promise<void> {
+  await saveReceiptMemory(emptyReceiptMemory())
 }
 
 export async function clearAllData(): Promise<void> {
   const db = await getDb()
   await db.clear('purchases')
   await db.clear('images')
+  await clearReceiptMemory()
 }

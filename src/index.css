@@ -358,6 +358,22 @@ a {
   color: var(--text-muted);
 }
 
+.capture-tips {
+  margin-bottom: 12px;
+}
+
+.tips-list {
+  margin: 10px 0 0;
+  padding-left: 1.15rem;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.tips-list li {
+  margin-bottom: 4px;
+}
+
 .regroup-btn {
   min-height: 32px;
   padding: 6px 12px;

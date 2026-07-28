@@ -25,15 +25,20 @@ import { runTotalsAgent } from './agents/totalsAgent'
 import { runMerchantAgent } from './agents/merchantAgent'
 import { runArbiterAgent } from './agents/arbiterAgent'
 import { normalizeOcrText } from './agents/normalizeOcrText'
+import { runLocalSmartPass } from './agents/localSmartPass'
+import type { ReceiptMemory } from './receiptMemory'
 
 /** Pure multi-agent parse from OCR text (no Tesseract) — tests & reuse. */
-export function parseReceiptText(rawText: string): LocalAgentResult {
+export function parseReceiptText(
+  rawText: string,
+  memory?: ReceiptMemory | null,
+): LocalAgentResult {
   const text = normalizeOcrText(rawText)
   const lines = runLineItemsAgent(text)
   const totals = runTotalsAgent(text)
   const merchant = runMerchantAgent(text)
   const draft = runArbiterAgent({ rawText: text, lines, totals, merchant })
-  return runCouncilAgent(
+  const council = runCouncilAgent(
     {
       ...draft,
       aisUsed: ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'],
@@ -41,6 +46,7 @@ export function parseReceiptText(rawText: string): LocalAgentResult {
     },
     text,
   )
+  return runLocalSmartPass(council, text, memory)
 }
 
 export function extractAmount(text: string): number | null {
