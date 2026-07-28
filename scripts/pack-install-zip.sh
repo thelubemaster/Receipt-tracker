@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build Schoolie-Install.zip = APK + "open me" installer HTML
+# Build Schoolie-Install.zip
+# Primary install file: 00-INSTALL-Schoolie.apk (tap after extract)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -22,12 +23,16 @@ mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
+# Sort first + obvious name so people tap the APK, not a broken HTML link
+cp -f "$APK_SRC" "$STAGE/00-INSTALL-Schoolie.apk"
+# Same bytes under classic name for people who expect schoolie.apk
+cp -f "$APK_SRC" "$STAGE/schoolie.apk"
+
 cp -f "$ROOT/install-pack/00-OPEN-ME-TO-INSTALL.html" "$STAGE/"
 cp -f "$ROOT/install-pack/README-INSTALL.txt" "$STAGE/"
 cp -f "$ROOT/install-pack/install-adb.sh" "$STAGE/"
 cp -f "$ROOT/install-pack/install-adb.bat" "$STAGE/"
 chmod +x "$STAGE/install-adb.sh"
-cp -f "$APK_SRC" "$STAGE/schoolie.apk"
 
 ZIP="$OUT_DIR/Schoolie-Install.zip"
 rm -f "$ZIP"
@@ -35,11 +40,10 @@ rm -f "$ZIP"
   cd "$STAGE"
   zip -qr "$ZIP" .
 )
-# also keep a copy under public for local server if needed
 mkdir -p "$ROOT/public/downloads"
 cp -f "$ZIP" "$ROOT/public/downloads/Schoolie-Install.zip"
 
 echo "✓ Install pack: $ZIP"
 ls -lh "$ZIP"
 echo "Contents:"
-unzip -l "$ZIP" | sed -n '1,20p'
+unzip -l "$ZIP"
