@@ -3,7 +3,7 @@
  * Schoolie like any normal app (not a browser bookmark).
  */
 import { useState } from 'react'
-import { isAndroid, isStandaloneApp } from './installApp'
+import { isAndroid, isNativeCapacitorApp, isStandaloneApp } from './installApp'
 import { formatVersionLabel } from './version'
 
 type Props = {
@@ -97,7 +97,8 @@ export function AndroidInstaller(props: Props) {
 /** Show installer page instead of the full app? */
 export function shouldShowAndroidInstaller(): boolean {
   if (typeof window === 'undefined') return false
-  if (isStandaloneApp()) return false
+  // Already the installed APK / PWA / desktop app → open Schoolie, not the store page
+  if (isNativeCapacitorApp() || isStandaloneApp()) return false
   // Query override for testing: ?app=1 skips installer
   if (new URLSearchParams(window.location.search).get('app') === '1') return false
   // Force installer: ?install=1
@@ -108,6 +109,7 @@ export function shouldShowAndroidInstaller(): boolean {
   } catch {
     /* ignore */
   }
+  // Only the mobile browser download page (not the installed app)
   return isAndroid()
 }
 
