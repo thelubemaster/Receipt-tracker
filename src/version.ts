@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.15.1'
+export const APP_VERSION = '1.15.2'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.15.2',
+    date: '2026-07-28',
+    title: 'Clear “who answered” after every scan/rescan',
+    changes: [
+      'Big Who answered card shows primary AI + OCR/total/vendor credits',
+      'Each field and line shows which free AI produced it',
+      'Rescan keeps AI credit on unmarked/kept fields',
+    ],
+  },
   {
     version: '1.15.1',
     date: '2026-07-28',

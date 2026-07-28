@@ -3,9 +3,9 @@
  * Free AIs use this so a retry does not blindly return the same answer.
  * Optional per-field marks (✓ right / ✗ wrong) focus the re-scan.
  */
-import type { CategoryId, ReceiptLineItem } from '../types'
+import type { CategoryId, FieldSources, ReceiptLineItem } from '../types'
 import type { LocalAgentResult } from './pipeline'
-import { isShippingLineItem } from './lineItemsAgent'
+import { isFeeLineItem, isShippingLineItem } from './lineItemsAgent'
 import { roundMoney } from './moneyParse'
 
 /** User mark on a field or line item */
@@ -112,6 +112,8 @@ export type RejectedScanSnapshot = {
   userNote?: string
   /** Per-section / per-line marks from the review form */
   marks?: ScanPartMarks
+  /** Who produced the previous answer (so kept fields keep credit) */
+  fieldSources?: FieldSources
 }
 
 export function snapshotFromSuggestion(input: {
@@ -128,6 +130,7 @@ export function snapshotFromSuggestion(input: {
   attempt?: number
   userNote?: string
   marks?: ScanPartMarks
+  fieldSources?: FieldSources
 }): RejectedScanSnapshot {
   const marks = input.marks
   return {
@@ -150,6 +153,7 @@ export function snapshotFromSuggestion(input: {
     attempt: input.attempt ?? 1,
     userNote: input.userNote,
     marks,
+    fieldSources: input.fieldSources,
   }
 }
 
@@ -525,6 +529,41 @@ export function applyUserMarksToResult(
           .slice(0, 160)
       : result.description
 
+  // Merge field attribution: kept fields credit previous AI; new ones credit rescan AIs
+  const prevSrc = rejected.fieldSources ?? {}
+  const nextSrc = result.fieldSources ?? {}
+  const lineSources: NonNullable<FieldSources['lines']> = { ...(nextSrc.lines ?? {}) }
+  for (const li of keepLines) {
+    if (li.id && prevSrc.lines?.[li.id]) lineSources[li.id] = prevSrc.lines[li.id]
+  }
+  for (const li of items) {
+    if (!lineSources[li.id]) {
+      if (isShippingLineItem(li.description)) lineSources[li.id] = nextSrc.shipping ?? prevSrc.shipping ?? 'ledger'
+      else if (isFeeLineItem(li.description)) lineSources[li.id] = nextSrc.fees ?? prevSrc.fees ?? 'ledger'
+      else lineSources[li.id] = nextSrc.lines?.[li.id] ?? 'sieve'
+    }
+  }
+
+  const fieldSources: FieldSources = {
+    ocr: nextSrc.ocr ?? prevSrc.ocr,
+    total: shouldKeepMark(marks.total, partial) ? prevSrc.total ?? nextSrc.total : nextSrc.total ?? 'cashier',
+    vendor: shouldKeepMark(marks.vendor, partial)
+      ? prevSrc.vendor ?? nextSrc.vendor
+      : nextSrc.vendor ?? 'clerk',
+    category: shouldKeepMark(marks.category, partial)
+      ? prevSrc.category ?? nextSrc.category
+      : nextSrc.category ?? 'ledger',
+    date: shouldKeepMark(marks.date, partial) ? prevSrc.date ?? nextSrc.date : nextSrc.date ?? 'clerk',
+    shipping: shouldKeepMark(marks.shipping, partial)
+      ? prevSrc.shipping ?? nextSrc.shipping
+      : nextSrc.shipping ?? 'ledger',
+    fees: shouldKeepMark(marks.fees, partial) ? prevSrc.fees ?? nextSrc.fees : nextSrc.fees ?? 'ledger',
+    lines: lineSources,
+    primary: nextSrc.primary ?? prevSrc.primary ?? nextSrc.ocr ?? 'quorum',
+    answerLabel: undefined,
+  }
+  fieldSources.answerLabel = buildAnswerLabel(fieldSources, result.aisUsed)
+
   return {
     ...result,
     amount,
@@ -533,14 +572,33 @@ export function applyUserMarksToResult(
     date,
     lineItems: items,
     description,
+    fieldSources,
+    activeAiLabel: fieldSources.answerLabel || result.activeAiLabel,
     agentReport: [
       result.agentReport,
       'Applied user marks: unmarked = keep; ✗ banned from repeating.',
+      fieldSources.answerLabel ? `Answer credit: ${fieldSources.answerLabel}` : null,
       ...notes,
     ]
       .filter(Boolean)
       .join('\n'),
   }
+}
+
+/** Human-readable “who answered” line from field sources + team list */
+export function buildAnswerLabel(
+  sources: FieldSources | undefined,
+  aisUsed?: string[],
+): string {
+  if (sources?.answerLabel) return sources.answerLabel
+  const bits: string[] = []
+  if (sources?.primary) bits.push(sources.primary)
+  if (sources?.ocr && sources.ocr !== sources.primary) bits.push(`OCR:${sources.ocr}`)
+  if (sources?.total && !bits.includes(sources.total)) bits.push(`total:${sources.total}`)
+  if (sources?.vendor && !bits.includes(sources.vendor)) bits.push(`vendor:${sources.vendor}`)
+  if (bits.length) return bits.join(' · ')
+  if (aisUsed?.length) return aisUsed.slice(0, 6).join(', ')
+  return 'On-device team'
 }
 
 /**

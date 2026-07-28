@@ -63,10 +63,18 @@ export type FieldSources = {
   category?: AiId
   date?: AiId
   shipping?: AiId
+  fees?: AiId
   /** line item id → AI */
   lines?: Record<string, AiId>
   /** Main OCR path that fed the parse */
   ocr?: AiId
+  /**
+   * Best single AI to credit for “the answer” this scan
+   * (highest reliability / most fields / quorum winner).
+   */
+  primary?: AiId
+  /** Short human label for who answered (shown after rescan) */
+  answerLabel?: string
 }
 
 export interface ReceiptSuggestion {

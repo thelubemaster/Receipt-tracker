@@ -465,6 +465,7 @@ export default function App() {
                     attempt: Math.max(1, attempt),
                     userNote: formSnapshot.reportNote || undefined,
                     marks: formSnapshot.partMarks,
+                    fieldSources: formSnapshot.fieldSources,
                   })
                   // Weight AIs from ✓/✗ marks immediately
                   void (async () => {
@@ -1093,6 +1094,20 @@ function ScanScreen(props: {
 
 type FormState = ReturnType<typeof emptyForm>
 
+/** Small “from AI” badge always visible after a scan */
+function FromAiBadge(props: { aiId?: AiId; fallback?: string }) {
+  if (!props.aiId && !props.fallback) return null
+  if (!props.aiId) {
+    return <span className="from-ai-badge from-ai-muted">{props.fallback}</span>
+  }
+  const ai = getAi(props.aiId)
+  return (
+    <span className="from-ai-badge" title={`This value came from ${ai.fullName}`}>
+      {ai.emoji} <strong>{ai.name}</strong>
+    </span>
+  )
+}
+
 /** ✓ / ✗ mark control for a field or line; shows which AI produced it */
 function MarkPair(props: {
   value: FieldMark
@@ -1100,13 +1115,14 @@ function MarkPair(props: {
   label?: string
   /** AI that produced this field/line — used for weighting */
   sourceAi?: AiId
+  showAi?: boolean
 }) {
   const aiName = props.sourceAi ? getAi(props.sourceAi).name : null
   return (
     <div className="mark-pair-wrap">
-      {aiName ? (
+      {(props.showAi !== false) && props.sourceAi ? (
         <span className="mark-ai-chip" title={`Produced by ${aiName}`}>
-          {getAi(props.sourceAi!).emoji} {aiName}
+          {getAi(props.sourceAi).emoji} {aiName}
         </span>
       ) : null}
       <div className="mark-pair" role="group" aria-label={props.label || 'Mark right or wrong'}>
@@ -1324,16 +1340,18 @@ function PurchaseFormScreen(props: {
         key={li.id}
         className={`line-item-row${tone === 'shipping' ? ' line-item-row-shipping' : ''}${tone === 'fee' ? ' line-item-row-fee' : ''}${mark === 'wrong' ? ' line-item-marked-wrong' : ''}${mark === 'right' ? ' line-item-marked-right' : ''}`}
       >
-        {props.onTryAgain && (
-          <div className="line-item-marks">
+        <div className="line-item-meta-row">
+          <FromAiBadge aiId={sourceAi} fallback={fromScan ? 'Team' : undefined} />
+          {props.onTryAgain && (
             <MarkPair
               label={`Mark ${li.description || 'line'}`}
               value={mark}
               sourceAi={sourceAi}
+              showAi={false}
               onChange={(m) => setLineMark(li.id, m)}
             />
-          </div>
-        )}
+          )}
+        </div>
         {longDesc ? (
           <div className="line-item-desc-wrap">
             <ExpandableBlock collapsedMax={56} className="line-expand">
@@ -1448,22 +1466,73 @@ function PurchaseFormScreen(props: {
         </div>
       )}
 
-      {(form.activeAiLabel || form.aisUsed.length > 0) && (
-        <ExpandableBlock collapsedMax={88} className="banner banner-info banner-expandable">
-          <strong>On-device team:</strong>{' '}
-          {form.activeAiLabel || form.aisUsed.map((id) => getAi(id).name).join(', ')}
-          <div className="muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
-            Free AIs run on this phone and talk to each other (huddle + council). No paid keys.
-            {form.aisUsed.includes('seeker')
-              ? ' Seeker is optional free web if online.'
-              : ' Fully offline-capable for this scan.'}
+      {(form.activeAiLabel || form.aisUsed.length > 0 || form.fieldSources?.primary) && (
+        <div className="card answer-credit-card">
+          <div className="answer-credit-head">
+            <span className="answer-credit-kicker">Who answered this scan</span>
+            {form.fieldSources?.primary ? (
+              <div className="answer-credit-primary">
+                <span className="answer-credit-emoji">{getAi(form.fieldSources.primary).emoji}</span>
+                <div>
+                  <strong>{getAi(form.fieldSources.primary).name}</strong>
+                  <div className="muted" style={{ fontSize: '0.8rem' }}>
+                    Primary credit · {getAi(form.fieldSources.primary).role}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <strong>{form.activeAiLabel || 'On-device team'}</strong>
+            )}
+          </div>
+          <p className="muted answer-credit-label">
+            {form.fieldSources?.answerLabel || form.activeAiLabel || 'Team huddle result'}
+          </p>
+          <div className="answer-credit-grid">
+            {form.fieldSources?.ocr && (
+              <div className="answer-credit-cell">
+                <span className="muted">OCR</span>
+                <FromAiBadge aiId={form.fieldSources.ocr} />
+              </div>
+            )}
+            {form.fieldSources?.total && (
+              <div className="answer-credit-cell">
+                <span className="muted">Total</span>
+                <FromAiBadge aiId={form.fieldSources.total} />
+              </div>
+            )}
+            {form.fieldSources?.vendor && (
+              <div className="answer-credit-cell">
+                <span className="muted">Vendor</span>
+                <FromAiBadge aiId={form.fieldSources.vendor} />
+              </div>
+            )}
+            {form.fieldSources?.category && (
+              <div className="answer-credit-cell">
+                <span className="muted">Category</span>
+                <FromAiBadge aiId={form.fieldSources.category} />
+              </div>
+            )}
+            {form.fieldSources?.shipping && (
+              <div className="answer-credit-cell">
+                <span className="muted">Shipping</span>
+                <FromAiBadge aiId={form.fieldSources.shipping} />
+              </div>
+            )}
+            {form.fieldSources?.fees && (
+              <div className="answer-credit-cell">
+                <span className="muted">Fees</span>
+                <FromAiBadge aiId={form.fieldSources.fees} />
+              </div>
+            )}
           </div>
           {form.aisUsed.length > 0 && (
-            <div className="muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
-              {form.aisUsed.map((id) => `${getAi(id).emoji} ${getAi(id).name}`).join(' · ')}
-            </div>
+            <ExpandableBlock collapsedMax={52} className="answer-credit-team">
+              <div className="muted" style={{ fontSize: '0.78rem' }}>
+                Full team: {form.aisUsed.map((id) => `${getAi(id).emoji} ${getAi(id).name}`).join(' · ')}
+              </div>
+            </ExpandableBlock>
           )}
-        </ExpandableBlock>
+        </div>
       )}
 
       {form.agentReport && (
@@ -1698,14 +1767,18 @@ function PurchaseFormScreen(props: {
         <div className={`field${partMarks.total === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.total === 'right' ? ' field-marked-right' : ''}`}>
           <div className="field-label-row">
             <label htmlFor="amount">Amount (total paid)</label>
-            {props.onTryAgain && (
-              <MarkPair
-                label="Total"
-                value={partMarks.total}
-                sourceAi={form.fieldSources?.total}
-                onChange={(m) => setMark('total', m)}
-              />
-            )}
+            <div className="field-label-right">
+              <FromAiBadge aiId={form.fieldSources?.total} fallback={fromScan ? 'Cashier' : undefined} />
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Total"
+                  value={partMarks.total}
+                  sourceAi={form.fieldSources?.total}
+                  showAi={false}
+                  onChange={(m) => setMark('total', m)}
+                />
+              )}
+            </div>
           </div>
           <input
             id="amount"
@@ -1741,14 +1814,18 @@ function PurchaseFormScreen(props: {
         <div className={`field${partMarks.category === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.category === 'right' ? ' field-marked-right' : ''}`}>
           <div className="field-label-row">
             <label htmlFor="category">Category</label>
-            {props.onTryAgain && (
-              <MarkPair
-                label="Category"
-                value={partMarks.category}
-                sourceAi={form.fieldSources?.category}
-                onChange={(m) => setMark('category', m)}
-              />
-            )}
+            <div className="field-label-right">
+              <FromAiBadge aiId={form.fieldSources?.category} fallback={fromScan ? 'Ledger' : undefined} />
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Category"
+                  value={partMarks.category}
+                  sourceAi={form.fieldSources?.category}
+                  showAi={false}
+                  onChange={(m) => setMark('category', m)}
+                />
+              )}
+            </div>
           </div>
           <select
             id="category"
@@ -1765,14 +1842,18 @@ function PurchaseFormScreen(props: {
         <div className={`field${partMarks.vendor === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.vendor === 'right' ? ' field-marked-right' : ''}`}>
           <div className="field-label-row">
             <label htmlFor="vendor">Store / vendor</label>
-            {props.onTryAgain && (
-              <MarkPair
-                label="Vendor"
-                value={partMarks.vendor}
-                sourceAi={form.fieldSources?.vendor}
-                onChange={(m) => setMark('vendor', m)}
-              />
-            )}
+            <div className="field-label-right">
+              <FromAiBadge aiId={form.fieldSources?.vendor} fallback={fromScan ? 'Clerk' : undefined} />
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Vendor"
+                  value={partMarks.vendor}
+                  sourceAi={form.fieldSources?.vendor}
+                  showAi={false}
+                  onChange={(m) => setMark('vendor', m)}
+                />
+              )}
+            </div>
           </div>
           {(form.vendor || '').length > 40 ? (
             <ExpandableBlock collapsedMax={56}>
@@ -1797,14 +1878,18 @@ function PurchaseFormScreen(props: {
         <div className={`field${partMarks.date === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.date === 'right' ? ' field-marked-right' : ''}`}>
           <div className="field-label-row">
             <label htmlFor="date">Date</label>
-            {props.onTryAgain && (
-              <MarkPair
-                label="Date"
-                value={partMarks.date}
-                sourceAi={form.fieldSources?.date}
-                onChange={(m) => setMark('date', m)}
-              />
-            )}
+            <div className="field-label-right">
+              <FromAiBadge aiId={form.fieldSources?.date} fallback={fromScan ? 'Clerk' : undefined} />
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Date"
+                  value={partMarks.date}
+                  sourceAi={form.fieldSources?.date}
+                  showAi={false}
+                  onChange={(m) => setMark('date', m)}
+                />
+              )}
+            </div>
           </div>
           <input
             id="date"

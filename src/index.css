@@ -794,6 +794,95 @@ a {
   margin: 0;
 }
 
+.answer-credit-card {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(240, 195, 106, 0.28);
+  background: linear-gradient(145deg, rgba(48, 54, 72, 0.95), rgba(22, 26, 38, 0.98));
+}
+
+.answer-credit-kicker {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #9aa3b5);
+  margin-bottom: 8px;
+}
+
+.answer-credit-primary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.answer-credit-emoji {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+.answer-credit-label {
+  margin: 10px 0 12px;
+  font-size: 0.88rem;
+}
+
+.answer-credit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.answer-credit-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+
+.answer-credit-team {
+  margin-top: 10px;
+}
+
+.from-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(66, 165, 245, 0.12);
+  border: 1px solid rgba(66, 165, 245, 0.35);
+  color: #90caf9;
+  max-width: 100%;
+}
+
+.from-ai-badge.from-ai-muted {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border);
+  color: var(--text-muted, #9aa3b5);
+}
+
+.field-label-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.line-item-meta-row {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
 .mark-pair-wrap {
   display: inline-flex;
   flex-direction: column;

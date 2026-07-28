@@ -534,11 +534,37 @@ export async function runMultiAgentReceiptPipeline(
     if (enabled(id)) ranIds.add(id)
   }
   final.aisUsed = Array.from(ranIds)
-  final.activeAiLabel = rejected
-    ? `Retry #${attempt} · on-device team huddle`
-    : 'On-device team huddle (AIs talking)'
+  // Ensure field attribution + human-readable “who answered”
+  const ocrLead = usable[0]?.ais[0]
+  final.fieldSources = {
+    ...(final.fieldSources ?? {}),
+    ocr: final.fieldSources?.ocr ?? ocrLead,
+    total: final.fieldSources?.total ?? 'cashier',
+    vendor: final.fieldSources?.vendor ?? 'clerk',
+    category: final.fieldSources?.category ?? 'ledger',
+    date: final.fieldSources?.date ?? 'clerk',
+    shipping: final.fieldSources?.shipping ?? 'ledger',
+    fees: final.fieldSources?.fees ?? 'ledger',
+    primary:
+      final.fieldSources?.primary ??
+      (enabled('quorum') ? 'quorum' : enabled('council') ? 'council' : ocrLead ?? 'arbiter'),
+  }
+  {
+    const src = final.fieldSources
+    const primaryName = src.primary ? getAiName(src.primary) : 'Team'
+    const ocrName = src.ocr ? getAiName(src.ocr) : null
+    final.fieldSources.answerLabel = rejected
+      ? `Retry #${attempt} · answer from ${primaryName}${ocrName ? ` (OCR: ${ocrName})` : ''}`
+      : `Answer from ${primaryName}${ocrName ? ` · OCR ${ocrName}` : ''} · team huddle`
+    final.activeAiLabel = final.fieldSources.answerLabel
+  }
+
   final.agentReport = [
     'LOCAL: All OCR + parse AIs run on this phone. No paid API keys.',
+    `WHO ANSWERED: ${final.fieldSources.answerLabel}`,
+    final.fieldSources.primary
+      ? `Primary: ${getAiName(final.fieldSources.primary)} · Total: ${getAiName(final.fieldSources.total ?? 'cashier')} · Vendor: ${getAiName(final.fieldSources.vendor ?? 'clerk')} · Lines: ${getAiName(final.fieldSources.category ?? 'ledger')}`
+      : null,
     rejected ? formatRejectionBrief(rejected) : null,
     diversifyReport || null,
     skipped.length ? `Disabled/skipped: ${skipped.join(', ')}` : null,
