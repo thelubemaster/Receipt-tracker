@@ -56,6 +56,19 @@ export interface AppSettings {
   disabledAis: import('./aiRoster').AiId[]
 }
 
+/** Which free AI primarily produced each field (for ✓/✗ weighting). */
+export type FieldSources = {
+  total?: AiId
+  vendor?: AiId
+  category?: AiId
+  date?: AiId
+  shipping?: AiId
+  /** line item id → AI */
+  lines?: Record<string, AiId>
+  /** Main OCR path that fed the parse */
+  ocr?: AiId
+}
+
 export interface ReceiptSuggestion {
   date: string | null
   vendor: string
@@ -69,6 +82,7 @@ export interface ReceiptSuggestion {
   agentReport?: string
   aisUsed?: AiId[]
   activeAiLabel?: string
+  fieldSources?: FieldSources
 }
 
 export type ScanFormSeed = Partial<Purchase> & {
@@ -79,6 +93,7 @@ export type ScanFormSeed = Partial<Purchase> & {
   source?: string
   subtotal?: number | null
   tax?: number | null
+  fieldSources?: FieldSources
 }
 
 export type Screen =

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import type { AiId } from './aiRoster'
 import {
   AI_ROSTER,
@@ -30,7 +37,9 @@ import {
   normalizeLeaderboard,
   rankLeaderboard,
   recordAiWin,
+  recordFieldMarks,
   recordScanParticipation,
+  reliabilityWeights,
   type LeaderboardMap,
 } from './leaderboard'
 import { isShippingLineItem, partitionLineItems } from './agents/lineItemsAgent'
@@ -47,7 +56,14 @@ import { formatMoney, parseMoneyInput } from './money'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { categoryBreakdown, totalSpent } from './stats'
-import type { AppSettings, CategoryId, Purchase, ReceiptLineItem, Screen } from './types'
+import type {
+  AppSettings,
+  CategoryId,
+  FieldSources,
+  Purchase,
+  ReceiptLineItem,
+  Screen,
+} from './types'
 import {
   checkForAppUpdates,
   type UpdateCheckStatus,
@@ -85,6 +101,7 @@ function emptyForm(
     source?: string
     subtotal?: number | null
     tax?: number | null
+    fieldSources?: FieldSources
   },
 ) {
   return {
@@ -104,7 +121,37 @@ function emptyForm(
     source: partial?.source ?? '',
     subtotal: partial?.subtotal ?? null,
     tax: partial?.tax ?? null,
+    fieldSources: (partial?.fieldSources ?? {}) as FieldSources,
   }
+}
+
+/** Expand / scroll long text blocks so nothing is permanently clipped. */
+function ExpandableBlock(props: {
+  title?: string
+  children: ReactNode
+  collapsedMax?: number
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const max = props.collapsedMax ?? 140
+  return (
+    <div className={`expandable-block${open ? ' expandable-open' : ''} ${props.className ?? ''}`}>
+      {props.title ? <div className="expandable-title">{props.title}</div> : null}
+      <div
+        className="expandable-body"
+        style={open ? undefined : { maxHeight: max }}
+      >
+        {props.children}
+      </div>
+      <button
+        type="button"
+        className="expandable-toggle"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? 'Show less' : 'Show more · scroll / expand'}
+      </button>
+    </div>
+  )
 }
 
 export default function App() {
@@ -367,6 +414,7 @@ export default function App() {
                 source: suggestion.source,
                 subtotal: suggestion.subtotal,
                 tax: suggestion.tax,
+                fieldSources: suggestion.fieldSources,
               },
               receiptBlob: blob,
               receiptPreviewUrl: previewUrl,
@@ -418,6 +466,34 @@ export default function App() {
                     userNote: formSnapshot.reportNote || undefined,
                     marks: formSnapshot.partMarks,
                   })
+                  // Weight AIs from ✓/✗ marks immediately
+                  void (async () => {
+                    const sources = formSnapshot.fieldSources ?? {}
+                    const marks = formSnapshot.partMarks
+                    if (!marks) return
+                    const entries: { aiId: AiId; mark: 'right' | 'wrong' }[] = []
+                    const push = (ai: AiId | undefined, m: FieldMark) => {
+                      if (!ai || m === 'unset') return
+                      if (m === 'right' || m === 'wrong') entries.push({ aiId: ai, mark: m })
+                    }
+                    push(sources.total, marks.total)
+                    push(sources.vendor, marks.vendor)
+                    push(sources.category, marks.category)
+                    push(sources.date, marks.date)
+                    push(sources.shipping, marks.shipping)
+                    if (marks.missingItems === 'wrong' && sources.ocr) {
+                      entries.push({ aiId: sources.ocr, mark: 'wrong' })
+                      if (sources.lines) {
+                        // lightly ding line agents too when list incomplete
+                      }
+                    }
+                    for (const li of formSnapshot.lineItems) {
+                      const m = marks.lines[li.id] ?? 'unset'
+                      const ai = sources.lines?.[li.id]
+                      push(ai, m)
+                    }
+                    if (entries.length) await recordFieldMarks(entries)
+                  })()
                   setScreen({
                     name: 'scan',
                     retryBlob: screen.receiptBlob,
@@ -778,10 +854,12 @@ function ScanScreen(props: {
           : 'Forge is deep-scanning the photo…',
     )
     try {
+      const board = normalizeLeaderboard(await getLeaderboard())
       const suggestion = await scanReceipt(blob, {
         maxPower: isRetry ? true : props.maxPowerMode,
         disabledAis: props.disabledAis,
         rejected,
+        reliability: reliabilityWeights(board),
         onProgress: (p) => {
           setProgress(p.progress)
           setStatus(p.message)
@@ -1015,32 +1093,42 @@ function ScanScreen(props: {
 
 type FormState = ReturnType<typeof emptyForm>
 
-/** ✓ / ✗ mark control for a field or line */
+/** ✓ / ✗ mark control for a field or line; shows which AI produced it */
 function MarkPair(props: {
   value: FieldMark
   onChange: (m: FieldMark) => void
   label?: string
+  /** AI that produced this field/line — used for weighting */
+  sourceAi?: AiId
 }) {
+  const aiName = props.sourceAi ? getAi(props.sourceAi).name : null
   return (
-    <div className="mark-pair" role="group" aria-label={props.label || 'Mark right or wrong'}>
-      <button
-        type="button"
-        className={`mark-btn mark-right${props.value === 'right' ? ' mark-active' : ''}`}
-        aria-pressed={props.value === 'right'}
-        title="Looks right"
-        onClick={() => props.onChange(props.value === 'right' ? 'unset' : 'right')}
-      >
-        ✓
-      </button>
-      <button
-        type="button"
-        className={`mark-btn mark-wrong${props.value === 'wrong' ? ' mark-active' : ''}`}
-        aria-pressed={props.value === 'wrong'}
-        title="Looks wrong"
-        onClick={() => props.onChange(props.value === 'wrong' ? 'unset' : 'wrong')}
-      >
-        ✗
-      </button>
+    <div className="mark-pair-wrap">
+      {aiName ? (
+        <span className="mark-ai-chip" title={`Produced by ${aiName}`}>
+          {getAi(props.sourceAi!).emoji} {aiName}
+        </span>
+      ) : null}
+      <div className="mark-pair" role="group" aria-label={props.label || 'Mark right or wrong'}>
+        <button
+          type="button"
+          className={`mark-btn mark-right${props.value === 'right' ? ' mark-active' : ''}`}
+          aria-pressed={props.value === 'right'}
+          title={aiName ? `Looks right — credit ${aiName}` : 'Looks right'}
+          onClick={() => props.onChange(props.value === 'right' ? 'unset' : 'right')}
+        >
+          ✓
+        </button>
+        <button
+          type="button"
+          className={`mark-btn mark-wrong${props.value === 'wrong' ? ' mark-active' : ''}`}
+          aria-pressed={props.value === 'wrong'}
+          title={aiName ? `Looks wrong — ding ${aiName}` : 'Looks wrong'}
+          onClick={() => props.onChange(props.value === 'wrong' ? 'unset' : 'wrong')}
+        >
+          ✗
+        </button>
+      </div>
     </div>
   )
 }
@@ -1221,6 +1309,11 @@ function PurchaseFormScreen(props: {
 
   function renderLineRow(li: (typeof form.lineItems)[0], tone?: 'shipping' | 'fee') {
     const mark = partMarks.lines[li.id] ?? 'unset'
+    const sourceAi =
+      tone === 'shipping'
+        ? form.fieldSources?.shipping ?? form.fieldSources?.lines?.[li.id]
+        : form.fieldSources?.lines?.[li.id]
+    const longDesc = (li.description || '').length > 48
     return (
       <div
         key={li.id}
@@ -1231,16 +1324,31 @@ function PurchaseFormScreen(props: {
             <MarkPair
               label={`Mark ${li.description || 'line'}`}
               value={mark}
+              sourceAi={sourceAi}
               onChange={(m) => setLineMark(li.id, m)}
             />
           </div>
         )}
-        <input
-          className="line-item-desc"
-          value={li.description}
-          placeholder="Item"
-          onChange={(e) => updateLine(li.id, { description: e.target.value })}
-        />
+        {longDesc ? (
+          <div className="line-item-desc-wrap">
+            <ExpandableBlock collapsedMax={56} className="line-expand">
+              <textarea
+                className="line-item-desc line-item-desc-tall"
+                value={li.description}
+                placeholder="Item"
+                rows={3}
+                onChange={(e) => updateLine(li.id, { description: e.target.value })}
+              />
+            </ExpandableBlock>
+          </div>
+        ) : (
+          <input
+            className="line-item-desc"
+            value={li.description}
+            placeholder="Item"
+            onChange={(e) => updateLine(li.id, { description: e.target.value })}
+          />
+        )}
         <input
           className="line-item-amt"
           inputMode="decimal"
@@ -1336,10 +1444,15 @@ function PurchaseFormScreen(props: {
       )}
 
       {(form.activeAiLabel || form.aisUsed.length > 0) && (
-        <div className="banner banner-info">
+        <ExpandableBlock collapsedMax={72} className="banner banner-info banner-expandable">
           <strong>AIs on this scan:</strong>{' '}
           {form.activeAiLabel || form.aisUsed.map((id) => getAi(id).name).join(', ')}
-        </div>
+          {form.aisUsed.length > 0 && (
+            <div className="muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
+              {form.aisUsed.map((id) => getAi(id).name).join(' · ')}
+            </div>
+          )}
+        </ExpandableBlock>
       )}
 
       {form.agentReport && (
@@ -1352,7 +1465,9 @@ function PurchaseFormScreen(props: {
             {showAgentReport ? '▼' : '▶'} Who scanned · full report
           </button>
           {showAgentReport && (
-            <pre className="agent-report-body">{form.agentReport}</pre>
+            <ExpandableBlock collapsedMax={160} className="agent-report-expand">
+              <pre className="agent-report-body agent-report-body-in-expand">{form.agentReport}</pre>
+            </ExpandableBlock>
           )}
         </div>
       )}
@@ -1431,6 +1546,7 @@ function PurchaseFormScreen(props: {
                     <MarkPair
                       label="Shipping section"
                       value={partMarks.shipping}
+                      sourceAi={form.fieldSources?.shipping}
                       onChange={(m) => setMark('shipping', m)}
                     />
                   )}
@@ -1531,6 +1647,7 @@ function PurchaseFormScreen(props: {
               <MarkPair
                 label="Total"
                 value={partMarks.total}
+                sourceAi={form.fieldSources?.total}
                 onChange={(m) => setMark('total', m)}
               />
             )}
@@ -1546,12 +1663,25 @@ function PurchaseFormScreen(props: {
         </div>
         <div className="field">
           <label htmlFor="description">Summary</label>
-          <input
-            id="description"
-            value={form.description}
-            onChange={(e) => update('description', e.target.value)}
-            placeholder="e.g. Rigid foam insulation"
-          />
+          {(form.description || '').length > 60 ? (
+            <ExpandableBlock collapsedMax={64}>
+              <textarea
+                id="description"
+                className="expandable-textarea"
+                value={form.description}
+                onChange={(e) => update('description', e.target.value)}
+                placeholder="e.g. Rigid foam insulation"
+                rows={3}
+              />
+            </ExpandableBlock>
+          ) : (
+            <input
+              id="description"
+              value={form.description}
+              onChange={(e) => update('description', e.target.value)}
+              placeholder="e.g. Rigid foam insulation"
+            />
+          )}
         </div>
         <div className={`field${partMarks.category === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.category === 'right' ? ' field-marked-right' : ''}`}>
           <div className="field-label-row">
@@ -1560,6 +1690,7 @@ function PurchaseFormScreen(props: {
               <MarkPair
                 label="Category"
                 value={partMarks.category}
+                sourceAi={form.fieldSources?.category}
                 onChange={(m) => setMark('category', m)}
               />
             )}
@@ -1583,16 +1714,30 @@ function PurchaseFormScreen(props: {
               <MarkPair
                 label="Vendor"
                 value={partMarks.vendor}
+                sourceAi={form.fieldSources?.vendor}
                 onChange={(m) => setMark('vendor', m)}
               />
             )}
           </div>
-          <input
-            id="vendor"
-            value={form.vendor}
-            onChange={(e) => update('vendor', e.target.value)}
-            placeholder="Home Depot, Amazon…"
-          />
+          {(form.vendor || '').length > 40 ? (
+            <ExpandableBlock collapsedMax={56}>
+              <textarea
+                id="vendor"
+                className="expandable-textarea"
+                value={form.vendor}
+                onChange={(e) => update('vendor', e.target.value)}
+                placeholder="Home Depot, Amazon…"
+                rows={2}
+              />
+            </ExpandableBlock>
+          ) : (
+            <input
+              id="vendor"
+              value={form.vendor}
+              onChange={(e) => update('vendor', e.target.value)}
+              placeholder="Home Depot, Amazon…"
+            />
+          )}
         </div>
         <div className={`field${partMarks.date === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.date === 'right' ? ' field-marked-right' : ''}`}>
           <div className="field-label-row">
@@ -1601,6 +1746,7 @@ function PurchaseFormScreen(props: {
               <MarkPair
                 label="Date"
                 value={partMarks.date}
+                sourceAi={form.fieldSources?.date}
                 onChange={(m) => setMark('date', m)}
               />
             )}
@@ -1615,12 +1761,16 @@ function PurchaseFormScreen(props: {
         </div>
         <div className="field">
           <label htmlFor="notes">Notes</label>
-          <textarea
-            id="notes"
-            value={form.notes}
-            onChange={(e) => update('notes', e.target.value)}
-            placeholder="Optional"
-          />
+          <ExpandableBlock collapsedMax={88}>
+            <textarea
+              id="notes"
+              className="expandable-textarea"
+              value={form.notes}
+              onChange={(e) => update('notes', e.target.value)}
+              placeholder="Optional"
+              rows={4}
+            />
+          </ExpandableBlock>
         </div>
         <div className="row-actions">
           <button type="button" className="btn btn-secondary" onClick={props.onBack}>
@@ -2212,7 +2362,8 @@ function SettingsScreen(props: {
         <div className="card settings-card">
           <strong>AI leaderboard</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Ranked by your “who scanned best?” wins, ratings, and how often each AI runs.
+            Ranked by best-scan wins, ✓/✗ field marks (weights future scans), and how often each
+            free AI runs.
           </p>
           <div className="leaderboard-list">
             {ranked.map((row) => (
@@ -2225,6 +2376,9 @@ function SettingsScreen(props: {
                     {row.stats.wins} win{row.stats.wins === 1 ? '' : 's'} · {row.stats.scans} scan
                     {row.stats.scans === 1 ? '' : 's'}
                     {row.avgRating != null ? ` · ★ ${row.avgRating}` : ''}
+                    {(row.stats.rights ?? 0) + (row.stats.wrongs ?? 0) > 0
+                      ? ` · ✓${row.stats.rights ?? 0} ✗${row.stats.wrongs ?? 0}`
+                      : ''}
                   </div>
                 </div>
                 <span className="lb-score">{Math.round(row.score)}</span>

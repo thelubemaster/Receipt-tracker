@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.12.0'
+export const APP_VERSION = '1.13.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.13.0',
+    date: '2026-07-28',
+    title: 'Expand long sections + ✓/✗ weights AIs',
+    changes: [
+      'Long text sections expand / scroll so you can read everything',
+      'Each mark shows which free AI produced that field or line',
+      '✓ credits and ✗ dings that AI — future scans weight trusted AIs higher',
+    ],
+  },
   {
     version: '1.12.0',
     date: '2026-07-28',

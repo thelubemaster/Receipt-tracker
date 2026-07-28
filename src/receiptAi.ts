@@ -23,6 +23,8 @@ export type ScanOptions = {
    * AIs diversify instead of returning the same answer.
    */
   rejected?: RejectedScanSnapshot
+  /** From user ✓/✗ history — boosts trusted free AIs in voting */
+  reliability?: Partial<Record<AiId, number>>
   onProgress?: (
     p: AgentProgress & {
       engine: 'on-device'
@@ -41,7 +43,7 @@ export async function scanReceipt(
   imageBlob: Blob,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  const { onProgress, maxPower = true, disabledAis = [], rejected } = options
+  const { onProgress, maxPower = true, disabledAis = [], rejected, reliability } = options
 
   onProgress?.({
     stage: 'prepare',
@@ -59,7 +61,7 @@ export async function scanReceipt(
   const local: LocalAgentResult = await runOnDeviceReceiptAgent(
     imageBlob,
     (p) => onProgress?.({ ...p, engine: 'on-device', aiId: p.aiId, aiName: p.aiName }),
-    { maxPower: rejected ? true : maxPower, disabledAis, rejected },
+    { maxPower: rejected ? true : maxPower, disabledAis, rejected, reliability },
   )
 
   onProgress?.({

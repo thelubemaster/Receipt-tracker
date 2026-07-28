@@ -1,7 +1,8 @@
-import type { CategoryId, ReceiptLineItem, ReceiptSuggestion } from '../types'
+import type { AiId } from '../aiRoster'
+import type { CategoryId, FieldSources, ReceiptLineItem, ReceiptSuggestion } from '../types'
 import { categorizeText } from './keywords'
 import type { LineItemsAgentResult } from './lineItemsAgent'
-import { primaryCategoryFromItems } from './lineItemsAgent'
+import { isShippingLineItem, primaryCategoryFromItems } from './lineItemsAgent'
 import type { MerchantAgentResult } from './merchantAgent'
 import { roundMoney } from './moneyParse'
 import type { TotalsAgentResult } from './totalsAgent'
@@ -143,6 +144,28 @@ export function runArbiterAgent(input: {
     totals.tax != null ? `tax $${totals.tax.toFixed(2)}` : null,
   ].filter(Boolean)
 
+  const fromSieve = (lines.notes || []).some((n) => /Sieve/i.test(n))
+  const lineAi: AiId = fromSieve ? 'sieve' : 'ledger'
+  const lineSources: Record<string, AiId> = {}
+  let shippingAi: AiId | undefined
+  for (const li of lineItems) {
+    if (isShippingLineItem(li.description)) {
+      shippingAi = 'ledger'
+      lineSources[li.id] = 'ledger'
+    } else {
+      lineSources[li.id] = lineAi
+    }
+  }
+
+  const fieldSources: FieldSources = {
+    total: 'cashier',
+    vendor: 'clerk',
+    date: merchant.date ? 'clerk' : undefined,
+    category: 'ledger',
+    shipping: shippingAi,
+    lines: lineSources,
+  }
+
   return {
     date: merchant.date,
     vendor: merchant.vendor,
@@ -157,6 +180,7 @@ export function runArbiterAgent(input: {
     confidence,
     rawText: rawText.slice(0, 6000),
     agentReport: report.join('\n'),
+    fieldSources,
     agreement: {
       totalSource,
       linesMatchTotal,

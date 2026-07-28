@@ -52,6 +52,7 @@ export async function runOnDeviceReceiptAgent(
     maxPower?: boolean
     disabledAis?: import('./aiRoster').AiId[]
     rejected?: import('./agents/retryFeedback').RejectedScanSnapshot
+    reliability?: Partial<Record<import('./aiRoster').AiId, number>>
   },
 ): Promise<LocalAgentResult> {
   return runMultiAgentReceiptPipeline(imageBlob, onProgress, options)

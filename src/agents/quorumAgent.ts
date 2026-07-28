@@ -54,6 +54,16 @@ export function runQuorumAgent(
     .filter(Boolean)
     .join('\n')
 
+  // Prefer winner field sources; fill gaps from loser
+  const fieldSources = {
+    ...(loser.fieldSources ?? {}),
+    ...(winner.fieldSources ?? {}),
+    lines: {
+      ...(loser.fieldSources?.lines ?? {}),
+      ...(winner.fieldSources?.lines ?? {}),
+    },
+  }
+
   return {
     date: winner.date || loser.date,
     vendor: winner.vendor || loser.vendor,
@@ -74,6 +84,7 @@ export function runQuorumAgent(
     confidence: Math.min(0.97, Math.max(winner.confidence, loser.confidence) + 0.04),
     rawText: (winner.rawText?.length || 0) >= (loser.rawText?.length || 0) ? winner.rawText : loser.rawText,
     agentReport: report,
+    fieldSources,
     aisUsed: Array.from(
       new Set([...(a.aisUsed ?? []), ...(b.aisUsed ?? []), 'quorum' as const]),
     ),

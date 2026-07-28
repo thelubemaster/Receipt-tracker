@@ -75,6 +75,15 @@ function parseFromText(
   if (enabled('sieve')) used.push('sieve')
   result.aisUsed = Array.from(new Set<AiId>(used))
   result.activeAiLabel = label
+  // Tag OCR contributor on field sources
+  const ocrAi = extraAis.find((id) =>
+    ['forge', 'lens', 'ruler', 'hammer', 'titan', 'scout', 'wedge', 'prism', 'bloom', 'mosaic'].includes(
+      id,
+    ),
+  )
+  if (ocrAi) {
+    result.fieldSources = { ...(result.fieldSources ?? {}), ocr: ocrAi }
+  }
   result.agentReport = [
     `Free parse path: ${label}`,
     ocrNote,
@@ -94,9 +103,14 @@ export type PipelineOptions = {
    * Pipeline diversifies OCR + picks a different parse.
    */
   rejected?: RejectedScanSnapshot
+  /** Reliability weights from user ✓/✗ history (boost trusted AIs) */
+  reliability?: Partial<Record<AiId, number>>
 }
 
-function scoreParseCandidate(c: LocalAgentResult): number {
+function scoreParseCandidate(
+  c: LocalAgentResult,
+  reliability?: Partial<Record<AiId, number>>,
+): number {
   let s = (c.confidence ?? 0) * 40
   s += Math.min(12, (c.lineItems?.length ?? 0) * 2)
   if (c.amount != null) s += 15
@@ -107,6 +121,12 @@ function scoreParseCandidate(c: LocalAgentResult): number {
     if (Math.abs(sum - c.amount) < 1 || Math.abs(sum - (c.subtotal ?? -1)) < 1) s += 12
   }
   s += Math.min(10, (c.description?.length ?? 0) / 20)
+  // Weight by historical reliability of AIs on this path
+  if (reliability && c.aisUsed?.length) {
+    const weights = c.aisUsed.map((id) => reliability[id] ?? 1)
+    const avg = weights.reduce((a, b) => a + b, 0) / weights.length
+    s *= avg
+  }
   return s
 }
 
@@ -125,8 +145,10 @@ export async function runMultiAgentReceiptPipeline(
   // Retries allow heavy tier unless user explicitly disabled those AIs
   const maxPower = rejected ? true : options.maxPower !== false
   const disabledAis = options.disabledAis ?? []
+  const reliability = options.reliability
   const enabled = (id: AiId) => isAiEnabled(id, { disabledAis, maxPowerMode: maxPower })
   const attempt = rejected?.attempt ?? 0
+  const scoreOf = (c: LocalAgentResult) => scoreParseCandidate(c, reliability)
 
   let workBlob = imageBlob
   if (rejected && attempt >= 1) {
@@ -336,7 +358,7 @@ export async function runMultiAgentReceiptPipeline(
   let final: LocalAgentResult
   let diversifyReport = ''
   if (rejected && parses.length) {
-    const picked = pickDiversifiedParse(parses, rejected, scoreParseCandidate)
+    const picked = pickDiversifiedParse(parses, rejected, scoreOf)
     final = picked.winner
     diversifyReport = picked.report
     if (enabled('quorum')) {
@@ -348,12 +370,14 @@ export async function runMultiAgentReceiptPipeline(
       }
     }
   } else if (enabled('quorum') && parses.length > 1) {
-    final = parses[0]
-    for (let i = 1; i < parses.length; i++) {
-      final = runQuorumAgent(final, parses[i])
+    // Prefer highest reliability-weighted score as seed
+    const ranked = [...parses].sort((a, b) => scoreOf(b) - scoreOf(a))
+    final = ranked[0]
+    for (let i = 1; i < ranked.length; i++) {
+      final = runQuorumAgent(final, ranked[i])
     }
   } else {
-    final = parses[0]
+    final = [...parses].sort((a, b) => scoreOf(b) - scoreOf(a))[0]
   }
 
   if (!final.rawText || councilText.length > final.rawText.length) {
@@ -398,7 +422,7 @@ export async function runMultiAgentReceiptPipeline(
       aiId: 'arbiter',
       aiName: 'Arbiter',
     })
-    const alt = pickDiversifiedParse(parses, rejected, (c) => scoreParseCandidate(c) * 0.5)
+    const alt = pickDiversifiedParse(parses, rejected, (c) => scoreOf(c) * 0.5)
     final = runCouncilAgent(
       {
         ...alt.winner,
