@@ -141,6 +141,11 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
+// Allow packaging/dev under root (e.g. containers) without crash
+if (process.getuid && process.getuid() === 0) {
+  app.commandLine.appendSwitch('no-sandbox')
+}
+
 app.whenReady().then(() => {
   buildMenu()
   createWindow()

@@ -17,4 +17,9 @@ if [[ ! -d node_modules/electron ]]; then
 fi
 
 echo "Starting Schoolie desktop app…"
-exec npx electron .
+# Electron refuses to run as root without --no-sandbox
+EXTRA=()
+if [[ "$(id -u)" -eq 0 ]]; then
+  EXTRA+=(--no-sandbox)
+fi
+exec npx electron . "${EXTRA[@]}" "$@"
