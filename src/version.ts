@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.15.2'
+export const APP_VERSION = '1.16.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.16.0',
+    date: '2026-07-28',
+    title: 'Free-form categories (engine parts, etc.)',
+    changes: [
+      'Categories are no longer a fixed schoolie-only list',
+      'AI invents groups like Engine & Powertrain or Fuel system from the receipt',
+      'Type any category name; similar spends group together on the home chart',
+    ],
+  },
   {
     version: '1.15.2',
     date: '2026-07-28',

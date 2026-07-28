@@ -1,22 +1,10 @@
 import type { AiId } from './aiRoster'
 
-export type CategoryId =
-  | 'structure'
-  | 'insulation'
-  | 'electrical'
-  | 'solar'
-  | 'plumbing'
-  | 'propane'
-  | 'interior'
-  | 'kitchen'
-  | 'bathroom'
-  | 'flooring'
-  | 'windows'
-  | 'furniture'
-  | 'tools'
-  | 'safety'
-  | 'fuel'
-  | 'misc'
+/**
+ * Free-form category id (slug). Built-in presets like "fuel" / "engine" still work;
+ * AI and user can invent new ones (e.g. "engine-powertrain", "filters-fluids").
+ */
+export type CategoryId = string
 
 export interface ReceiptLineItem {
   id: string
@@ -41,6 +29,12 @@ export interface Purchase {
   updatedAt: string
 }
 
+export interface CustomCategory {
+  id: string
+  label: string
+  color: string
+}
+
 export interface AppSettings {
   projectName: string
   lastSeenVersion: string
@@ -54,6 +48,11 @@ export interface AppSettings {
    * Core AIs (Scout, Ledger, Cashier, Clerk, Arbiter) cannot be disabled.
    */
   disabledAis: import('./aiRoster').AiId[]
+  /**
+   * Categories the AI or user invented (engine parts, etc.).
+   * Grouped with builtins in pickers and home breakdown.
+   */
+  customCategories: CustomCategory[]
 }
 
 /** Which free AI primarily produced each field (for ✓/✗ weighting). */

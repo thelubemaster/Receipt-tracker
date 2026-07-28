@@ -87,11 +87,26 @@ describe('Swag Performance Parts receipt (real user debug scan)', () => {
     expect(r.lineItems.some((i) => /shipping/i.test(i.description) && i.amount === 9.95)).toBe(true)
   })
 
-  it('purchase-level category is fuel for diesel filter parts', () => {
+  it('purchase-level category is fuel/engine family for diesel filter parts', () => {
     const r = parseReceiptText(SWAG_OCR)
-    expect(r.categoryId).toBe('fuel')
+    // free-form OK: fuel system or engine powertrain — not random tools dump
+    expect(['fuel', 'engine']).toContain(r.categoryId)
     const products = r.lineItems.filter((i) => !/shipping/i.test(i.description))
-    expect(products.every((i) => i.categoryId === 'fuel' || i.categoryId === 'tools')).toBe(true)
-    expect(products.some((i) => i.categoryId === 'fuel')).toBe(true)
+    expect(
+      products.every((i) =>
+        ['fuel', 'engine', 'tools', 'filters-fluids', 'filters-and-fluids'].includes(i.categoryId) ||
+        /fuel|engine|filter/i.test(i.categoryId),
+      ),
+    ).toBe(true)
+  })
+
+  it('invents engine category for powertrain parts without schoolie presets', () => {
+    const { categoryId, label } = categorizeText(
+      'IPD piston kit ARP head studs 7.3 Powerstroke turbo gasket',
+    )
+    expect(categoryId === 'engine' || /engine|powertrain|piston/i.test(categoryId + (label || ''))).toBe(
+      true,
+    )
+    expect(categoryId).not.toBe('misc')
   })
 })

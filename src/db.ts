@@ -111,6 +111,22 @@ export async function getSettings(): Promise<AppSettings> {
   const db = await getDb()
   const row = await db.get('settings', SETTINGS_KEY)
   const { sanitizeDisabledAis } = await import('./aiRoster')
+  const rawCustom = (row as { customCategories?: unknown } | undefined)?.customCategories
+  const customCategories = Array.isArray(rawCustom)
+    ? rawCustom
+        .filter(
+          (c): c is { id: string; label: string; color: string } =>
+            !!c &&
+            typeof c === 'object' &&
+            typeof (c as { id?: unknown }).id === 'string' &&
+            typeof (c as { label?: unknown }).label === 'string',
+        )
+        .map((c) => ({
+          id: c.id,
+          label: c.label,
+          color: typeof c.color === 'string' ? c.color : '#7f8c8d',
+        }))
+    : []
   return {
     projectName: row?.projectName ?? 'My Schoolie',
     lastSeenVersion: row?.lastSeenVersion ?? '',
@@ -118,6 +134,7 @@ export async function getSettings(): Promise<AppSettings> {
     disabledAis: sanitizeDisabledAis(
       (row as { disabledAis?: unknown } | undefined)?.disabledAis,
     ),
+    customCategories,
   }
 }
 

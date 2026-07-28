@@ -17,7 +17,13 @@ import {
 } from './aiRoster'
 import { runAiStabilitySuite, type StabilitySuiteResult } from './aiStability'
 import { probeDevice, type DeviceProbeResult } from './deviceProbe'
-import { CATEGORIES, getCategory } from './categories'
+import {
+  absorbCategoryLabels,
+  allCategories,
+  getCategory,
+  type Category,
+} from './categories'
+import { normalizeCategoryInput } from './agents/keywords'
 import {
   deletePurchase,
   getImage,
@@ -162,6 +168,7 @@ export default function App() {
     lastSeenVersion: '',
     maxPowerMode: true,
     disabledAis: [],
+    customCategories: [],
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -206,7 +213,12 @@ export default function App() {
   }
 
   const total = useMemo(() => totalSpent(purchases), [purchases])
-  const breakdown = useMemo(() => categoryBreakdown(purchases), [purchases])
+  const customCats = settings.customCategories ?? []
+  const categoryList = useMemo(() => allCategories(customCats), [customCats])
+  const breakdown = useMemo(
+    () => categoryBreakdown(purchases, customCats),
+    [purchases, customCats],
+  )
 
   async function handleSavePurchase(input: {
     id?: string
@@ -251,23 +263,43 @@ export default function App() {
         .slice(0, 6)
         .join('; ')
 
+    // Free-form category: accept id or typed label
+    const catNorm = normalizeCategoryInput(input.categoryId)
+    const normalizedLines = lineItems.map((li) => {
+      const n = normalizeCategoryInput(li.categoryId || catNorm.id)
+      return { ...li, categoryId: n.id }
+    })
+
     const aisUsed = input.aisUsed ?? []
     const purchase: Purchase = {
       id: input.id ?? newId(),
       date: input.date,
       description,
       amount,
-      categoryId: input.categoryId,
+      categoryId: catNorm.id,
       vendor: input.vendor.trim(),
       notes: input.notes.trim(),
       receiptImageId,
-      lineItems,
+      lineItems: normalizedLines,
       aisUsed,
       bestAiId: input.bestAiId ?? null,
       createdAt: input.id
         ? (purchases.find((p) => p.id === input.id)?.createdAt ?? now)
         : now,
       updatedAt: now,
+    }
+
+    // Absorb AI/user categories so they group on home next time
+    const labels = [
+      catNorm.label,
+      catNorm.id,
+      ...normalizedLines.map((l) => l.categoryId),
+    ]
+    const nextCustom = absorbCategoryLabels(settings.customCategories ?? [], labels)
+    if (nextCustom.length !== (settings.customCategories ?? []).length) {
+      const nextSettings = { ...settings, customCategories: nextCustom }
+      await saveSettings(nextSettings)
+      setSettings(nextSettings)
     }
 
     await savePurchase(purchase)
@@ -362,6 +394,7 @@ export default function App() {
           purchaseCount={purchases.length}
           breakdown={breakdown}
           purchases={purchases}
+          customCategories={customCats}
           onScan={() => {
             setError(null)
             setInfo(null)
@@ -437,6 +470,7 @@ export default function App() {
           initial={emptyForm(screen.initial)}
           receiptPreviewUrl={screen.receiptPreviewUrl}
           receiptBlob={screen.receiptBlob}
+          categories={categoryList}
           onBack={() => setScreen({ name: 'home' })}
           onTryAgain={
             screen.receiptBlob
@@ -525,6 +559,7 @@ export default function App() {
       {screen.name === 'edit' && (
         <EditPurchaseScreen
           purchaseId={screen.purchaseId}
+          categories={categoryList}
           onBack={() => setScreen({ name: 'detail', purchaseId: screen.purchaseId })}
           onSave={async (form, existingId) => {
             await handleSavePurchase({
@@ -548,6 +583,7 @@ export default function App() {
       {screen.name === 'detail' && (
         <DetailScreen
           purchaseId={screen.purchaseId}
+          customCategories={customCats}
           onBack={() => setScreen({ name: 'home' })}
           onEdit={() => setScreen({ name: 'edit', purchaseId: screen.purchaseId })}
           onDelete={async () => {
@@ -661,6 +697,7 @@ function HomeScreen(props: {
   purchaseCount: number
   breakdown: ReturnType<typeof categoryBreakdown>
   purchases: Purchase[]
+  customCategories: Category[]
   onScan: () => void
   onAdd: () => void
   onOpen: (id: string) => void
@@ -768,7 +805,9 @@ function HomeScreen(props: {
             >
               <span className="purchase-title">{p.description || 'Purchase'}</span>
               <span className="purchase-amount">{formatMoney(p.amount)}</span>
-              <span className="purchase-cat">{getCategory(p.categoryId).label}</span>
+              <span className="purchase-cat">
+                {getCategory(p.categoryId, props.customCategories).label}
+              </span>
               <span className="purchase-meta">
                 {p.date}
                 {p.vendor ? ` · ${p.vendor}` : ''}
@@ -1149,12 +1188,57 @@ function MarkPair(props: {
   )
 }
 
+function CategoryField(props: {
+  id: string
+  value: string
+  categories: Category[]
+  onChange: (id: string) => void
+  label?: string
+}) {
+  const listId = `${props.id}-list`
+  const display =
+    props.categories.find((c) => c.id === props.value)?.label ?? props.value
+  return (
+    <>
+      {props.label ? <label htmlFor={props.id}>{props.label}</label> : null}
+      <input
+        id={props.id}
+        list={listId}
+        value={display === props.value ? props.value : display}
+        onChange={(e) => {
+          const raw = e.target.value
+          const match = props.categories.find(
+            (c) => c.label === raw || c.id === raw,
+          )
+          if (match) props.onChange(match.id)
+          else props.onChange(raw)
+        }}
+        onBlur={(e) => {
+          const n = normalizeCategoryInput(e.target.value)
+          props.onChange(n.id)
+        }}
+        placeholder="Type a category (e.g. Engine parts)"
+        autoComplete="off"
+      />
+      <datalist id={listId}>
+        {props.categories.map((c) => (
+          <option key={c.id} value={c.label} />
+        ))}
+      </datalist>
+      <p className="muted mark-hint" style={{ marginTop: 4 }}>
+        Free-form — pick a suggestion or type a new one. Similar spends group under the same name.
+      </p>
+    </>
+  )
+}
+
 function PurchaseFormScreen(props: {
   title: string
   initial: FormState
   receiptPreviewUrl?: string
   receiptBlob?: Blob
   existingReceiptImageId?: string | null
+  categories: Category[]
   onBack: () => void
   /** Re-run scan; passes form + ✓/✗ marks so AIs fix only wrong parts */
   onTryAgain?: (
@@ -1382,18 +1466,29 @@ function PurchaseFormScreen(props: {
             updateLine(li.id, { amount: n ?? 0 })
           }}
         />
-        <select
+        <input
           className="line-item-cat"
-          value={li.categoryId}
-          onChange={(e) => updateLine(li.id, { categoryId: e.target.value as CategoryId })}
+          list={`line-cat-${li.id}`}
+          value={
+            props.categories.find((c) => c.id === li.categoryId)?.label ?? li.categoryId
+          }
+          onChange={(e) => {
+            const raw = e.target.value
+            const match = props.categories.find((c) => c.label === raw || c.id === raw)
+            updateLine(li.id, { categoryId: match ? match.id : raw })
+          }}
+          onBlur={(e) => {
+            const n = normalizeCategoryInput(e.target.value)
+            updateLine(li.id, { categoryId: n.id })
+          }}
           aria-label="Item category"
-        >
-          {CATEGORIES.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-            </option>
+          placeholder="Category"
+        />
+        <datalist id={`line-cat-${li.id}`}>
+          {props.categories.map((c) => (
+            <option key={c.id} value={c.label} />
           ))}
-        </select>
+        </datalist>
         <button
           type="button"
           className="line-item-remove"
@@ -1827,17 +1922,12 @@ function PurchaseFormScreen(props: {
               )}
             </div>
           </div>
-          <select
+          <CategoryField
             id="category"
             value={form.categoryId}
-            onChange={(e) => update('categoryId', e.target.value as CategoryId)}
-          >
-            {CATEGORIES.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </select>
+            categories={props.categories}
+            onChange={(id) => update('categoryId', id)}
+          />
         </div>
         <div className={`field${partMarks.vendor === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.vendor === 'right' ? ' field-marked-right' : ''}`}>
           <div className="field-label-row">
@@ -1966,6 +2056,7 @@ function PurchaseFormScreen(props: {
 
 function EditPurchaseScreen(props: {
   purchaseId: string
+  categories: Category[]
   onBack: () => void
   onSave: (form: FormState, existingReceiptImageId: string | null) => Promise<void>
   onError: (msg: string) => void
@@ -2005,6 +2096,7 @@ function EditPurchaseScreen(props: {
       initial={form}
       receiptPreviewUrl={previewUrl}
       existingReceiptImageId={receiptId}
+      categories={props.categories}
       onBack={props.onBack}
       onSave={async (f) => {
         await props.onSave(f, receiptId)
@@ -2015,6 +2107,7 @@ function EditPurchaseScreen(props: {
 
 function DetailScreen(props: {
   purchaseId: string
+  customCategories: Category[]
   onBack: () => void
   onEdit: () => void
   onDelete: () => void
@@ -2047,7 +2140,7 @@ function DetailScreen(props: {
     )
   }
 
-  const cat = getCategory(purchase.categoryId)
+  const cat = getCategory(purchase.categoryId, props.customCategories)
 
   return (
     <>
@@ -2112,7 +2205,7 @@ function DetailScreen(props: {
               const ordered = [
                 ...parts.products,
                 ...parts.shipping,
-                ...parts.other,
+                ...parts.fees,
               ]
               // if partition missed any (edge cases), fall back to original order
               const shown =
@@ -2127,7 +2220,7 @@ function DetailScreen(props: {
                   <span className="detail-label">
                     {isShippingLineItem(li.description) ? `🚚 ${li.description}` : li.description}
                     <span className="muted" style={{ display: 'block', fontSize: '0.75rem' }}>
-                      {getCategory(li.categoryId).label}
+                      {getCategory(li.categoryId, props.customCategories).label}
                     </span>
                   </span>
                   <span className="detail-value">{formatMoney(li.amount)}</span>
@@ -2244,6 +2337,7 @@ function SettingsScreen(props: {
               lastSeenVersion: props.settings.lastSeenVersion,
               maxPowerMode,
               disabledAis: sanitizeDisabledAis(disabledAis),
+              customCategories: props.settings.customCategories ?? [],
             })
             .finally(() => setSaving(false))
         }}
