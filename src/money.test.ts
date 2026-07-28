@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { formatMoney, parseMoneyInput, sumAmounts } from './money'
+import {
+  formatAmountForInput,
+  formatMoney,
+  parseMoneyInput,
+  parseMoneyInputLoose,
+  sanitizeMoneyTyping,
+  sumAmounts,
+} from './money'
 import { purchasesToCsv } from './exportData'
 import { categoryBreakdown, totalSpent } from './stats'
 import type { Purchase } from './types'
@@ -13,8 +20,23 @@ describe('money', () => {
   it('parses money input', () => {
     expect(parseMoneyInput('$1,234.56')).toBe(1234.56)
     expect(parseMoneyInput('12')).toBe(12)
+    expect(parseMoneyInput('12.50')).toBe(12.5)
     expect(parseMoneyInput('')).toBeNull()
     expect(parseMoneyInput('-3')).toBeNull()
+  })
+
+  it('keeps period while typing cents', () => {
+    expect(sanitizeMoneyTyping('12.')).toBe('12.')
+    expect(sanitizeMoneyTyping('12.5')).toBe('12.5')
+    expect(sanitizeMoneyTyping('12.50')).toBe('12.50')
+    expect(sanitizeMoneyTyping('12.509')).toBe('12.50')
+    expect(sanitizeMoneyTyping('$3.2')).toBe('3.2')
+    // incomplete drafts are not final numbers yet
+    expect(parseMoneyInput('12.')).toBeNull()
+    expect(parseMoneyInput('.')).toBeNull()
+    expect(parseMoneyInputLoose('12.')).toBe(12)
+    expect(parseMoneyInputLoose('12.50')).toBe(12.5)
+    expect(formatAmountForInput(12.5)).toBe('12.5')
   })
 
   it('sums amounts', () => {

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.17.2'
+export const APP_VERSION = '1.17.3'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,15 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.17.3',
+    date: '2026-07-28',
+    title: 'Type cents with a period',
+    changes: [
+      'Price fields keep the decimal point while you type (e.g. 12.50)',
+      'Line-item amounts and total amount both allow cents',
+    ],
+  },
   {
     version: '1.17.2',
     date: '2026-07-28',

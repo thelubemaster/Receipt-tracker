@@ -58,7 +58,13 @@ import {
   type ScanPartMarks,
 } from './agents/retryFeedback'
 import { BrandLockup, LogoMark } from './Logo'
-import { formatMoney, parseMoneyInput } from './money'
+import {
+  formatAmountForInput,
+  formatMoney,
+  parseMoneyInput,
+  parseMoneyInputLoose,
+  sanitizeMoneyTyping,
+} from './money'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -279,9 +285,9 @@ export default function App() {
     existingReceiptImageId?: string | null
   }) {
     setError(null)
-    const amount = parseMoneyInput(input.amountRaw)
+    const amount = parseMoneyInputLoose(input.amountRaw)
     if (amount == null) {
-      setError('Enter a valid amount.')
+      setError('Enter a valid amount (use a period for cents, e.g. 12.50).')
       return false
     }
     if (!input.description.trim() && !(input.lineItems && input.lineItems.length)) {
@@ -530,7 +536,7 @@ export default function App() {
                       : 0
                   const fromLabel = /Retry #(\d+)/i.exec(formSnapshot.activeAiLabel || '')
                   const attempt = (fromLabel ? Number(fromLabel[1]) : prev) + 1 || 1
-                  const amountNum = parseMoneyInput(formSnapshot.amount)
+                  const amountNum = parseMoneyInputLoose(formSnapshot.amount)
                   const rejected = snapshotFromSuggestion({
                     amount: amountNum,
                     vendor: formSnapshot.vendor,
@@ -1370,6 +1376,8 @@ function PurchaseFormScreen(props: {
   const [reporting, setReporting] = useState(false)
   const [reportNote, setReportNote] = useState('')
   const [partMarks, setPartMarks] = useState<ScanPartMarks>(() => emptyPartMarks())
+  /** Draft strings so typing "12." keeps the period (line amounts are numbers in state). */
+  const [lineAmountDrafts, setLineAmountDrafts] = useState<Record<string, string>>({})
 
   function setMark(key: keyof Omit<ScanPartMarks, 'lines'>, m: FieldMark) {
     setPartMarks((prev) => ({ ...prev, [key]: m }))
@@ -1434,7 +1442,7 @@ function PurchaseFormScreen(props: {
         mime = b.type || 'image/jpeg'
       }
 
-      const amountNum = parseMoneyInput(form.amount)
+      const amountNum = parseMoneyInputLoose(form.amount)
       const report = buildReportShell({
         userNote: reportNote,
         receiptDataUrl: dataUrl,
@@ -1575,12 +1583,35 @@ function PurchaseFormScreen(props: {
         )}
         <input
           className="line-item-amt"
+          type="text"
           inputMode="decimal"
-          value={li.amount === 0 ? '' : String(li.amount)}
+          enterKeyHint="done"
+          autoComplete="off"
+          value={
+            lineAmountDrafts[li.id] !== undefined
+              ? lineAmountDrafts[li.id]
+              : formatAmountForInput(li.amount)
+          }
           placeholder="0.00"
           onChange={(e) => {
-            const n = parseMoneyInput(e.target.value)
-            updateLine(li.id, { amount: n ?? 0 })
+            const typed = sanitizeMoneyTyping(e.target.value)
+            setLineAmountDrafts((d) => ({ ...d, [li.id]: typed }))
+            const n = parseMoneyInput(typed)
+            // Keep number in sync when complete; leave last good value while typing "12."
+            if (n != null) updateLine(li.id, { amount: n })
+            else if (typed === '' || typed === '.') updateLine(li.id, { amount: 0 })
+          }}
+          onBlur={() => {
+            const draft = lineAmountDrafts[li.id]
+            if (draft !== undefined) {
+              const n = parseMoneyInputLoose(draft)
+              updateLine(li.id, { amount: n ?? 0 })
+              setLineAmountDrafts((d) => {
+                const next = { ...d }
+                delete next[li.id]
+                return next
+              })
+            }
           }}
         />
         <input
@@ -1994,10 +2025,13 @@ function PurchaseFormScreen(props: {
           </div>
           <input
             id="amount"
+            type="text"
             inputMode="decimal"
+            enterKeyHint="done"
+            autoComplete="off"
             placeholder="0.00"
             value={form.amount}
-            onChange={(e) => update('amount', e.target.value)}
+            onChange={(e) => update('amount', sanitizeMoneyTyping(e.target.value))}
             required
           />
         </div>
