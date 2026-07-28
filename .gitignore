@@ -8,3 +8,6 @@ dist-ssr
 .superpowers
 *.tsbuildinfo
 debug-scans
+
+.schoolie-preview.pid
+.schoolie-preview.log
