@@ -5,8 +5,8 @@
   "installZipUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/Schoolie-Install.zip",
   "apkFileName": "schoolie.apk",
   "installZipFileName": "Schoolie-Install.zip",
-  "installerFile": "00-OPEN-ME-TO-INSTALL.html",
+  "installerFile": "00-INSTALL-Schoolie.apk",
   "releasesUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest",
   "repoUrl": "https://github.com/thelubemaster/Receipt-tracker",
-  "notes": "Download Schoolie-Install.zip, extract, open 00-OPEN-ME-TO-INSTALL.html (auto-runs installer). Or open schoolie.apk directly."
+  "notes": "Download Schoolie-Install.zip, extract, tap 00-INSTALL-Schoolie.apk (not the HTML). Android blocks HTML→APK local links."
 }

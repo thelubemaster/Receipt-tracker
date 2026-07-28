@@ -1,21 +1,26 @@
-Schoolie Android install pack
-=============================
+Schoolie Android — install pack
+================================
 
-1. Extract this whole folder (keep files together).
-2. Open:  00-OPEN-ME-TO-INSTALL.html
-   → It starts the installer and opens schoolie.apk.
-3. Tap Install on Android.
+After you EXTRACT this zip, install like this:
+
+  1. Open the extracted folder in Files / Downloads
+  2. Tap:   00-INSTALL-Schoolie.apk
+  3. Allow “Install unknown apps” if Android asks
+  4. Tap Install → Open
+
+That .apk file IS the installer. You do not need to open the .html file.
+
+(Why an HTML file? Only for notes. Opening HTML on Android cannot launch a
+nearby APK — Chrome shows ERR_FILE_NOT_FOUND. Always open the .apk.)
 
 Files
 -----
-  00-OPEN-ME-TO-INSTALL.html   ← open this after unzip (auto-runs installer)
-  schoolie.apk                 ← the Android app
-  install-adb.sh / install-adb.bat  ← optional: install from a computer with USB + adb
+  00-INSTALL-Schoolie.apk   ← TAP THIS to install
+  00-OPEN-ME-TO-INSTALL.html  (optional notes only)
+  README-INSTALL.txt
+  install-adb.sh / install-adb.bat  (optional, from a computer with USB)
 
-You can also just open schoolie.apk directly.
+Later updates: open the installed Schoolie app — it updates itself from GitHub.
 
-Updates later: open the installed Schoolie app — it pulls a small web-update.zip
-from GitHub by itself (no full APK needed for most updates).
-
-Download latest:
-  https://github.com/thelubemaster/Receipt-tracker/releases/latest
+Latest download:
+  https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/Schoolie-Install.zip
