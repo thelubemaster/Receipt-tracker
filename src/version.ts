@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.22.0'
+export const APP_VERSION = '1.22.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.22.1',
+    date: '2026-07-28',
+    title: 'Fix “object store was not found” crash on load',
+    changes: [
+      'Broken IndexedDB schemas self-heal or fall back to permanent local storage',
+      'Load APIs never throw storage errors — app always boots',
+      'Reset local data fully wipes and reopens a clean database',
+    ],
+  },
   {
     version: '1.21.1',
     date: '2026-07-28',

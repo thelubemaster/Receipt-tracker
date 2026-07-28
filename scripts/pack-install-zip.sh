@@ -23,16 +23,16 @@ mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-# Sort first + obvious name so people tap the APK, not a broken HTML link
+# One APK only (clear name sorts first). Duplicating schoolie.apk doubles the zip size.
 cp -f "$APK_SRC" "$STAGE/00-INSTALL-Schoolie.apk"
-# Same bytes under classic name for people who expect schoolie.apk
-cp -f "$APK_SRC" "$STAGE/schoolie.apk"
 
 cp -f "$ROOT/install-pack/00-OPEN-ME-TO-INSTALL.html" "$STAGE/"
 cp -f "$ROOT/install-pack/README-INSTALL.txt" "$STAGE/"
 cp -f "$ROOT/install-pack/install-adb.sh" "$STAGE/"
 cp -f "$ROOT/install-pack/install-adb.bat" "$STAGE/"
 chmod +x "$STAGE/install-adb.sh"
+# adb helpers expect schoolie.apk name — symlink name via copy of tiny note, script uses 00- name
+sed -i 's/schoolie\.apk/00-INSTALL-Schoolie.apk/g' "$STAGE/install-adb.sh" "$STAGE/install-adb.bat"
 
 ZIP="$OUT_DIR/Schoolie-Install.zip"
 rm -f "$ZIP"
