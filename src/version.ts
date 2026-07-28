@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.14.0'
+export const APP_VERSION = '1.14.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,15 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.14.1',
+    date: '2026-07-28',
+    title: 'Stability test runs every free AI',
+    changes: [
+      'Test free AIs no longer skips half the roster',
+      'Exercises Forge, Lens, Ruler, Wedge, Prism, Bloom, Mosaic, Hammer, Titan, Scout, parsers, Council, Seeker',
+    ],
+  },
   {
     version: '1.14.0',
     date: '2026-07-28',

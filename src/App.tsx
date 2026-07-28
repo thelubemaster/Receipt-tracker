@@ -2286,8 +2286,10 @@ function SettingsScreen(props: {
         <div className="card settings-card">
           <strong>Free AI stability test</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Runs a synthetic receipt through every free keyless AI (Forge, Lens, Sieve, Quorum, …)
-            and reports pass/fail + speed. Nothing leaves your phone.
+            Runs <strong>every</strong> free AI in the roster — OCR engines (Forge, Lens, Ruler, Wedge,
+            Prism, Bloom, Mosaic, Hammer, Titan, Scout), parsers (Ledger, Sieve, Cashier, Clerk,
+            Arbiter, Quorum, Council), and Seeker. Heavy ones can take a while; none are skipped on
+            purpose.
           </p>
           <button
             type="button"

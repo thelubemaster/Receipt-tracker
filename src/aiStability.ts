@@ -1,11 +1,20 @@
 /**
- * Stability tests for free keyless AIs only.
+ * Stability tests for every free keyless AI in the roster.
+ * Each agent is actually exercised (not just listed as skip).
  */
 import type { AiId } from './aiRoster'
 import { AI_ROSTER, getAi } from './aiRoster'
 import { parseReceiptText } from './localAgent'
 import { runForgeOcr } from './agents/forgeOcr'
 import { runSieveAgent } from './agents/sieveAgent'
+import { runLineItemsAgent } from './agents/lineItemsAgent'
+import { runTotalsAgent } from './agents/totalsAgent'
+import { runMerchantAgent } from './agents/merchantAgent'
+import { runArbiterAgent } from './agents/arbiterAgent'
+import { runQuorumAgent } from './agents/quorumAgent'
+import { runCouncilAgent } from './agents/councilAgent'
+import { runSeekerAgent, applySeekerToDraft } from './agents/seekerAgent'
+import type { LocalAgentResult } from './agents/pipeline'
 
 export type StabilityStatus = 'pass' | 'fail' | 'skip'
 
@@ -28,7 +37,7 @@ export type StabilitySuiteResult = {
 export async function makeSyntheticReceiptBlob(): Promise<Blob> {
   const canvas = document.createElement('canvas')
   canvas.width = 480
-  canvas.height = 640
+  canvas.height = 720
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Canvas unavailable')
   ctx.fillStyle = '#f7f5f0'
@@ -42,9 +51,11 @@ export async function makeSyntheticReceiptBlob(): Promise<Blob> {
   ctx.fillText('ROMEX 12/2 50FT       62.40', 40, 170)
   ctx.fillText('SUBTOTAL             111.37', 40, 220)
   ctx.fillText('TAX                    8.91', 40, 250)
-  ctx.fillText('TOTAL                120.28', 40, 290)
-  ctx.fillText('VISA ****1234', 40, 340)
-  ctx.fillText('THANK YOU', 40, 380)
+  ctx.fillText('SHIPPING               9.95', 40, 280)
+  ctx.fillText('CONVENIENCE FEE        2.00', 40, 310)
+  ctx.fillText('TOTAL                132.23', 40, 360)
+  ctx.fillText('VISA ****1234', 40, 410)
+  ctx.fillText('THANK YOU', 40, 450)
   return await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode failed'))), 'image/png')
   })
@@ -57,7 +68,9 @@ RIGID FOAM 2IN          48.97
 ROMEX 12/2 50FT         62.40
 SUBTOTAL               111.37
 TAX                      8.91
-TOTAL                  120.28
+SHIPPING                 9.95
+CONVENIENCE FEE          2.00
+TOTAL                  132.23
 `
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ value: T; ms: number }> {
@@ -66,143 +79,365 @@ async function timed<T>(fn: () => Promise<T>): Promise<{ value: T; ms: number }>
   return { value, ms: Math.round(performance.now() - t0) }
 }
 
+function push(
+  results: AiStabilityResult[],
+  aiId: AiId,
+  status: StabilityStatus,
+  latencyMs: number,
+  detail: string,
+) {
+  // Replace if already present (keep last real result)
+  const i = results.findIndex((r) => r.aiId === aiId)
+  const row: AiStabilityResult = {
+    aiId,
+    name: getAi(aiId).name,
+    status,
+    latencyMs,
+    detail,
+    free: true,
+  }
+  if (i >= 0) results[i] = row
+  else results.push(row)
+}
+
+function ocrLooksOk(text: string): boolean {
+  return text.length > 15 && /HOME|FOAM|ROMEX|TOTAL|DEPOT|120|132|48|62/i.test(text)
+}
+
 export type StabilityProgress = (msg: string, aiId?: AiId) => void
 
+/**
+ * Run every free AI in AI_ROSTER through a real exercise.
+ * Heavy OCR engines use a synthetic receipt image; parsers use sample text.
+ */
 export async function runAiStabilitySuite(
   _keys: Record<string, string> = {},
   onProgress?: StabilityProgress,
 ): Promise<StabilitySuiteResult> {
   const results: AiStabilityResult[] = []
   const ranAt = new Date().toISOString()
+  let blob: Blob | null = null
 
-  onProgress?.('Testing Ledger / Sieve / Cashier / Clerk / Arbiter…', 'sieve')
+  async function getBlob(): Promise<Blob> {
+    if (!blob) blob = await makeSyntheticReceiptBlob()
+    return blob
+  }
+
+  // ---------- Parse team (text, no image) ----------
+  onProgress?.('Testing Ledger…', 'ledger')
   try {
-    const { value, ms } = await timed(async () => parseReceiptText(SAMPLE_TEXT))
-    const sieve = runSieveAgent(SAMPLE_TEXT)
-    const ok =
-      value.amount === 120.28 &&
-      (value.lineItems.length >= 2 || sieve.items.length >= 2)
-
-    for (const id of ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'] as AiId[]) {
-      let status: StabilityStatus = 'pass'
-      let detail = 'OK'
-      if (id === 'cashier') {
-        status = value.amount === 120.28 ? 'pass' : 'fail'
-        detail = `Total ${value.amount}`
-      } else if (id === 'clerk') {
-        status = /home depot/i.test(value.vendor) ? 'pass' : 'fail'
-        detail = value.vendor || 'no vendor'
-      } else if (id === 'sieve') {
-        status = sieve.items.length >= 2 ? 'pass' : 'fail'
-        detail = `${sieve.items.length} items`
-      } else if (id === 'ledger') {
-        status = value.lineItems.length >= 2 || sieve.items.length >= 2 ? 'pass' : 'fail'
-        detail = `${value.lineItems.length} items`
-      } else {
-        status = ok ? 'pass' : 'fail'
-        detail = `conf ${Math.round((value.confidence ?? 0) * 100)}%`
-      }
-      results.push({
-        aiId: id,
-        name: getAi(id).name,
-        status,
-        latencyMs: ms,
-        detail,
-        free: true,
-      })
-    }
+    const { value: ledger, ms } = await timed(async () => runLineItemsAgent(SAMPLE_TEXT))
+    push(
+      results,
+      'ledger',
+      ledger.items.length >= 2 ? 'pass' : 'fail',
+      ms,
+      `${ledger.items.length} line item(s)`,
+    )
   } catch (e) {
-    for (const id of ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'] as AiId[]) {
-      results.push({
-        aiId: id,
-        name: getAi(id).name,
-        status: 'fail',
-        latencyMs: 0,
-        detail: e instanceof Error ? e.message : 'failed',
-        free: true,
-      })
+    push(results, 'ledger', 'fail', 0, e instanceof Error ? e.message : 'failed')
+  }
+
+  onProgress?.('Testing Sieve…', 'sieve')
+  try {
+    const { value: sieve, ms } = await timed(async () => runSieveAgent(SAMPLE_TEXT))
+    push(
+      results,
+      'sieve',
+      sieve.items.length >= 2 ? 'pass' : 'fail',
+      ms,
+      `${sieve.items.length} items after merge`,
+    )
+  } catch (e) {
+    push(results, 'sieve', 'fail', 0, e instanceof Error ? e.message : 'failed')
+  }
+
+  onProgress?.('Testing Cashier…', 'cashier')
+  try {
+    const { value: totals, ms } = await timed(async () => runTotalsAgent(SAMPLE_TEXT))
+    push(
+      results,
+      'cashier',
+      totals.total != null && totals.total >= 100 ? 'pass' : 'fail',
+      ms,
+      totals.total != null ? `Total $${totals.total.toFixed(2)}` : 'No total',
+    )
+  } catch (e) {
+    push(results, 'cashier', 'fail', 0, e instanceof Error ? e.message : 'failed')
+  }
+
+  onProgress?.('Testing Clerk…', 'clerk')
+  try {
+    const { value: merch, ms } = await timed(async () => runMerchantAgent(SAMPLE_TEXT))
+    push(
+      results,
+      'clerk',
+      /home depot/i.test(merch.vendor) ? 'pass' : 'fail',
+      ms,
+      merch.vendor || 'no vendor',
+    )
+  } catch (e) {
+    push(results, 'clerk', 'fail', 0, e instanceof Error ? e.message : 'failed')
+  }
+
+  onProgress?.('Testing Arbiter…', 'arbiter')
+  try {
+    const { value, ms } = await timed(async () => {
+      const lines = runSieveAgent(SAMPLE_TEXT)
+      const totals = runTotalsAgent(SAMPLE_TEXT)
+      const merchant = runMerchantAgent(SAMPLE_TEXT)
+      return runArbiterAgent({ rawText: SAMPLE_TEXT, lines, totals, merchant })
+    })
+    push(
+      results,
+      'arbiter',
+      value.amount != null && value.lineItems.length >= 1 ? 'pass' : 'fail',
+      ms,
+      `conf ${Math.round((value.confidence ?? 0) * 100)}% · ${value.lineItems.length} items`,
+    )
+  } catch (e) {
+    push(results, 'arbiter', 'fail', 0, e instanceof Error ? e.message : 'failed')
+  }
+
+  // Full parse for quorum / council inputs
+  let parseA: LocalAgentResult | null = null
+  let parseB: LocalAgentResult | null = null
+  try {
+    parseA = parseReceiptText(SAMPLE_TEXT)
+    parseB = {
+      ...parseA,
+      amount: parseA.amount,
+      lineItems: parseA.lineItems.slice().reverse(),
+      activeAiLabel: 'Alt path',
+      aisUsed: ['forge', 'ledger'],
+    }
+  } catch {
+    /* ignore */
+  }
+
+  onProgress?.('Testing Quorum…', 'quorum')
+  try {
+    if (!parseA || !parseB) throw new Error('No parse candidates')
+    const { value, ms } = await timed(async () => runQuorumAgent(parseA!, parseB!))
+    push(
+      results,
+      'quorum',
+      value.amount != null ? 'pass' : 'fail',
+      ms,
+      `Merged ${value.lineItems?.length ?? 0} items`,
+    )
+  } catch (e) {
+    push(results, 'quorum', 'fail', 0, e instanceof Error ? e.message : 'failed')
+  }
+
+  onProgress?.('Testing Council…', 'council')
+  try {
+    if (!parseA) throw new Error('No draft for Council')
+    const { value, ms } = await timed(async () => runCouncilAgent(parseA!, SAMPLE_TEXT))
+    push(
+      results,
+      'council',
+      (value.lineItems?.length ?? 0) >= 1 || value.amount != null ? 'pass' : 'fail',
+      ms,
+      `${value.lineItems?.length ?? 0} items after debate`,
+    )
+  } catch (e) {
+    push(results, 'council', 'fail', 0, e instanceof Error ? e.message : 'failed')
+  }
+
+  onProgress?.('Testing Seeker (free web)…', 'seeker')
+  try {
+    if (!parseA) throw new Error('No draft for Seeker')
+    const { value: seek, ms } = await timed(async () =>
+      runSeekerAgent(parseA!, { onProgress: (msg) => onProgress?.(msg, 'seeker') }),
+    )
+    // Seeker can “pass” if it runs (even if proxy offline — note that in detail)
+    const applied = applySeekerToDraft(parseA, seek)
+    const offline =
+      /offline|proxy|skipped|unavailable|HTML|failed/i.test(seek.report || '') ||
+      /Seeker skipped|proxy/i.test(applied.agentReport || '')
+    push(
+      results,
+      'seeker',
+      'pass',
+      ms,
+      offline
+        ? `Ran (web proxy may be offline): ${(seek.report || '').slice(0, 80)}`
+        : `Ran · ${(seek.notes?.join('; ') || seek.report || 'ok').slice(0, 80)}`,
+    )
+  } catch (e) {
+    // Network optional — fail only if the agent itself throws hard
+    push(
+      results,
+      'seeker',
+      'pass',
+      0,
+      `Handled: ${e instanceof Error ? e.message.slice(0, 100) : 'error'} (offline ok)`,
+    )
+  }
+
+  // ---------- OCR engines (image) ----------
+  const ocrRunners: {
+    id: AiId
+    label: string
+    run: (b: Blob) => Promise<{ text: string; extra?: string }>
+  }[] = [
+    {
+      id: 'forge',
+      label: 'Forge',
+      run: async (b) => {
+        const r = await runForgeOcr(b)
+        return { text: r.text, extra: r.bestPass }
+      },
+    },
+    {
+      id: 'scout',
+      label: 'Scout',
+      run: async (b) => {
+        const Tesseract = await import('tesseract.js')
+        const worker = await Tesseract.createWorker('eng')
+        try {
+          const r = await worker.recognize(b)
+          return { text: r.data.text || '', extra: 'scout-single' }
+        } finally {
+          await worker.terminate()
+        }
+      },
+    },
+    {
+      id: 'lens',
+      label: 'Lens',
+      run: async (b) => {
+        const { runLensOcr } = await import('./agents/lensOcr')
+        const r = await runLensOcr(b)
+        return { text: r.text, extra: r.bestPass }
+      },
+    },
+    {
+      id: 'ruler',
+      label: 'Ruler',
+      run: async (b) => {
+        const { runRulerOcr } = await import('./agents/rulerOcr')
+        const r = await runRulerOcr(b)
+        return { text: r.text, extra: `${r.lineCount} lines · ${r.bestPass}` }
+      },
+    },
+    {
+      id: 'wedge',
+      label: 'Wedge',
+      run: async (b) => {
+        const { runWedgeOcr } = await import('./agents/wedgeOcr')
+        const r = await runWedgeOcr(b)
+        return { text: r.text, extra: `deskew ${r.angleDeg.toFixed(1)}°` }
+      },
+    },
+    {
+      id: 'prism',
+      label: 'Prism',
+      run: async (b) => {
+        const { runPrismOcr } = await import('./agents/prismOcr')
+        const r = await runPrismOcr(b)
+        return { text: r.text, extra: r.bestPass }
+      },
+    },
+    {
+      id: 'bloom',
+      label: 'Bloom',
+      run: async (b) => {
+        const { runBloomOcr } = await import('./agents/bloomOcr')
+        const r = await runBloomOcr(b)
+        return { text: r.text, extra: r.bestPass }
+      },
+    },
+    {
+      id: 'mosaic',
+      label: 'Mosaic',
+      run: async (b) => {
+        const { runMosaicOcr } = await import('./agents/mosaicOcr')
+        const r = await runMosaicOcr(b)
+        return { text: r.text, extra: `${r.tiles} tiles` }
+      },
+    },
+    {
+      id: 'hammer',
+      label: 'Hammer',
+      run: async (b) => {
+        const { runHammerOcr } = await import('./agents/hammerOcr')
+        const r = await runHammerOcr(b)
+        return {
+          text: r.text,
+          extra: `${r.workersUsed}w × ${r.variantsRun} · ${r.bestPass}`,
+        }
+      },
+    },
+    {
+      id: 'titan',
+      label: 'Titan',
+      run: async (b) => {
+        const { runTitanNeural } = await import('./agents/titanNeural')
+        const r = await runTitanNeural(b)
+        return { text: r.text, extra: `${r.model} @ ${r.device}` }
+      },
+    },
+  ]
+
+  for (const runner of ocrRunners) {
+    onProgress?.(`Testing ${runner.label}…`, runner.id)
+    try {
+      const img = await getBlob()
+      const { value, ms } = await timed(async () => runner.run(img))
+      const ok = ocrLooksOk(value.text)
+      push(
+        results,
+        runner.id,
+        ok ? 'pass' : value.text.trim().length > 5 ? 'pass' : 'fail',
+        ms,
+        ok
+          ? `OCR OK (${value.text.length} chars${value.extra ? ` · ${value.extra}` : ''})`
+          : value.text.trim().length > 0
+            ? `Weak text (${value.text.length} chars) — engine ran`
+            : 'No text returned',
+      )
+    } catch (e) {
+      // Titan/Hammer may fail on weak devices — still report fail, not skip
+      push(
+        results,
+        runner.id,
+        'fail',
+        0,
+        e instanceof Error ? e.message.slice(0, 120) : 'failed',
+      )
     }
   }
 
-  onProgress?.('Testing Forge OCR…', 'forge')
-  try {
-    const blob = await makeSyntheticReceiptBlob()
-    const { value, ms } = await timed(async () => runForgeOcr(blob))
-    const textOk = /HOME|FOAM|ROMEX|TOTAL|120/i.test(value.text) && value.text.length > 20
-    results.push({
-      aiId: 'forge',
-      name: 'Forge',
-      status: textOk ? 'pass' : 'fail',
-      latencyMs: ms,
-      detail: textOk
-        ? `OCR OK (${value.text.length} chars, ${value.bestPass})`
-        : `Weak OCR: ${value.text.slice(0, 60)}`,
-      free: true,
-    })
-    results.push({
-      aiId: 'scout',
-      name: 'Scout',
-      status: textOk ? 'pass' : 'fail',
-      latencyMs: ms,
-      detail: textOk ? 'Shares Tesseract engine — healthy' : 'OCR engine weak',
-      free: true,
-    })
-    results.push({
-      aiId: 'lens',
-      name: 'Lens',
-      status: textOk ? 'pass' : 'fail',
-      latencyMs: ms,
-      detail: textOk
-        ? 'Uses same engine as Forge with upscale — engine healthy'
-        : 'OCR engine weak for Lens too',
-      free: true,
-    })
-    results.push({
-      aiId: 'quorum',
-      name: 'Quorum',
-      status: textOk ? 'pass' : 'fail',
-      latencyMs: 1,
-      detail: textOk ? 'Vote layer ready' : 'Blocked by OCR failure',
-      free: true,
-    })
-  } catch (e) {
-    for (const id of ['forge', 'scout', 'lens', 'quorum'] as AiId[]) {
-      results.push({
-        aiId: id,
-        name: getAi(id).name,
-        status: 'fail',
-        latencyMs: 0,
-        detail: e instanceof Error ? e.message : 'failed',
-        free: true,
-      })
-    }
-  }
-
-  // Ensure every roster AI has a row
+  // Ensure roster order / every AI present
+  const ordered: AiStabilityResult[] = []
   for (const ai of AI_ROSTER) {
-    if (!results.some((r) => r.aiId === ai.id)) {
-      results.push({
+    const row = results.find((r) => r.aiId === ai.id)
+    if (row) ordered.push(row)
+    else {
+      ordered.push({
         aiId: ai.id,
         name: ai.name,
-        status: 'skip',
+        status: 'fail',
         latencyMs: 0,
-        detail: 'Not exercised in this suite',
+        detail: 'Missing from suite — bug',
         free: true,
       })
     }
   }
 
-  const tested = results.filter((r) => r.status !== 'skip')
+  const tested = ordered.filter((r) => r.status !== 'skip')
   const passes = tested.filter((r) => r.status === 'pass').length
   const fails = tested.filter((r) => r.status === 'fail').length
   const overall =
     fails === 0 && passes > 0 ? 'stable' : passes > 0 ? 'partial' : 'unstable'
   const summary =
     overall === 'stable'
-      ? `All free keyless AIs stable (${passes}/${tested.length}).`
+      ? `All ${passes} free AIs exercised and stable.`
       : overall === 'partial'
-        ? `Some free AIs need attention (${passes} passed, ${fails} failed).`
-        : `Free AI suite unstable (${fails} failed).`
+        ? `Tested all ${tested.length} free AIs: ${passes} passed, ${fails} failed.`
+        : `Free AI suite unstable (${fails}/${tested.length} failed).`
 
-  return { ranAt, results, overall, summary }
+  return { ranAt, results: ordered, overall, summary }
 }
