@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.21.0'
+export const APP_VERSION = '1.21.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,15 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.21.1',
+    date: '2026-07-28',
+    title: 'Installed APK opens the app, not the download screen',
+    changes: [
+      'Detect Capacitor / Android WebView so the installer is hidden inside the APK',
+      'App tray icon opens Schoolie home directly',
+    ],
+  },
   {
     version: '1.21.0',
     date: '2026-07-28',

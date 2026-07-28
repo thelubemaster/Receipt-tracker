@@ -203,8 +203,12 @@ export default function App() {
   const [whatsNew, setWhatsNew] = useState<ChangelogEntry[] | null>(null)
   const [whatsNewMode, setWhatsNewMode] = useState<'update' | 'history'>('update')
   const [pendingSwUpdate, setPendingSwUpdate] = useState<(() => void) | null>(null)
-  /** Android: website is an installer first; skip once user chooses browser */
-  const [showInstaller, setShowInstaller] = useState(() => shouldShowAndroidInstaller())
+  /** Android browser only: full-page installer. Never in the installed APK. */
+  const [showInstaller, setShowInstaller] = useState(false)
+  useEffect(() => {
+    // Re-check after load so Capacitor bridge / WebView UA is available
+    setShowInstaller(shouldShowAndroidInstaller())
+  }, [])
 
   const refresh = useCallback(async () => {
     const [p, s] = await Promise.all([listPurchases(), getSettings()])

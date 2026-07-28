@@ -49,13 +49,65 @@ export async function promptInstall(): Promise<'accepted' | 'dismissed' | 'unava
   return outcome
 }
 
-/** Already launched as installed app (full screen, no browser chrome) */
+/**
+ * True when running inside the real Android/iOS package (Capacitor WebView),
+ * not Chrome. Capacitor injects window.Capacitor.
+ */
+export function isNativeCapacitorApp(): boolean {
+  if (typeof window === 'undefined') return false
+  const cap = (
+    window as Window & {
+      Capacitor?: {
+        isNativePlatform?: () => boolean
+        getPlatform?: () => string
+      }
+    }
+  ).Capacitor
+  if (cap) {
+    try {
+      if (typeof cap.isNativePlatform === 'function' && cap.isNativePlatform()) return true
+    } catch {
+      /* ignore */
+    }
+    try {
+      const p = cap.getPlatform?.()
+      if (p === 'android' || p === 'ios') return true
+    } catch {
+      /* ignore */
+    }
+  }
+  // Android System WebView (APK) user-agent marker — "; wv)"
+  if (/Android/i.test(navigator.userAgent) && /; wv\)/i.test(navigator.userAgent)) {
+    return true
+  }
+  // Capacitor Android often loads from https://localhost
+  try {
+    const { protocol, hostname } = window.location
+    if (
+      hostname === 'localhost' &&
+      (protocol === 'https:' || protocol === 'http:' || protocol === 'capacitor:')
+    ) {
+      // Only treat as native if not a normal desktop browser on localhost
+      if (/Android|iPhone|iPad/i.test(navigator.userAgent)) return true
+    }
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
+/** Already launched as installed app (APK, PWA, or desktop shell) */
 export function isStandaloneApp(): boolean {
   if (typeof window === 'undefined') return false
+  // Real Android APK / iOS package — never show the download installer
+  if (isNativeCapacitorApp()) return true
+  if (window.schoolieDesktop?.isDesktop) return true
   const mq = window.matchMedia('(display-mode: standalone)').matches
-  const ios = 'standalone' in navigator && (navigator as Navigator & { standalone?: boolean }).standalone
+  const ios =
+    'standalone' in navigator &&
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
   const twa = document.referrer.includes('android-app://')
-  return Boolean(mq || ios || twa || window.schoolieDesktop?.isDesktop)
+  return Boolean(mq || ios || twa)
 }
 
 export function isAndroid(): boolean {
