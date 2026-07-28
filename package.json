@@ -22,6 +22,7 @@
     "start": "bash scripts/ensure-running.sh",
     "start:android": "node scripts/serve-android.mjs",
     "apk": "bash scripts/build-apk.sh",
+    "apk:pack": "bash scripts/pack-install-zip.sh",
     "apk:update": "npm run build && node -e \"require('child_process').execSync('cd dist && zip -qr downloads/web-update.zip . -x downloads/schoolie.apk -x downloads/web-update.zip',{stdio:'inherit'})\"",
     "stop": "bash scripts/stop-server.sh",
     "test": "vitest run",

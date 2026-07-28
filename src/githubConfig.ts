@@ -18,6 +18,12 @@ export const GITHUB_RELEASES_PAGE = `${GITHUB_REPO_URL}/releases/latest`
  */
 export const GITHUB_APK_LATEST = `${GITHUB_REPO_URL}/releases/latest/download/schoolie.apk`
 
+/**
+ * Install pack: zip with schoolie.apk + 00-OPEN-ME-TO-INSTALL.html
+ * (extract → open the HTML → auto-runs Android installer).
+ */
+export const GITHUB_INSTALL_ZIP_LATEST = `${GITHUB_REPO_URL}/releases/latest/download/Schoolie-Install.zip`
+
 /** Latest release API (public repos; OTA + install metadata). */
 export const GITHUB_RELEASES_LATEST = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
 
