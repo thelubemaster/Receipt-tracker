@@ -83,5 +83,10 @@ export type Screen =
     }
   | { name: 'edit'; purchaseId: string }
   | { name: 'detail'; purchaseId: string }
-  | { name: 'scan' }
+  | {
+      name: 'scan'
+      /** Re-run AI on this photo (e.g. after a bad first read) */
+      retryBlob?: Blob
+      retryPreviewUrl?: string
+    }
   | { name: 'settings' }

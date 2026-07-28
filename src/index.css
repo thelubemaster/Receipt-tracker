@@ -531,6 +531,30 @@ a {
   grid-template-columns: 1fr;
 }
 
+.scan-retry-card {
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scan-retry-card-warn {
+  border-color: rgba(232, 165, 75, 0.45);
+  box-shadow: 0 0 0 1px rgba(232, 165, 75, 0.12);
+}
+
+.scan-retry-title {
+  font-size: 1.05rem;
+  margin-top: 4px;
+}
+
+.receipt-preview-sm {
+  max-height: 140px;
+  object-fit: cover;
+  margin-bottom: 10px;
+  border-radius: 12px;
+}
+
 .receipt-preview {
   width: 100%;
   max-height: 220px;

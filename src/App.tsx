@@ -322,11 +322,14 @@ export default function App() {
       {screen.name === 'scan' && (
         <ScanScreen
           maxPowerMode={settings.maxPowerMode}
+          retryBlob={screen.retryBlob}
+          retryPreviewUrl={screen.retryPreviewUrl}
           onBack={() => setScreen({ name: 'home' })}
           onNeedSettings={() => setScreen({ name: 'settings' })}
           onParsed={(suggestion, blob, previewUrl) => {
             const aisUsed = (suggestion.aisUsed ?? []) as AiId[]
             void recordScanParticipation(aisUsed)
+            setError(null)
             setScreen({
               name: 'add',
               initial: {
@@ -368,6 +371,19 @@ export default function App() {
           receiptPreviewUrl={screen.receiptPreviewUrl}
           receiptBlob={screen.receiptBlob}
           onBack={() => setScreen({ name: 'home' })}
+          onTryAgain={
+            screen.receiptBlob
+              ? () => {
+                  setError(null)
+                  setInfo(null)
+                  setScreen({
+                    name: 'scan',
+                    retryBlob: screen.receiptBlob,
+                    retryPreviewUrl: screen.receiptPreviewUrl,
+                  })
+                }
+              : undefined
+          }
           onDebugMessage={(msg) => setInfo(msg)}
           onSave={async (form, receiptBlob) => {
             await handleSavePurchase({
@@ -664,6 +680,8 @@ function HomeScreen(props: {
 
 function ScanScreen(props: {
   maxPowerMode: boolean
+  retryBlob?: Blob
+  retryPreviewUrl?: string
   onBack: () => void
   onNeedSettings: () => void
   onParsed: (suggestion: ScanResult, blob: Blob, previewUrl: string) => void
@@ -674,6 +692,9 @@ function ScanScreen(props: {
   const [status, setStatus] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
   const [activeAi, setActiveAi] = useState<{ name: string; id?: AiId } | null>(null)
+  const [scanError, setScanError] = useState<string | null>(null)
+  const [heldBlob, setHeldBlob] = useState<Blob | null>(props.retryBlob ?? null)
+  const [heldPreview, setHeldPreview] = useState<string | null>(props.retryPreviewUrl ?? null)
 
   const whoWillScan = useMemo(() => {
     const base = AI_ROSTER.map((a) => a.name)
@@ -683,19 +704,16 @@ function ScanScreen(props: {
     return base
   }, [props.maxPowerMode])
 
-  async function handleFile(file: File | null) {
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      props.onError('Please choose a photo of the receipt.')
-      return
-    }
-
-    const blob = file
-    const previewUrl = URL.createObjectURL(blob)
-
+  async function runScan(blob: Blob, previewUrl: string) {
+    setScanError(null)
+    setHeldBlob(blob)
+    setHeldPreview(previewUrl)
     setBusy(true)
     setProgress(0.02)
-    setActiveAi({ name: props.maxPowerMode ? 'Hammer' : 'Forge', id: props.maxPowerMode ? 'hammer' : 'forge' })
+    setActiveAi({
+      name: props.maxPowerMode ? 'Hammer' : 'Forge',
+      id: props.maxPowerMode ? 'hammer' : 'forge',
+    })
     setStatus(
       props.maxPowerMode
         ? 'Hammer is spinning up parallel OCR workers…'
@@ -712,14 +730,32 @@ function ScanScreen(props: {
       })
       props.onParsed(suggestion, blob, previewUrl)
     } catch (e) {
-      props.onError(e instanceof Error ? e.message : 'Scan failed — enter details manually.')
-      props.onManualWithPhoto(blob, previewUrl)
+      const msg = e instanceof Error ? e.message : 'Scan failed — try again or enter details manually.'
+      setScanError(msg)
+      props.onError(msg)
     } finally {
       setBusy(false)
       setStatus(null)
       setProgress(0)
       setActiveAi(null)
     }
+  }
+
+  async function handleFile(file: File | null) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setScanError('Please choose a photo of the receipt.')
+      props.onError('Please choose a photo of the receipt.')
+      return
+    }
+    const previewUrl = URL.createObjectURL(file)
+    await runScan(file, previewUrl)
+  }
+
+  function clearHeldPhoto() {
+    setHeldBlob(null)
+    setHeldPreview(null)
+    setScanError(null)
   }
 
   return (
@@ -741,6 +777,9 @@ function ScanScreen(props: {
 
       {busy ? (
         <div className="card agent-status">
+          {heldPreview && (
+            <img className="receipt-preview receipt-preview-sm" src={heldPreview} alt="Scanning" />
+          )}
           <div className="spinner" />
           <div className="status-title">{status}</div>
           {activeAi && (
@@ -758,6 +797,84 @@ function ScanScreen(props: {
             <div className="progress-fill" style={{ width: `${Math.round(progress * 100)}%` }} />
           </div>
           <div className="muted">{Math.round(progress * 100)}%</div>
+        </div>
+      ) : scanError && heldBlob ? (
+        <div className="card scan-retry-card">
+          {heldPreview && (
+            <img className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+          )}
+          <div className="banner banner-error" role="alert" style={{ margin: 0 }}>
+            {scanError}
+          </div>
+          <strong className="scan-retry-title">Scan didn&apos;t work</strong>
+          <p className="muted" style={{ margin: '6px 0 0' }}>
+            Try the same photo again, take a clearer shot, or type the purchase in.
+          </p>
+          <div className="row-actions stack" style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void runScan(heldBlob, heldPreview ?? URL.createObjectURL(heldBlob))}
+            >
+              Try again
+            </button>
+            <label className="btn btn-secondary">
+              New photo
+              <input
+                className="hidden-input"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => {
+                  clearHeldPhoto()
+                  void handleFile(e.target.files?.[0] ?? null)
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setScanError(null)
+                props.onManualWithPhoto(heldBlob, heldPreview ?? URL.createObjectURL(heldBlob))
+              }}
+            >
+              Enter manually
+            </button>
+          </div>
+        </div>
+      ) : heldBlob && heldPreview ? (
+        <div className="card scan-retry-card">
+          <img className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+          <strong className="scan-retry-title">Ready to scan again</strong>
+          <p className="muted" style={{ margin: '6px 0 0' }}>
+            Re-run the free AIs on this photo, or pick a better shot.
+          </p>
+          <div className="row-actions stack" style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void runScan(heldBlob, heldPreview)}
+            >
+              Try again
+            </button>
+            <label className="btn btn-secondary">
+              New photo
+              <input
+                className="hidden-input"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => {
+                  clearHeldPhoto()
+                  void handleFile(e.target.files?.[0] ?? null)
+                }}
+              />
+            </label>
+            <button type="button" className="btn btn-secondary" onClick={clearHeldPhoto}>
+              Cancel
+            </button>
+          </div>
         </div>
       ) : (
         <div className="scan-drop">
@@ -813,6 +930,8 @@ function PurchaseFormScreen(props: {
   receiptBlob?: Blob
   existingReceiptImageId?: string | null
   onBack: () => void
+  /** Re-run scan on the same receipt photo when the AI read was wrong */
+  onTryAgain?: () => void
   onSave: (form: FormState, receiptBlob?: Blob | null) => Promise<void>
   onDebugMessage?: (msg: string) => void
 }) {
@@ -821,6 +940,15 @@ function PurchaseFormScreen(props: {
   const [showAgentReport, setShowAgentReport] = useState(Boolean(props.initial.agentReport))
   const [reporting, setReporting] = useState(false)
   const [reportNote, setReportNote] = useState('')
+
+  const fromScan = Boolean(props.receiptBlob || props.receiptPreviewUrl)
+  const lowConfidence =
+    typeof form.confidence === 'number' && form.confidence > 0 && form.confidence < 0.55
+  const looksThin =
+    fromScan &&
+    (!form.amount ||
+      !form.description.trim() ||
+      (form.lineItems.length === 0 && (form.confidence ?? 0) < 0.7))
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -946,6 +1074,43 @@ function PurchaseFormScreen(props: {
 
       {props.receiptPreviewUrl && (
         <img className="receipt-preview" src={props.receiptPreviewUrl} alt="Receipt preview" />
+      )}
+
+      {props.onTryAgain && fromScan && (
+        <div
+          className={`card scan-retry-card ${lowConfidence || looksThin ? 'scan-retry-card-warn' : ''}`}
+        >
+          <strong className="scan-retry-title">
+            {lowConfidence || looksThin ? 'Scan looks incomplete' : 'Scan look wrong?'}
+          </strong>
+          <p className="muted" style={{ margin: '6px 0 0' }}>
+            {lowConfidence || looksThin
+              ? 'The free AIs weren’t sure. Try again on the same photo, or fix the fields below.'
+              : 'Re-run the AIs on this photo, or edit the fields below before saving.'}
+            {typeof form.confidence === 'number' ? (
+              <>
+                {' '}
+                Confidence: <strong>{Math.round(form.confidence * 100)}%</strong>
+              </>
+            ) : null}
+          </p>
+          <div className="row-actions" style={{ marginTop: 12 }}>
+            <button type="button" className="btn btn-primary" onClick={props.onTryAgain}>
+              Try again
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                /* stay and edit */
+                const el = document.getElementById('amount')
+                el?.focus()
+              }}
+            >
+              Fix manually
+            </button>
+          </div>
+        </div>
       )}
 
       {(form.activeAiLabel || form.aisUsed.length > 0) && (
@@ -1142,11 +1307,21 @@ function PurchaseFormScreen(props: {
 
         {(props.receiptBlob || props.receiptPreviewUrl) && (
           <div className="card settings-card debug-report-card">
-            <strong>AIs getting it wrong?</strong>
+            <strong>Still wrong after a retry?</strong>
             <p className="muted" style={{ margin: '6px 0 10px' }}>
               Report this scan so the coding agent can see the receipt photo, OCR text, and what each
               AI produced.
             </p>
+            {props.onTryAgain && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ width: '100%', marginBottom: 12 }}
+                onClick={props.onTryAgain}
+              >
+                Try again
+              </button>
+            )}
             <div className="field">
               <label htmlFor="debugNote">What went wrong?</label>
               <textarea

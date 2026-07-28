@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.9.0'
+export const APP_VERSION = '1.9.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.9.1',
+    date: '2026-07-28',
+    title: 'Try again when a scan is wrong',
+    changes: [
+      'Big Try again button if the scan fails or the read looks incomplete',
+      'Re-run free AIs on the same photo, or take a new shot',
+      'Still can fix fields manually or report a bad scan for debugging',
+    ],
+  },
   {
     version: '1.9.0',
     date: '2026-07-27',
