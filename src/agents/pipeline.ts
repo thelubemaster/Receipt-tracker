@@ -11,6 +11,7 @@ import { runHammerOcr } from './hammerOcr'
 import { mergeOcrTexts, runLensOcr } from './lensOcr'
 import { runLineItemsAgent } from './lineItemsAgent'
 import { runMerchantAgent } from './merchantAgent'
+import { normalizeOcrText } from './normalizeOcrText'
 import { runCouncilAgent } from './councilAgent'
 import { runQuorumAgent } from './quorumAgent'
 import { runTeamHuddle } from './teamHuddle'
@@ -56,18 +57,19 @@ function parseFromText(
   extraAis: AiId[],
   enabled: (id: AiId) => boolean,
 ): LocalAgentResult {
-  const ledgerOnly = runLineItemsAgent(rawText)
+  const text = normalizeOcrText(rawText)
+  const ledgerOnly = runLineItemsAgent(text)
   const sieve = enabled('sieve')
-    ? runSieveAgent(rawText)
+    ? runSieveAgent(text)
     : {
         ...ledgerOnly,
         notes: [...ledgerOnly.notes, 'Sieve disabled — Ledger only'],
       }
-  const totals = runTotalsAgent(rawText)
-  const merchant = runMerchantAgent(rawText)
+  const totals = runTotalsAgent(text)
+  const merchant = runMerchantAgent(text)
 
   const result = runArbiterAgent({
-    rawText,
+    rawText: text,
     lines: {
       ...sieve,
       notes: [...sieve.notes, `Ledger alone: ${ledgerOnly.items.length} items`],

@@ -1,4 +1,5 @@
 import { parseMoneyTokens, roundMoney } from './moneyParse'
+import { normalizeOcrText } from './normalizeOcrText'
 
 export type TotalsAgentResult = {
   agent: 'totals'
@@ -15,6 +16,7 @@ export type TotalsAgentResult = {
  * Several strategies vote; highest weighted score wins grand total.
  */
 export function runTotalsAgent(text: string): TotalsAgentResult {
+  text = normalizeOcrText(text)
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -25,15 +27,19 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
 
   let subtotal: number | null = null
   let tax: number | null = null
+  let fee: number | null = null
 
   // Support label on one line, $amount on the next (invoice apps)
+  // Also accept OCR-ish TOTAL/SUBTOTAL (T0TAL) if normalize missed a pass
+  const labelOnly =
+    /^(sub[\s\-]*t[o0]tal|t[o0]tal|tax|sales\s*tax|grand\s*t[o0]tal|c[o0]nvenience\s*fee|service\s*fee|processing\s*fee|shipping)$/i
   const effective: string[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     const amts = parseMoneyTokens(line)
     if (
       !amts.length &&
-      /^(subtotal|total|tax|grand total|convenience fee|shipping)$/i.test(line.trim()) &&
+      labelOnly.test(line.trim()) &&
       i + 1 < lines.length &&
       parseMoneyTokens(lines[i + 1]).length
     ) {
@@ -49,8 +55,12 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
     if (!amounts.length) continue
     const amount = Math.max(...amounts.map(Math.abs))
 
-    if (/\bsub\s*-?\s*total\b/i.test(line)) {
+    if (/\bsub[\s\-]*t[o0]tal\b/i.test(line)) {
       subtotal = roundMoney(amount)
+      continue
+    }
+    if (/\b(c[o0]nvenience|service\s*fee|processing\s*fee|handling\s*fee)\b/i.test(line)) {
+      fee = roundMoney(amount)
       continue
     }
     if (/\b(sales\s*)?tax\b|\bvat\b|\bgst\b|\bhst\b/i.test(line) && !/\bpre-?tax\b/i.test(line)) {
@@ -58,14 +68,20 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
       continue
     }
 
-    // Strategy votes for TOTAL
-    if (/\bgrand\s*total\b/i.test(line)) {
+    // Strategy votes for TOTAL (t0tal / total)
+    if (/\bgrand\s*t[o0]tal\b/i.test(line)) {
       votes.push({ label: 'grand-total-line', total: roundMoney(amount), weight: 12 })
     } else if (/\bamount\s*due\b|\bbalance\s*due\b/i.test(line)) {
       votes.push({ label: 'amount-due-line', total: roundMoney(amount), weight: 11 })
-    } else if (/\btotal\b/i.test(line) && !/\bsub\b/i.test(line) && !/\btax\b/i.test(line)) {
+    } else if (
+      /\bt[o0]tal\b/i.test(line) &&
+      !/\bsub\b/i.test(line) &&
+      !/\btax\b/i.test(line) &&
+      !/\bitem\s*total\b/i.test(line)
+    ) {
       votes.push({ label: 'total-line', total: roundMoney(amount), weight: 10 })
-    } else if (/\b(visa|mastercard|amex|debit|credit)\b/i.test(line)) {
+    } else if (/\b(visa|mastercard|amex|debit|credit)\b/i.test(line) && amounts.length) {
+      // Only if line has a charge amount (not bare "VISA CHIP")
       votes.push({ label: 'card-charge-line', total: roundMoney(amount), weight: 7 })
     } else if (/\b(paid|payment|tender)\b/i.test(line) && !/payment date|payment method|payment details/i.test(line)) {
       votes.push({ label: 'payment-line', total: roundMoney(amount), weight: 6 })
@@ -80,13 +96,22 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
     votes.push({ label: 'tail-max', total: roundMoney(maxTail), weight: 3 })
   }
 
-  // Strategy: subtotal + tax
+  // Strategy: subtotal + tax (+ fee when present — NAPA style)
   if (subtotal != null && tax != null) {
+    const withFee = fee != null ? roundMoney(subtotal + tax + fee) : roundMoney(subtotal + tax)
     votes.push({
-      label: 'subtotal-plus-tax',
-      total: roundMoney(subtotal + tax),
-      weight: 9,
+      label: fee != null ? 'subtotal-plus-tax-plus-fee' : 'subtotal-plus-tax',
+      total: withFee,
+      weight: fee != null ? 10 : 9,
     })
+    if (fee != null) {
+      // Keep a weaker bare subtotal+tax vote so we don't hide OCR that omitted fee
+      votes.push({
+        label: 'subtotal-plus-tax',
+        total: roundMoney(subtotal + tax),
+        weight: 4,
+      })
+    }
   }
 
   // Aggregate votes by amount

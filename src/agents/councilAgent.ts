@@ -10,6 +10,7 @@ import { Blackboard } from './blackboard'
 import { categorizeText } from './keywords'
 import {
   dedupeItemsByAmount,
+  isFeeLineItem,
   isShippingLineItem,
   makeFeeLineItem,
   makeShippingLineItem,
@@ -59,18 +60,31 @@ function contextAroundAmount(text: string, amount: number): string {
   return ''
 }
 
-/** Drop tax/total chrome — but keep shipping as a real tracked line. */
-function isNonShippingFeeDesc(s: string): boolean {
-  if (isShippingLineItem(s)) return false
-  return /\b(tax|subtotal|grand total|^total$|handling|convenience fee|service fee|payment date|created date|payer)\b/i.test(
-    s,
-  )
+/**
+ * Drop tax/total chrome mistaken as products.
+ * Keep shipping AND convenience/service fees (own sections).
+ */
+function isChromeProductDesc(s: string): boolean {
+  if (isShippingLineItem(s) || isFeeLineItem(s)) return false
+  return /\b(tax|sales tax|subtotal|grand total|^total$|payment date|created date|payer)\b/i.test(s)
 }
 
 function productSum(items: ReceiptLineItem[]): number {
   return roundMoney(
-    items.filter((i) => !isShippingLineItem(i.description)).reduce((s, i) => s + i.amount, 0),
+    items
+      .filter((i) => !isShippingLineItem(i.description) && !isFeeLineItem(i.description))
+      .reduce((s, i) => s + i.amount, 0),
   )
+}
+
+function extractFee(text: string): number | null {
+  const m = text.match(
+    /\bc[o0]nvenience\s*fee\b[\s\S]{0,24}?\$?\s*([\d,]+(?:\.\d{2})?)|\bservice\s*fee\b[\s\S]{0,24}?\$?\s*([\d,]+(?:\.\d{2})?)|\bpr[o0]cessing\s*fee\b[\s\S]{0,24}?\$?\s*([\d,]+(?:\.\d{2})?)/i,
+  )
+  if (!m) return null
+  const raw = m[1] || m[2] || m[3]
+  const n = Number(String(raw).replace(/,/g, ''))
+  return Number.isFinite(n) && n > 0 ? roundMoney(n) : null
 }
 
 /**
@@ -116,7 +130,7 @@ export function huntMissingItems(
   for (const amount of candidates) {
     const ctx = contextAroundAmount(rawText, amount)
     if (!ctx || ctx.length < 3) continue
-    if (isNonShippingFeeDesc(ctx) || isShippingLineItem(ctx)) continue
+    if (isChromeProductDesc(ctx) || isShippingLineItem(ctx) || isFeeLineItem(ctx)) continue
     // skip pure address-ish
     if (/\b(shipped to|pennsylvania|street|road|rd,|ave)\b/i.test(ctx) && !/filter|kit|ford|part/i.test(ctx)) {
       continue
@@ -173,6 +187,9 @@ export function runCouncilAgent(
   let subtotal = draft.subtotal ?? null
   let tax = draft.tax ?? null
   let shipping = extractShipping(rawText)
+  // Prefer fee already on draft lines; fall back to OCR extract
+  let fee: number | null =
+    items.find((i) => isFeeLineItem(i.description))?.amount ?? extractFee(rawText)
 
   // --- Round 0: user rejection (Try again) / per-field marks ---
   if (rejected) {
@@ -418,11 +435,11 @@ export function runCouncilAgent(
     talk('sieve', 'finding', 'No obvious missing product amounts in OCR after filters.')
   }
 
-  // Drop tax/total chrome mistaken as products — keep shipping
+  // Drop tax/total chrome mistaken as products — keep shipping + fees
   const before = items.length
-  items = items.filter((i) => !isNonShippingFeeDesc(i.description))
+  items = items.filter((i) => !isChromeProductDesc(i.description))
   if (items.length < before) {
-    talk('arbiter', 'decision', 'Removed tax/fee chrome from line items (shipping kept).')
+    talk('arbiter', 'decision', 'Removed tax/total chrome from line items (shipping + fees kept).')
   }
 
   // Ensure shipping has its own line when OCR had a price
@@ -438,9 +455,24 @@ export function runCouncilAgent(
     }
   }
 
-  // Deduplicate inflated product merges (same $39.97 three times, etc.) — keep shipping aside
+  // Ensure fees section when OCR had a convenience/service fee
+  if (fee != null && fee > 0) {
+    const hasFee = items.some(
+      (i) => isFeeLineItem(i.description) && nearlyEqual(i.amount, fee!),
+    )
+    if (!hasFee) {
+      items = items.filter((i) => !isFeeLineItem(i.description))
+      items.push(makeFeeLineItem(fee))
+      talk('clerk', 'decision', `Added Fees section: $${fee.toFixed(2)}`)
+    }
+  }
+
+  // Deduplicate inflated product merges — keep shipping + fees aside
   let shipRows = items.filter((i) => isShippingLineItem(i.description))
-  let productsOnly = items.filter((i) => !isShippingLineItem(i.description))
+  let feeRows = items.filter((i) => isFeeLineItem(i.description))
+  let productsOnly = items.filter(
+    (i) => !isShippingLineItem(i.description) && !isFeeLineItem(i.description),
+  )
   const sumBefore = productSum(items)
   if (subtotal != null && sumBefore > subtotal * 1.08) {
     talk(
@@ -452,7 +484,7 @@ export function runCouncilAgent(
     talk(
       'arbiter',
       'decision',
-      `After dedupe: ${productsOnly.length} product(s) + ${shipRows.length} shipping`,
+      `After dedupe: ${productsOnly.length} product(s) + ${shipRows.length} shipping + ${feeRows.length} fee`,
     )
   } else if (amount != null && sumBefore > amount * 1.15) {
     talk('arbiter', 'challenge', `Product sum inflated vs total — deduping by amount.`)
@@ -473,7 +505,14 @@ export function runCouncilAgent(
     const keep = shipRows.sort((a, b) => b.amount - a.amount)[0]
     shipRows = [makeShippingLineItem(keep.amount, keep.id)]
   }
-  items = [...productsOnly, ...shipRows]
+  // One fee row max
+  if (feeRows.length > 1) {
+    const keep = feeRows.sort((a, b) => b.amount - a.amount)[0]
+    feeRows = [makeFeeLineItem(keep.amount, keep.description, keep.id)]
+  } else if (feeRows.length === 0 && fee != null && fee > 0) {
+    feeRows = [makeFeeLineItem(fee)]
+  }
+  items = [...productsOnly, ...shipRows, ...feeRows]
 
   // Towing / service invoice: rebuild as a service line (category: misc = services/labor)
   if (/\btow(ing)?\b/i.test(rawText)) {
@@ -520,6 +559,9 @@ export function runCouncilAgent(
       if (isShippingLineItem(i.description)) {
         return { ...i, description: 'Shipping', categoryId: 'misc' as const }
       }
+      if (isFeeLineItem(i.description)) {
+        return { ...i, categoryId: 'misc' as const }
+      }
       const { categoryId } = categorizeText(i.description)
       if (categoryId !== i.categoryId) {
         talk('ledger', 'answer', `Recategorized “${i.description.slice(0, 36)}” → ${categoryId}`)
@@ -539,19 +581,42 @@ export function runCouncilAgent(
   if (subtotal != null && nearlyEqual(finalProductSum, subtotal)) {
     talk('quorum', 'decision', `✓ Products $${finalProductSum.toFixed(2)} match subtotal.`)
   }
-  if (amount != null && shipAmt != null && nearlyEqual(finalProductSum + shipAmt, amount)) {
+  const feeAmt =
+    fee ?? items.find((i) => isFeeLineItem(i.description))?.amount ?? null
+  if (
+    amount != null &&
+    shipAmt != null &&
+    feeAmt != null &&
+    nearlyEqual(finalProductSum + shipAmt + feeAmt, amount)
+  ) {
+    talk(
+      'quorum',
+      'decision',
+      `✓ Products + shipping + fee = total $${amount.toFixed(2)}.`,
+    )
+  } else if (amount != null && shipAmt != null && nearlyEqual(finalProductSum + shipAmt, amount)) {
     talk(
       'quorum',
       'decision',
       `✓ Products $${finalProductSum.toFixed(2)} + shipping $${shipAmt.toFixed(2)} = total $${amount.toFixed(2)}.`,
     )
+  } else if (
+    amount != null &&
+    feeAmt != null &&
+    nearlyEqual(finalProductSum + feeAmt + (tax ?? 0), amount)
+  ) {
+    talk(
+      'quorum',
+      'decision',
+      `✓ Products + fee (+ tax) ≈ total $${amount.toFixed(2)}.`,
+    )
   } else if (amount != null && nearlyEqual(finalSum, amount)) {
-    talk('quorum', 'decision', `✓ All lines (products + shipping) = grand total $${amount.toFixed(2)}.`)
+    talk('quorum', 'decision', `✓ All lines (products + shipping + fees) = grand total $${amount.toFixed(2)}.`)
   } else {
     talk(
       'quorum',
       'finding',
-      `Soft match: products $${finalProductSum.toFixed(2)}, all lines $${finalSum.toFixed(2)}, subtotal ${subtotal ?? '—'}, total ${amount ?? '—'}, shipping ${shipAmt ?? '—'}.`,
+      `Soft match: products $${finalProductSum.toFixed(2)}, all lines $${finalSum.toFixed(2)}, subtotal ${subtotal ?? '—'}, total ${amount ?? '—'}, shipping ${shipAmt ?? '—'}, fee ${feeAmt ?? '—'}.`,
     )
   }
 

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.16.0'
+export const APP_VERSION = '1.16.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.16.1',
+    date: '2026-07-28',
+    title: 'Harder OCR — T0TAL, fees, store names',
+    changes: [
+      'Fixes OCR zeros that broke totals (T0TAL), fees (C0NVENIENCE), and vendors (H0ME DEP0T)',
+      'No longer treats card lines (VISA CHIP) as the store name',
+      'Convenience fees stay in their own Fees section through Council',
+      'Subtotal + tax + fee used when total label is noisy',
+    ],
+  },
   {
     version: '1.16.0',
     date: '2026-07-28',

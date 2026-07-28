@@ -20,6 +20,7 @@ import {
 } from './lineItemsAgent'
 import { extractDate, extractVendor, runMerchantAgent } from './merchantAgent'
 import { parseMoneyTokens, roundMoney } from './moneyParse'
+import { normalizeOcrText } from './normalizeOcrText'
 import type { LocalAgentResult } from './pipeline'
 import { runQuorumAgent } from './quorumAgent'
 import { runSieveAgent } from './sieveAgent'
@@ -59,12 +60,13 @@ function productSum(items: ReceiptLineItem[]): number {
 }
 
 function parseOne(text: string, label: string, ais: AiId[], enabled: (id: AiId) => boolean): LocalAgentResult {
-  const ledger = runLineItemsAgent(text)
-  const sieve = enabled('sieve') ? runSieveAgent(text) : ledger
-  const totals = runTotalsAgent(text)
-  const merchant = runMerchantAgent(text)
+  const cleaned = normalizeOcrText(text)
+  const ledger = runLineItemsAgent(cleaned)
+  const sieve = enabled('sieve') ? runSieveAgent(cleaned) : ledger
+  const totals = runTotalsAgent(cleaned)
+  const merchant = runMerchantAgent(cleaned)
   const draft = runArbiterAgent({
-    rawText: text,
+    rawText: cleaned,
     lines: {
       ...sieve,
       notes: [...(sieve.notes || []), `Ledger: ${ledger.items.length}`],
@@ -97,7 +99,10 @@ export function runTeamHuddle(
   }
 
   const enabled = opts.enabled
-  const usable = ocrPaths.filter((p) => p.text.trim().length > 8)
+  // Normalize OCR confusables (T0TAL, C0NVENIENCE, H0ME DEP0T) before anyone votes
+  const usable = ocrPaths
+    .map((p) => ({ ...p, text: normalizeOcrText(p.text) }))
+    .filter((p) => p.text.trim().length > 8)
   if (!usable.length) {
     throw new Error('No OCR text for team huddle')
   }

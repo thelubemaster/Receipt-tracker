@@ -1,4 +1,5 @@
 import { VENDOR_HINTS } from './keywords'
+import { normalizeOcrText } from './normalizeOcrText'
 
 export type MerchantAgentResult = {
   agent: 'merchant'
@@ -62,20 +63,27 @@ function titleCaseVendor(s: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+/** Card networks / tender lines — never the store name. */
+const PAYMENT_VENDOR_NOISE =
+  /\b(visa|mastercard|master\s*card|amex|american\s*express|discover|chip|debit|credit|cash|auth|approval|tender|change due|paid)\b/i
+
 export function extractVendor(text: string): string {
+  text = normalizeOcrText(text)
   const lower = text.toLowerCase()
 
   // 0) "Payment details for Company Name" / invoice headers
   const payFor = text.match(/payment details for\s*\n?\s*([A-Za-z0-9][A-Za-z0-9 .,&'-]{3,60})/i)
   if (payFor?.[1]) {
     const name = payFor[1].trim().split(/\n/)[0].trim()
-    if (name.length >= 3 && !/^payer$/i.test(name)) return titleCaseVendor(name)
+    if (name.length >= 3 && !/^payer$/i.test(name) && !PAYMENT_VENDOR_NOISE.test(name)) {
+      return titleCaseVendor(name)
+    }
   }
   // Company line with Inc/LLC/Service
   const company = text.match(
     /\b([A-Z][A-Za-z0-9 .,&'-]{2,50}\b(?:Inc|LLC|Ltd|Service|Services|Towing|Motors|Parts)\.?)\b/,
   )
-  if (company?.[1] && !/payment method|credit card/i.test(company[1])) {
+  if (company?.[1] && !/payment method|credit card/i.test(company[1]) && !PAYMENT_VENDOR_NOISE.test(company[1])) {
     return titleCaseVendor(company[1])
   }
 
@@ -101,7 +109,7 @@ export function extractVendor(text: string): string {
     }
   }
 
-  // 3) ALL-CAPS brand-like lines (prefer later in receipt — store footer)
+  // 3) ALL-CAPS brand-like lines — prefer store header (early), skip card tender footer
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -109,23 +117,31 @@ export function extractVendor(text: string): string {
 
   const capsCandidates: string[] = []
   for (const line of lines) {
-    if (line.length < 4 || line.length > 40) continue
-    if (!/^[A-Z0-9][A-Z0-9 .&'\-]{3,}$/.test(line)) continue
-    if (/\d{5,}/.test(line)) continue
-    if (/TOTAL|ORDER|SHIP|TAX|CARD|PAYMENT|ITEMS|CART|SKU|QTY/i.test(line)) continue
-    capsCandidates.push(line)
+    if (line.length < 4 || line.length > 48) continue
+    // Allow store# suffix: HOME DEPOT #4821
+    const core = line.replace(/\s*#\s*\d+\s*$/, '').trim()
+    if (!/^[A-Z0-9][A-Z0-9 .&'\-]{2,}$/.test(core) && !/^[A-Z0-9][A-Z0-9 .&'\-]{2,}#\d+$/.test(line.replace(/\s/g, ''))) {
+      // still accept "HOME DEPOT #4821"
+      if (!/^[A-Z][A-Z0-9 .&'\-#]{3,}$/.test(line)) continue
+    }
+    if (/\d{5,}/.test(line) && !/#\d{2,5}\b/.test(line)) continue
+    if (/TOTAL|ORDER|SHIP|TAX|CARD|PAYMENT|ITEMS|CART|SKU|QTY|SUBTOTAL/i.test(line)) continue
+    if (PAYMENT_VENDOR_NOISE.test(line)) continue
+    if (/^\*+|\*{3,}/.test(line)) continue
+    capsCandidates.push(core.length >= 4 ? core : line)
   }
   if (capsCandidates.length) {
-    // Prefer last solid brand line (footer)
-    return titleCaseVendor(capsCandidates[capsCandidates.length - 1])
+    // Prefer first solid brand line (header) over footer noise
+    return titleCaseVendor(capsCandidates[0])
   }
 
-  // 4) First clean early line (legacy) — skip OCR garbage & payer-only names
+  // 4) First clean early line (legacy) — skip OCR garbage, payment & payer-only names
   for (const line of lines.slice(0, 12)) {
     if (line.length < 3 || line.length > 48) continue
     if (/^\d+$/.test(line)) continue
     if (/[\[\]{}|\\]/.test(line)) continue
     if (totalNoise(line)) continue
+    if (PAYMENT_VENDOR_NOISE.test(line)) continue
     if (/^payer$|^bradley$|^payment/i.test(line.trim())) continue
     if (/\d{2,}[\/\-]\d/.test(line)) continue
     if (/\$/.test(line)) continue
@@ -134,7 +150,7 @@ export function extractVendor(text: string): string {
     if (letters < 4) continue
     if (vowels < 2 && letters > 6) continue
     if (/[A-Za-z]{3,}/.test(line)) {
-      return titleCaseVendor(line)
+      return titleCaseVendor(line.replace(/\s*#\s*\d+\s*$/, '').trim())
     }
   }
   return ''

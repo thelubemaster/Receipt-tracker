@@ -1,6 +1,7 @@
 import type { CategoryId, ReceiptLineItem } from '../types'
 import { categorizeText } from './keywords'
 import { lastMoneyOnLine, parseMoneyTokens, roundMoney } from './moneyParse'
+import { normalizeOcrText } from './normalizeOcrText'
 
 /** Not product rows — totals/chrome (shipping + fees handled as their own sections) */
 const SKIP_LINE =
@@ -11,11 +12,11 @@ const SHIPPING_LINE =
   /\b(shipping|freight|delivery|postage|ship\s*fee|delivery\s*fee)\b/i
 
 const FEE_LINE =
-  /\b(shipping|freight|delivery|handling|convenience fee|service fee|processing fee|postage)\b/i
+  /\b(shipping|freight|delivery|handling|c[o0]nvenience fee|service fee|processing fee|postage)\b/i
 
-/** Convenience / service / processing fees — own Fees section */
+/** Convenience / service / processing fees — own Fees section (0/O OCR tolerant) */
 const NON_SHIP_FEE =
-  /\b(convenience fee|service fee|processing fee|handling fee|handling)\b/i
+  /\b(c[o0]nvenience fee|service fee|pr[o0]cessing fee|handling fee|handling)\b/i
 
 const ADDRESS_LINE =
   /\b(shipped to|pennsylvania|bangor|street| st\b| rd,| road|ave|avenue|zip|,\s*\d{5}|\bus\b)\b/i
@@ -223,6 +224,7 @@ export function dedupeItemsByAmount(
 }
 
 export function runLineItemsAgent(text: string): LineItemsAgentResult {
+  text = normalizeOcrText(text)
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())

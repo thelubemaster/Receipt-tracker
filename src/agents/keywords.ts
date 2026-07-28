@@ -359,7 +359,15 @@ export function inventCategoryFromText(text: string): { categoryId: CategoryId; 
   const tokens = lower
     .replace(/[^a-z0-9\s/-]/g, ' ')
     .split(/[\s/]+/)
-    .filter((t) => t.length >= 4 && !stop.has(t) && !/^\d+$/.test(t))
+    .filter(
+      (t) =>
+        t.length >= 4 &&
+        !stop.has(t) &&
+        !/^\d+$/.test(t) &&
+        // skip OCR junk / part codes as category names (r0mex, ph8a, 5w30)
+        !/\d/.test(t) &&
+        /[aeiou]/.test(t),
+    )
   const unique: string[] = []
   for (const t of tokens) {
     if (!unique.includes(t)) unique.push(t)

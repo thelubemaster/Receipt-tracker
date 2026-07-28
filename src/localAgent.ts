@@ -24,20 +24,22 @@ import { runLineItemsAgent } from './agents/lineItemsAgent'
 import { runTotalsAgent } from './agents/totalsAgent'
 import { runMerchantAgent } from './agents/merchantAgent'
 import { runArbiterAgent } from './agents/arbiterAgent'
+import { normalizeOcrText } from './agents/normalizeOcrText'
 
 /** Pure multi-agent parse from OCR text (no Tesseract) — tests & reuse. */
 export function parseReceiptText(rawText: string): LocalAgentResult {
-  const lines = runLineItemsAgent(rawText)
-  const totals = runTotalsAgent(rawText)
-  const merchant = runMerchantAgent(rawText)
-  const draft = runArbiterAgent({ rawText, lines, totals, merchant })
+  const text = normalizeOcrText(rawText)
+  const lines = runLineItemsAgent(text)
+  const totals = runTotalsAgent(text)
+  const merchant = runMerchantAgent(text)
+  const draft = runArbiterAgent({ rawText: text, lines, totals, merchant })
   return runCouncilAgent(
     {
       ...draft,
       aisUsed: ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'],
       activeAiLabel: 'Text parse',
     },
-    rawText,
+    text,
   )
 }
 
