@@ -1,5 +1,6 @@
 /**
- * Free, keyless AIs only — all run on-device (or free web via local proxy).
+ * Free, keyless AIs — OCR + parsers run fully on-device on your phone.
+ * Seeker is optional free web (no key) and can be disabled.
  * Higher power = more CPU/GPU/RAM. Users can disable any non-core AI in Settings.
  */
 
@@ -299,17 +300,17 @@ export const AI_ROSTER: AiProfile[] = [
   {
     id: 'seeker',
     name: 'Seeker',
-    fullName: 'Seeker · Free Web Lookup',
+    fullName: 'Seeker · Optional free web',
     kind: 'free-web',
     cost: 'free',
-    role: 'Looks up SKUs on DuckDuckGo + Wikipedia via free proxy. No API key. Needs network.',
+    role: 'Optional SKU lookup on free public web (no API key). All other AIs stay 100% on-device.',
     workingLine: 'Seeker is scanning the internet for product info…',
-    engine: 'Free web proxy (DDG + Wikipedia)',
+    engine: 'Optional free web proxy (DDG + Wikipedia)',
     emoji: '🌐',
     color: '#26c6da',
     power: 7,
     tier: 'standard',
-    phoneWarning: 'Needs network + the app host proxy; safe to disable offline.',
+    phoneWarning: 'Only non-local AI. Needs network. Turn off for fully offline scans.',
   },
 ]
 

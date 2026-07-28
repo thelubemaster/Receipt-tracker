@@ -1449,12 +1449,18 @@ function PurchaseFormScreen(props: {
       )}
 
       {(form.activeAiLabel || form.aisUsed.length > 0) && (
-        <ExpandableBlock collapsedMax={72} className="banner banner-info banner-expandable">
-          <strong>AIs on this scan:</strong>{' '}
+        <ExpandableBlock collapsedMax={88} className="banner banner-info banner-expandable">
+          <strong>On-device team:</strong>{' '}
           {form.activeAiLabel || form.aisUsed.map((id) => getAi(id).name).join(', ')}
+          <div className="muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
+            Free AIs run on this phone and talk to each other (huddle + council). No paid keys.
+            {form.aisUsed.includes('seeker')
+              ? ' Seeker is optional free web if online.'
+              : ' Fully offline-capable for this scan.'}
+          </div>
           {form.aisUsed.length > 0 && (
             <div className="muted" style={{ marginTop: 6, fontSize: '0.8rem' }}>
-              {form.aisUsed.map((id) => getAi(id).name).join(' · ')}
+              {form.aisUsed.map((id) => `${getAi(id).emoji} ${getAi(id).name}`).join(' · ')}
             </div>
           )}
         </ExpandableBlock>

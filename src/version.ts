@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.14.1'
+export const APP_VERSION = '1.15.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.15.0',
+    date: '2026-07-28',
+    title: 'On-device team huddle — AIs talk to each other',
+    changes: [
+      'All OCR + parse AIs run locally on your phone (no paid keys)',
+      'Team huddle: agents post findings, challenge gaps, and agree together',
+      'Council still does a second debate pass; Seeker is optional free web only',
+    ],
+  },
   {
     version: '1.14.1',
     date: '2026-07-28',

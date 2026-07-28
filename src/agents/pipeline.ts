@@ -1,5 +1,9 @@
 import type { AiId } from '../aiRoster'
-import { isAiEnabled } from '../aiRoster'
+import { getAi, isAiEnabled } from '../aiRoster'
+
+function getAiName(id: AiId): string {
+  return getAi(id).name
+}
 import type { ReceiptSuggestion } from '../types'
 import { runArbiterAgent } from './arbiterAgent'
 import { runForgeOcr } from './forgeOcr'
@@ -9,6 +13,7 @@ import { runLineItemsAgent } from './lineItemsAgent'
 import { runMerchantAgent } from './merchantAgent'
 import { runCouncilAgent } from './councilAgent'
 import { runQuorumAgent } from './quorumAgent'
+import { runTeamHuddle } from './teamHuddle'
 import {
   applyUserMarksToResult,
   diversifyImageForRetry,
@@ -312,15 +317,14 @@ export async function runMultiAgentReceiptPipeline(
 
   onProgress?.({
     stage: 'parse',
-    progress: 0.7,
-    message: `Parsing ${usable.length} OCR paths with Ledger/Sieve (layout-first)…`,
-    aiId: 'sieve',
-    aiName: 'Sieve',
+    progress: 0.68,
+    message: 'Team huddle — free AIs talking to each other on your phone…',
+    aiId: 'council',
+    aiName: 'Council',
   })
 
+  // Individual parses (for diversify / reliability) + shared huddle
   const parses = usable.map((u) => parseFromText(u.text, u.label, u.note, u.ais, enabled))
-
-  // Merged OCR super-text (layout-first when Ruler present)
   let merged = usable[0].text
   for (let i = 1; i < usable.length; i++) {
     merged = mergeOcrTexts(merged, usable[i].text)
@@ -337,59 +341,63 @@ export async function runMultiAgentReceiptPipeline(
     )
   }
 
-  onProgress?.({
-    stage: 'arbitrate',
-    progress: 0.88,
-    message: rejected
-      ? `Quorum is voting — avoiding the answer you rejected…`
-      : `Quorum is voting across ${parses.length} full parses…`,
-    aiId: 'quorum',
-    aiName: 'Quorum',
-  })
-
-  // Use richest OCR text for council hunting
   let councilText = usable[0].text
   for (let i = 1; i < usable.length; i++) {
     councilText = mergeOcrTexts(councilText, usable[i].text)
   }
 
-  // When user rejected a prior answer, diversify across full parse candidates
-  // instead of pairwise-merging (merge often recreated the same wrong items).
+  // ── On-device team huddle: OCR + parse agents post, challenge, agree ──
   let final: LocalAgentResult
   let diversifyReport = ''
-  if (rejected && parses.length) {
-    const picked = pickDiversifiedParse(parses, rejected, scoreOf)
-    final = picked.winner
-    diversifyReport = picked.report
-    if (enabled('quorum')) {
-      for (const p of parses) {
-        if (p === final) continue
-        if (similarityToRejected(p, rejected) < 0.7) {
-          final = runQuorumAgent(final, p)
-        }
-      }
-    }
-  } else if (enabled('quorum') && parses.length > 1) {
-    // Prefer highest reliability-weighted score as seed
-    const ranked = [...parses].sort((a, b) => scoreOf(b) - scoreOf(a))
-    final = ranked[0]
-    for (let i = 1; i < ranked.length; i++) {
-      final = runQuorumAgent(final, ranked[i])
-    }
-  } else {
+  try {
+    final = runTeamHuddle(
+      usable.map((u) => ({ label: u.label, text: u.text, note: u.note, ais: u.ais })),
+      {
+        enabled,
+        reliability,
+        onTalk: (msg, aiId) => {
+          onProgress?.({
+            stage: 'arbitrate',
+            progress: 0.78,
+            message: msg.slice(0, 120),
+            aiId: aiId ?? 'council',
+            aiName: aiId ? getAiName(aiId) : 'Council',
+          })
+        },
+      },
+    )
+  } catch {
+    // Fallback: old path if huddle throws
     final = [...parses].sort((a, b) => scoreOf(b) - scoreOf(a))[0]
   }
 
-  if (!final.rawText || councilText.length > final.rawText.length) {
+  // Rejected-answer diversify still applies
+  if (rejected && parses.length) {
+    const picked = pickDiversifiedParse(parses, rejected, scoreOf)
+    diversifyReport = picked.report
+    if (similarityToRejected(final, rejected) >= 0.75) {
+      final = picked.winner
+      if (enabled('quorum')) {
+        for (const p of parses) {
+          if (p === final) continue
+          if (similarityToRejected(p, rejected) < 0.7) {
+            final = runQuorumAgent(final, p)
+          }
+        }
+      }
+    }
+  }
+
+  if (!final.rawText || councilText.length > (final.rawText?.length ?? 0)) {
     final = { ...final, rawText: councilText }
   }
 
   onProgress?.({
     stage: 'arbitrate',
-    progress: 0.93,
-    message: rejected
-      ? 'Council knows the last scan was wrong — debating a different reading…'
-      : 'Council is debating — agents challenging gaps…',
+    progress: 0.9,
+    message: enabled('council')
+      ? 'Council second pass — agents refining the huddle answer…'
+      : 'Team huddle done (Council off)…',
     aiId: 'council',
     aiName: 'Council',
   })
@@ -401,10 +409,10 @@ export async function runMultiAgentReceiptPipeline(
       (msg, aiId) => {
         onProgress?.({
           stage: 'arbitrate',
-          progress: 0.94,
+          progress: 0.92,
           message: msg.slice(0, 120),
           aiId: aiId ?? 'council',
-          aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+          aiName: aiId ? getAiName(aiId) : 'Council',
         })
       },
       rejected,
@@ -413,26 +421,22 @@ export async function runMultiAgentReceiptPipeline(
     skipped.push('Council off')
   }
 
-  // If still nearly identical to rejected, force another council pass from alternate OCR
   if (enabled('council') && rejected && similarityToRejected(final, rejected) >= 0.82) {
     onProgress?.({
       stage: 'arbitrate',
-      progress: 0.95,
-      message: 'Still too similar to the rejected answer — forcing alternate parse…',
+      progress: 0.94,
+      message: 'Still too similar to the rejected answer — forcing alternate debate…',
       aiId: 'arbiter',
       aiName: 'Arbiter',
     })
     const alt = pickDiversifiedParse(parses, rejected, (c) => scoreOf(c) * 0.5)
     final = runCouncilAgent(
-      {
-        ...alt.winner,
-        rawText: councilText || alt.winner.rawText,
-      },
+      { ...alt.winner, rawText: councilText || alt.winner.rawText },
       councilText || final.rawText || '',
       (msg, aiId) => {
         onProgress?.({
           stage: 'arbitrate',
-          progress: 0.955,
+          progress: 0.945,
           message: msg.slice(0, 120),
           aiId: aiId ?? 'council',
           aiName: 'Council',
@@ -441,18 +445,18 @@ export async function runMultiAgentReceiptPipeline(
       {
         ...rejected,
         attempt: rejected.attempt + 1,
-        userNote: (rejected.userNote || '') + ' Still too similar — push harder for a different split.',
+        userNote: (rejected.userNote || '') + ' Still too similar — push harder.',
       },
     )
-    diversifyReport += `\nForced alternate draft (sim was high). ${alt.report}`
+    diversifyReport += `\nForced alternate draft. ${alt.report}`
   }
 
-  // Seeker — free internet enrichment (DuckDuckGo + Wikipedia via host proxy)
-  if (enabled('seeker') && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+  // Seeker — optional free web (not required; all core AIs stay local)
+  if (enabled('seeker') && typeof navigator !== 'undefined' && navigator.onLine !== false) {
     onProgress?.({
       stage: 'arbitrate',
       progress: 0.96,
-      message: 'Seeker is scanning the internet for product info…',
+      message: 'Seeker optional free web lookup (needs network)…',
       aiId: 'seeker',
       aiName: 'Seeker',
     })
@@ -478,7 +482,7 @@ export async function runMultiAgentReceiptPipeline(
               progress: 0.98,
               message: msg.slice(0, 120),
               aiId: aiId ?? 'council',
-              aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+              aiName: 'Council',
             })
           },
           rejected,
@@ -487,11 +491,11 @@ export async function runMultiAgentReceiptPipeline(
     } catch (e) {
       final.agentReport = [
         final.agentReport,
-        `Seeker skipped: ${e instanceof Error ? e.message : 'offline or proxy unavailable'}`,
+        `Seeker skipped (optional): ${e instanceof Error ? e.message : 'offline'}`,
       ].join('\n')
     }
   } else if (!enabled('seeker')) {
-    skipped.push('Seeker off')
+    skipped.push('Seeker off (optional web AI)')
   }
 
   const ranIds = new Set<AiId>([
@@ -522,15 +526,15 @@ export async function runMultiAgentReceiptPipeline(
   }
   final.aisUsed = Array.from(ranIds)
   final.activeAiLabel = rejected
-    ? `Retry #${attempt} · free team (avoided rejected answer)`
-    : maxPower
-      ? 'Free team (heavy allowed if enabled)'
-      : 'Free team (light mode)'
+    ? `Retry #${attempt} · on-device team huddle`
+    : 'On-device team huddle (AIs talking)'
   final.agentReport = [
+    'LOCAL: All OCR + parse AIs run on this phone. No paid API keys.',
     rejected ? formatRejectionBrief(rejected) : null,
     diversifyReport || null,
     skipped.length ? `Disabled/skipped: ${skipped.join(', ')}` : null,
-    `Free AIs this run: ${Array.from(ranIds).join(', ')}`,
+    `On-device AIs this run: ${Array.from(ranIds).filter((id) => id !== 'seeker').join(', ')}`,
+    enabled('seeker') ? 'Seeker: optional free web (not required for a scan)' : null,
     ...usable.map((u) => u.note),
     final.agentReport,
   ]
@@ -547,9 +551,9 @@ export async function runMultiAgentReceiptPipeline(
     progress: 1,
     message: rejected?.marks
       ? 'Retry finished using your ✓/✗ marks…'
-      : 'Ruler + Seeker + Council finished — free AI team done',
-    aiId: 'ruler',
-    aiName: 'Ruler',
+      : 'On-device team huddle finished — agents agreed',
+    aiId: 'council',
+    aiName: 'Council',
   })
 
   return final
