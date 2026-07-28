@@ -2673,10 +2673,10 @@ function SettingsScreen(props: {
                 <strong>Phone:</strong> browser menu → <em>Add to Home Screen</em> / Install for a
                 full-screen app icon.
                 <br />
-                <strong>Computer:</strong> from the project folder run{' '}
-                <code style={{ fontSize: '0.85em' }}>npm run app</code> for a real desktop window,
-                or <code style={{ fontSize: '0.85em' }}>npm run app:pack</code> for an installable
-                package.
+                <strong>Computer:</strong> run{' '}
+                <code style={{ fontSize: '0.85em' }}>npm run app:icon</code> once to put the school
+                bus logo on your Desktop — double-click it to start. Or{' '}
+                <code style={{ fontSize: '0.85em' }}>npm run app</code> from the project folder.
               </>
             )}
           </p>

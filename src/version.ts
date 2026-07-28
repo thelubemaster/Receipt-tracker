@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.19.0'
+export const APP_VERSION = '1.19.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,15 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.19.1',
+    date: '2026-07-28',
+    title: 'Clickable desktop logo',
+    changes: [
+      'Install a Schoolie bus icon on the Desktop and app menu: npm run app:icon',
+      'Double-click the logo to start the standalone app',
+    ],
+  },
   {
     version: '1.19.0',
     date: '2026-07-28',

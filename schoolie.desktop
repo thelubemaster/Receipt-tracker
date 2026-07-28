@@ -1,9 +1,15 @@
 [Desktop Entry]
+Version=1.0
 Type=Application
 Name=Schoolie Cost Tracker
+GenericName=Schoolie
 Comment=Track schoolie conversion costs — free on-device receipt scans
-Exec=bash -c 'cd "$(dirname %k)" 2>/dev/null || cd /root/schoolie-tracker; npm run app'
+# After install, scripts/install-desktop-launcher.sh rewrites Exec with absolute paths.
+Exec=/root/schoolie-tracker/scripts/start-schoolie-app.sh
 Icon=schoolie-tracker
+Path=/root/schoolie-tracker
 Terminal=false
-Categories=Finance;Utility;
+Categories=Office;Finance;Utility;
+Keywords=schoolie;bus;receipt;budget;
+StartupNotify=true
 StartupWMClass=schoolie-tracker

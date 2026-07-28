@@ -11,17 +11,18 @@ Phone-friendly app to track purchases for **one** school bus conversion (schooli
 ```bash
 cd schoolie-tracker
 npm install
-npm run app
+npm run app:icon
 ```
 
-That builds (if needed) and opens **Schoolie Cost Tracker** in its own window via Electron.
+That installs a **Schoolie bus logo** on your Desktop and in the app menu.  
+**Double-click the logo** to start the standalone app (no browser tab).
 
 | Command | What it does |
 |---------|----------------|
-| `npm run app` | Standalone desktop window |
+| `npm run app:icon` | **Install clickable logo** on Desktop + app menu |
+| `npm run app` | Launch the window once from the terminal |
 | `npm run app:pack` | Build Linux AppImage under `release/` |
 | `npm run app:pack:deb` | Build `.deb` installer |
-| `npm run app:dev` | Electron shell against a running `npm run dev` (set `SCHOOLIE_DEV=1`) |
 
 ### Phone (full-screen icon)
 

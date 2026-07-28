@@ -1,7 +1,7 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.19.0",
+  "version": "1.19.1",
   "description": "Schoolie Cost Tracker — free on-device receipt scans for bus conversions",
   "author": "Schoolie",
   "type": "module",
@@ -16,6 +16,8 @@
     "test": "vitest run",
     "app": "bash scripts/run-desktop.sh",
     "app:dev": "SCHOOLIE_DEV=1 npx electron .",
+    "app:icon": "bash scripts/install-desktop-launcher.sh",
+    "app:install-icon": "bash scripts/install-desktop-launcher.sh",
     "app:pack": "npm run build && electron-builder --linux dir AppImage",
     "app:pack:deb": "npm run build && electron-builder --linux deb"
   },
