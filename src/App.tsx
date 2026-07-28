@@ -92,7 +92,9 @@ import {
   getUpdateServer,
   setAutoUpdate,
   setUpdateServer,
+  useGitHubUpdates,
 } from './appUpdate'
+import { GITHUB_PAGES_BASE, GITHUB_REPO_URL } from './githubConfig'
 import { isNativeCapacitorApp } from './installApp'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
@@ -2808,15 +2810,23 @@ function SettingsScreen(props: {
 
   async function handleOtaCheck() {
     setOtaBusy(true)
-    setOtaStatus('Checking for updates…')
+    setOtaStatus('Checking GitHub for updates…')
     try {
-      if (otaServer.trim()) await setUpdateServer(otaServer)
+      // Empty field = GitHub; only save a custom server if the user typed one
+      if (otaServer.trim()) await setUpdateServer(otaServer.trim())
+      else await useGitHubUpdates().then(setOtaServer)
       await setAutoUpdate(otaAuto)
-      const result = await checkForAppBundleUpdate(otaServer)
+      const result = await checkForAppBundleUpdate(otaServer.trim() || undefined)
       if (result.status === 'current') {
-        setOtaStatus(`You're up to date (v${result.version}).`)
+        setOtaStatus(
+          `You're up to date (v${result.version})${
+            result.source ? ` · checked ${result.source}` : ' · GitHub'
+          }.`,
+        )
       } else if (result.status === 'available') {
-        setOtaStatus(`Update v${result.manifest.version} available — downloading…`)
+        setOtaStatus(
+          `Update v${result.manifest.version} from ${result.manifest.source || 'GitHub'} — downloading…`,
+        )
         const applied = await applyAppBundleUpdate(result.manifest, (m) => setOtaStatus(m))
         if (!applied.ok) setOtaStatus(applied.message)
         else setOtaStatus(`Updated to v${result.manifest.version}. Restarting…`)
@@ -2825,6 +2835,17 @@ function SettingsScreen(props: {
       } else {
         setOtaStatus(result.message)
       }
+    } finally {
+      setOtaBusy(false)
+    }
+  }
+
+  async function handleUseGitHubUpdates() {
+    setOtaBusy(true)
+    try {
+      const base = await useGitHubUpdates()
+      setOtaServer(base)
+      setOtaStatus(`Using GitHub updates (${GITHUB_REPO_URL.replace('https://', '')})`)
     } finally {
       setOtaBusy(false)
     }
@@ -2858,30 +2879,30 @@ function SettingsScreen(props: {
       >
         {nativeApp && (
           <div className="card settings-card">
-            <strong>App updates (no re-download APK)</strong>
+            <strong>App updates from GitHub (no re-download APK)</strong>
             <p className="muted" style={{ margin: '6px 0 12px' }}>
-              Updates come from GitHub by default (
-              <a
-                href="https://github.com/thelubemaster/Receipt-tracker"
-                target="_blank"
-                rel="noreferrer"
-              >
-                thelubemaster/Receipt-tracker
+              New features download as a small web package from{' '}
+              <a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
+                {GITHUB_REPO_URL.replace('https://', '')}
               </a>
-              ). Optional: while your computer runs{' '}
-              <code style={{ fontSize: '0.85em' }}>npm run start:android</code>, you can also pull
-              over Wi‑Fi. You only reinstall the APK for big native changes.
+              . You only reinstall the APK for big native changes.
+            </p>
+            <p className="muted" style={{ margin: '0 0 10px', fontSize: '0.85rem' }}>
+              Current source:{' '}
+              <code style={{ fontSize: '0.8em', wordBreak: 'break-all' }}>
+                {otaServer || GITHUB_PAGES_BASE}
+              </code>
             </p>
             <label className="field" style={{ display: 'block', marginBottom: 10 }}>
               <span className="muted" style={{ fontSize: '0.8rem' }}>
-                Update server (leave blank for GitHub, or paste PC LAN address)
+                Optional custom server (leave GitHub unless you know you need LAN)
               </span>
               <input
                 type="url"
                 inputMode="url"
                 autoCapitalize="off"
                 autoCorrect="off"
-                placeholder="https://thelubemaster.github.io/Receipt-tracker"
+                placeholder={GITHUB_PAGES_BASE}
                 value={otaServer}
                 onChange={(e) => setOtaServer(e.target.value)}
                 style={{ width: '100%', marginTop: 4 }}
@@ -2896,17 +2917,27 @@ function SettingsScreen(props: {
                   void setAutoUpdate(e.target.checked)
                 }}
               />
-              <span>Auto-check when I open the app</span>
+              <span>Auto-check GitHub when I open the app</span>
             </label>
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ width: '100%' }}
-              disabled={otaBusy}
-              onClick={() => void handleOtaCheck()}
-            >
-              {otaBusy ? 'Working…' : 'Check for updates now'}
-            </button>
+            <div className="row-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={otaBusy}
+                onClick={() => void handleUseGitHubUpdates()}
+              >
+                Use GitHub
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ flex: 1, minWidth: 160 }}
+                disabled={otaBusy}
+                onClick={() => void handleOtaCheck()}
+              >
+                {otaBusy ? 'Working…' : 'Check for updates now'}
+              </button>
+            </div>
             {otaStatus && (
               <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.88rem' }}>
                 {otaStatus}

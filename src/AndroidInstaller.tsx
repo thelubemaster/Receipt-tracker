@@ -69,15 +69,7 @@ function apkDownloadUrl(): string {
 }
 
 function updateServerBase(): string {
-  // Prefer GitHub Pages for OTA once installed from GitHub
-  try {
-    if (isLanInstallerHost()) {
-      const { hostname } = window.location
-      return `http://${hostname || '127.0.0.1'}:4190`
-    }
-  } catch {
-    /* ignore */
-  }
+  // Always default OTA to GitHub so the installed app does not stay stuck on a LAN PC
   return GITHUB_PAGES_BASE
 }
 

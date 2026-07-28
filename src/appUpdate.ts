@@ -1,10 +1,8 @@
 /**
  * Over-the-air updates for the installed Android app.
  *
- * Sources (first that works wins):
- * 1. User-set update server (LAN: npm run start:android)
- * 2. Bundled default → GitHub Pages
- * 3. GitHub Releases (latest) for web-update.zip
+ * Default source: GitHub Releases (thelubemaster/Receipt-tracker).
+ * Optional: LAN PC (npm run start:android) if you paste that address.
  *
  * No full APK reinstall needed for most web/feature changes.
  */
@@ -14,20 +12,27 @@ import {
   GITHUB_REPO_URL,
   UPDATE_MANIFEST_PATH,
 } from './githubConfig'
+
+export { GITHUB_PAGES_BASE } from './githubConfig'
 import { APP_VERSION } from './version'
 import { isNativeCapacitorApp } from './installApp'
 
 const PREF_SERVER = 'schoolie-update-server'
 const PREF_AUTO = 'schoolie-auto-update'
 
+/** Direct zip on Releases — works even when GitHub Pages is off. */
+export const GITHUB_WEB_UPDATE_ZIP =
+  `${GITHUB_REPO_URL}/releases/latest/download/web-update.zip`
+
 export type UpdateManifest = {
   version: string
   url: string
   notes?: string
+  source?: string
 }
 
 export type UpdateCheckResult =
-  | { status: 'current'; version: string }
+  | { status: 'current'; version: string; source?: string }
   | { status: 'available'; manifest: UpdateManifest }
   | { status: 'error'; message: string }
   | { status: 'skipped'; message: string }
@@ -50,24 +55,53 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
+function isLanLikeUrl(url: string): boolean {
+  try {
+    const u = new URL(url.includes('://') ? url : `http://${url}`)
+    const h = u.hostname
+    if (h === 'localhost' || h === '127.0.0.1') return true
+    if (/^10\.\d+\.\d+\.\d+$/.test(h)) return true
+    if (/^192\.168\.\d+\.\d+$/.test(h)) return true
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(h)) return true
+    if (/^100\.\d+\.\d+\.\d+$/.test(h)) return true // Tailscale / CGNAT
+    if (u.port === '4190' || u.port === '4193') return true
+    return false
+  } catch {
+    return false
+  }
+}
+
 export async function getUpdateServer(): Promise<string> {
   // 1) Preferences (user set / remembered)
   try {
     if (isNativeCapacitorApp()) {
       const { Preferences } = await import('@capacitor/preferences')
       const { value } = await Preferences.get({ key: PREF_SERVER })
-      if (value) return normalizeBase(value)
+      if (value) {
+        // Old installs remembered the PC LAN address — migrate to GitHub
+        if (isLanLikeUrl(value)) {
+          await setUpdateServer(GITHUB_PAGES_BASE)
+          return GITHUB_PAGES_BASE
+        }
+        return normalizeBase(value)
+      }
     }
   } catch {
     /* ignore */
   }
   try {
     const ls = localStorage.getItem(PREF_SERVER)
-    if (ls) return normalizeBase(ls)
+    if (ls) {
+      if (isLanLikeUrl(ls)) {
+        await setUpdateServer(GITHUB_PAGES_BASE)
+        return GITHUB_PAGES_BASE
+      }
+      return normalizeBase(ls)
+    }
   } catch {
     /* ignore */
   }
-  // 2) Bundled default from build / GitHub Pages
+  // 2) Bundled default
   try {
     const res = await fetch('./update-server.json', { cache: 'no-store' })
     if (res.ok) {
@@ -77,7 +111,6 @@ export async function getUpdateServer(): Promise<string> {
   } catch {
     /* ignore */
   }
-  // 3) Hard-coded GitHub Pages for this project
   return GITHUB_PAGES_BASE
 }
 
@@ -96,6 +129,12 @@ export async function setUpdateServer(url: string): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+/** Clear custom server and use GitHub (Pages + Releases). */
+export async function useGitHubUpdates(): Promise<string> {
+  await setUpdateServer(GITHUB_PAGES_BASE)
+  return GITHUB_PAGES_BASE
 }
 
 export async function getAutoUpdate(): Promise<boolean> {
@@ -154,9 +193,11 @@ async function fetchJson(url: string): Promise<unknown | null> {
 }
 
 /** Try LAN API then static app-update.json on the same base. */
-async function loadManifestFromBase(base: string): Promise<UpdateManifest | null> {
+async function loadManifestFromBase(
+  base: string,
+  sourceLabel: string,
+): Promise<UpdateManifest | null> {
   const b = normalizeBase(base)
-  // LAN server shape
   const api = await fetchJson(`${b}/api/app-update`)
   if (api && typeof api === 'object') {
     const m = api as Partial<UpdateManifest>
@@ -165,10 +206,10 @@ async function loadManifestFromBase(base: string): Promise<UpdateManifest | null
         version: String(m.version).replace(/^v/i, ''),
         url: resolveManifestUrl(b, String(m.url)),
         notes: m.notes,
+        source: sourceLabel,
       }
     }
   }
-  // Static GitHub Pages / CDN shape
   const file = await fetchJson(`${b}/${UPDATE_MANIFEST_PATH}`)
   if (file && typeof file === 'object') {
     const m = file as Partial<UpdateManifest>
@@ -177,16 +218,34 @@ async function loadManifestFromBase(base: string): Promise<UpdateManifest | null
         version: String(m.version).replace(/^v/i, ''),
         url: resolveManifestUrl(b, String(m.url)),
         notes: m.notes,
+        source: sourceLabel,
       }
     }
   }
   return null
 }
 
-/** Public GitHub Releases → web-update.zip (or schoolie-web-update.zip). */
+/** Public GitHub Releases → web-update.zip */
 async function loadManifestFromGitHubReleases(): Promise<UpdateManifest | null> {
   const data = await fetchJson(GITHUB_RELEASES_LATEST)
-  if (!data || typeof data !== 'object') return null
+  if (!data || typeof data !== 'object') {
+    // API blocked? Try fixed download URL + tag from a lightweight install.json asset
+    const install = await fetchJson(
+      `${GITHUB_REPO_URL}/releases/latest/download/install.json`,
+    )
+    if (install && typeof install === 'object') {
+      const j = install as { version?: string }
+      if (j.version) {
+        return {
+          version: String(j.version).replace(/^v/i, ''),
+          url: GITHUB_WEB_UPDATE_ZIP,
+          notes: 'GitHub Releases',
+          source: 'github-releases',
+        }
+      }
+    }
+    return null
+  }
   const rel = data as {
     tag_name?: string
     name?: string
@@ -201,74 +260,97 @@ async function loadManifestFromGitHubReleases(): Promise<UpdateManifest | null> 
   const zip =
     assets.find((a) => a.name === 'web-update.zip') ||
     assets.find((a) => a.name === 'schoolie-web-update.zip') ||
-    assets.find((a) => (a.name || '').endsWith('.zip') && (a.name || '').includes('update')) ||
-    assets.find((a) => (a.name || '').endsWith('.zip'))
-  if (!zip?.browser_download_url) return null
+    assets.find((a) => (a.name || '').endsWith('.zip') && (a.name || '').includes('update'))
+  const url = zip?.browser_download_url || GITHUB_WEB_UPDATE_ZIP
   return {
     version,
-    url: zip.browser_download_url,
+    url,
     notes: rel.body?.slice(0, 200) || `Release from ${GITHUB_REPO_URL}`,
+    source: 'github-releases',
   }
 }
 
 /**
- * Check for a newer web bundle.
- * Order: explicit server → default server (GitHub Pages) → GitHub Releases.
+ * Check every source and pick the newest bundle.
+ * Always includes GitHub Releases so a leftover LAN address cannot block updates.
  */
 export async function checkForAppBundleUpdate(
   serverBase?: string,
 ): Promise<UpdateCheckResult> {
   const preferred = normalizeBase(serverBase || (await getUpdateServer()))
-  const candidates = [
-    preferred,
-    GITHUB_PAGES_BASE,
-  ].filter((v, i, arr) => v && arr.indexOf(v) === i)
+  const candidates: Array<{ base: string; label: string }> = []
+  const seen = new Set<string>()
+  const add = (base: string, label: string) => {
+    const b = normalizeBase(base)
+    if (!b || seen.has(b)) return
+    seen.add(b)
+    candidates.push({ base: b, label })
+  }
 
+  // GitHub first when preferred is GitHub/Pages; LAN only if user still set it
+  if (preferred && !isLanLikeUrl(preferred)) {
+    add(preferred, 'update-server')
+  }
+  add(GITHUB_PAGES_BASE, 'github-pages')
+  if (preferred && isLanLikeUrl(preferred)) {
+    add(preferred, 'lan-pc')
+  }
+
+  let best: UpdateManifest | null = null
   let lastError = ''
-  for (const base of candidates) {
+  let sawAny = false
+
+  for (const { base, label } of candidates) {
     try {
-      const manifest = await loadManifestFromBase(base)
+      const manifest = await loadManifestFromBase(base, label)
       if (!manifest) continue
-      if (compareVersions(manifest.version, APP_VERSION) > 0) {
-        return { status: 'available', manifest }
+      sawAny = true
+      if (!best || compareVersions(manifest.version, best.version) > 0) {
+        best = manifest
       }
-      return { status: 'current', version: APP_VERSION }
     } catch (e) {
       lastError = e instanceof Error ? e.message : 'check failed'
     }
   }
 
-  // GitHub Releases fallback (works without Pages)
+  // Always consult Releases API
   try {
     const manifest = await loadManifestFromGitHubReleases()
     if (manifest) {
-      if (compareVersions(manifest.version, APP_VERSION) > 0) {
-        return { status: 'available', manifest }
+      sawAny = true
+      if (!best || compareVersions(manifest.version, best.version) > 0) {
+        best = manifest
       }
-      return { status: 'current', version: APP_VERSION }
     }
   } catch (e) {
     lastError = e instanceof Error ? e.message : lastError
   }
 
-  if (!preferred) {
+  if (best) {
+    if (compareVersions(best.version, APP_VERSION) > 0) {
+      return { status: 'available', manifest: best }
+    }
     return {
-      status: 'skipped',
-      message: `No update source. Repo: ${GITHUB_REPO_URL}`,
+      status: 'current',
+      version: APP_VERSION,
+      source: best.source,
     }
   }
 
-  return {
-    status: 'error',
-    message:
-      lastError ||
-      'Could not reach GitHub updates yet. Push a release (or enable Pages) on the Receipt-tracker repo.',
+  if (!sawAny) {
+    return {
+      status: 'error',
+      message:
+        lastError ||
+        'Could not reach GitHub updates. Check your internet, then try again.',
+    }
   }
+
+  return { status: 'current', version: APP_VERSION }
 }
 
 /**
  * Download and apply OTA web update (native APK only).
- * Returns true if the app will reload with the new version.
  */
 export async function applyAppBundleUpdate(
   manifest: UpdateManifest,
@@ -281,7 +363,7 @@ export async function applyAppBundleUpdate(
     }
   }
   try {
-    onProgress?.('Downloading update…')
+    onProgress?.(`Downloading update from ${manifest.source || 'server'}…`)
     const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
     const bundle = await CapacitorUpdater.download({
       url: manifest.url,
@@ -290,7 +372,6 @@ export async function applyAppBundleUpdate(
     onProgress?.('Installing…')
     await CapacitorUpdater.set(bundle)
     onProgress?.('Restarting…')
-    // Capgo switches bundle; force reload as backup
     setTimeout(() => {
       window.location.reload()
     }, 400)
@@ -303,7 +384,6 @@ export async function applyAppBundleUpdate(
   }
 }
 
-/** Call once when the native app UI is ready (prevents Capgo rollback). */
 export async function notifyNativeAppReady(): Promise<void> {
   if (!isNativeCapacitorApp()) return
   try {
@@ -314,7 +394,6 @@ export async function notifyNativeAppReady(): Promise<void> {
   }
 }
 
-/** Background check: if auto-update on and newer bundle exists, apply it. */
 export async function autoUpdateIfAvailable(
   onStatus?: (msg: string) => void,
 ): Promise<void> {
