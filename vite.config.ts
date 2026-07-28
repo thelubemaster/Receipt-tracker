@@ -75,6 +75,8 @@ function webLookupPlugin(): Plugin {
 }
 
 export default defineConfig({
+  // Relative base so Electron (file://) and static hosting both work
+  base: './',
   plugins: [
     react(),
     versionJsonPlugin(),
@@ -93,7 +95,8 @@ export default defineConfig({
         background_color: '#0c0e13',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: '/',
+        start_url: './',
+        scope: './',
         icons: [
           {
             src: 'pwa-192.png',

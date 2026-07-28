@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.18.3'
+export const APP_VERSION = '1.19.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.19.0',
+    date: '2026-07-28',
+    title: 'Standalone desktop app',
+    changes: [
+      'Run as its own window with npm run app (Electron) — not a browser tab',
+      'Pack installers with npm run app:pack (Linux AppImage)',
+      'Phone: still installable as a PWA (Add to Home Screen) for full-screen use',
+      'All receipt AI and data stay free and on-device',
+    ],
+  },
   {
     version: '1.18.3',
     date: '2026-07-28',

@@ -2661,6 +2661,28 @@ function SettingsScreen(props: {
         }}
       >
         <div className="card settings-card">
+          <strong>How you run Schoolie</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            {typeof window !== 'undefined' && window.schoolieDesktop?.isDesktop ? (
+              <>
+                You&apos;re in the <strong>standalone desktop app</strong> (not a browser tab).
+                Receipt AI and data stay free and local on this machine.
+              </>
+            ) : (
+              <>
+                <strong>Phone:</strong> browser menu → <em>Add to Home Screen</em> / Install for a
+                full-screen app icon.
+                <br />
+                <strong>Computer:</strong> from the project folder run{' '}
+                <code style={{ fontSize: '0.85em' }}>npm run app</code> for a real desktop window,
+                or <code style={{ fontSize: '0.85em' }}>npm run app:pack</code> for an installable
+                package.
+              </>
+            )}
+          </p>
+        </div>
+
+        <div className="card settings-card">
           <strong>Max power mode</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
             Quick switch: when off, all <strong>heavy</strong> free AIs are skipped (Hammer, Titan,

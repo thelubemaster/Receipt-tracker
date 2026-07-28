@@ -1,8 +1,11 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.18.3",
+  "version": "1.19.0",
+  "description": "Schoolie Cost Tracker — free on-device receipt scans for bus conversions",
+  "author": "Schoolie",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -10,7 +13,11 @@
     "preview": "vite preview --host 0.0.0.0 --port 4190",
     "start": "bash scripts/ensure-running.sh",
     "stop": "bash scripts/stop-server.sh",
-    "test": "vitest run"
+    "test": "vitest run",
+    "app": "bash scripts/run-desktop.sh",
+    "app:dev": "SCHOOLIE_DEV=1 npx electron .",
+    "app:pack": "npm run build && electron-builder --linux dir AppImage",
+    "app:pack:deb": "npm run build && electron-builder --linux deb"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
@@ -25,10 +32,54 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
     "oxlint": "^1.71.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vite-plugin-pwa": "^1.3.0",
     "vitest": "^4.1.10"
+  },
+  "build": {
+    "appId": "app.schoolie.tracker",
+    "productName": "Schoolie Cost Tracker",
+    "copyright": "Free · on-device",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "public/pwa-512.png",
+        "to": "pwa-512.png"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "dir"
+      ],
+      "category": "Office",
+      "icon": "public/pwa-512.png",
+      "synopsis": "Track schoolie conversion costs with free on-device receipt AI"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "public/pwa-512.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "public/pwa-512.png",
+      "category": "public.app-category.finance"
+    }
   }
 }
