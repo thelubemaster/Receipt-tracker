@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.15.0'
+export const APP_VERSION = '1.15.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.15.1',
+    date: '2026-07-28',
+    title: 'Titan ONNX crash soft-fail',
+    changes: [
+      'Fixes Titan “Can’t create a session / graph.cc” killing the scan',
+      'Titan prefers WASM, tries safer backends, then skips cleanly if ONNX fails',
+      'Other free on-device AIs keep running when Titan is unavailable',
+    ],
+  },
   {
     version: '1.15.0',
     date: '2026-07-28',

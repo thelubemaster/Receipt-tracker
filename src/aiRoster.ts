@@ -189,14 +189,15 @@ export const AI_ROSTER: AiProfile[] = [
     fullName: 'Titan · Neural OCR (on-device)',
     kind: 'on-device',
     cost: 'free',
-    role: 'Free neural text model in the browser (WebGPU/WASM). First run downloads once.',
+    role: 'Free neural OCR (ONNX WASM). Soft-skips if the device cannot create a model session.',
     workingLine: 'Titan neural net is reading the photo…',
-    engine: 'Transformers.js · TrOCR (local neural)',
+    engine: 'Transformers.js · TrOCR (local ONNX WASM)',
     emoji: '🦾',
     color: '#ab47bc',
     power: 10,
     tier: 'heavy',
-    phoneWarning: 'May fail or freeze on low-end phones; downloads a model first.',
+    phoneWarning:
+      'Uses ONNX on-device. If you see graph/session errors, turn Titan off — other free AIs still work.',
   },
   {
     id: 'ledger',

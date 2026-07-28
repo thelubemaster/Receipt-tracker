@@ -268,10 +268,19 @@ export async function runMultiAgentReceiptPipeline(
     }
   })
 
-  // --- Titan neural ---
+  // --- Titan neural (soft-fail: ONNX graph errors must not kill the scan) ---
   await runOcrIfEnabled('titan', 'Titan neural path', async () => {
     const { runTitanNeural } = await import('./titanNeural')
     const titan = await runTitanNeural(workBlob, onProgress)
+    if (titan.unavailable || !titan.text.trim()) {
+      // Return empty so path is ignored; note explains ONNX skip
+      skipped.push(
+        titan.reason
+          ? `Titan off (${titan.reason.slice(0, 80)})`
+          : 'Titan produced no text',
+      )
+      return { text: '', note: `Titan unavailable · ${titan.device}` }
+    }
     return {
       text: titan.text,
       note: `Titan ${titan.model} on ${titan.device} · ${titan.strips} strips`,

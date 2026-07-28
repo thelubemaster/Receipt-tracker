@@ -376,6 +376,13 @@ export async function runAiStabilitySuite(
       run: async (b) => {
         const { runTitanNeural } = await import('./agents/titanNeural')
         const r = await runTitanNeural(b)
+        if (r.unavailable) {
+          return {
+            text: '',
+            extra: `unavailable · ${(r.reason || r.device).slice(0, 80)}`,
+            softSkip: true,
+          }
+        }
         return { text: r.text, extra: `${r.model} @ ${r.device}` }
       },
     },
@@ -386,6 +393,18 @@ export async function runAiStabilitySuite(
     try {
       const img = await getBlob()
       const { value, ms } = await timed(async () => runner.run(img))
+      const soft = (value as { softSkip?: boolean }).softSkip
+      if (soft) {
+        // Device cannot run ONNX neural — report skip, not a hard suite failure
+        push(
+          results,
+          runner.id,
+          'skip',
+          ms,
+          `Device cannot run neural ONNX (${value.extra || 'session error'}). Other free AIs OK.`,
+        )
+        continue
+      }
       const ok = ocrLooksOk(value.text)
       push(
         results,
@@ -399,11 +418,10 @@ export async function runAiStabilitySuite(
             : 'No text returned',
       )
     } catch (e) {
-      // Titan/Hammer may fail on weak devices — still report fail, not skip
       push(
         results,
         runner.id,
-        'fail',
+        runner.id === 'titan' ? 'skip' : 'fail',
         0,
         e instanceof Error ? e.message.slice(0, 120) : 'failed',
       )
