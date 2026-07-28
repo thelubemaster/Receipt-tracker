@@ -146,7 +146,8 @@ export function rowToLayoutLine(row: OcrWordBox[], pageWidth: number): LayoutLin
  * Pull orphan right-column prices onto nearby description rows.
  * OCR often puts "39.97" one band below the product name.
  */
-export function attachOrphanPrices(lines: LayoutLine[], pageWidth: number): LayoutLine[] {
+export function attachOrphanPrices(lines: LayoutLine[], _pageWidth = 0): LayoutLine[] {
+  void _pageWidth
   if (lines.length < 2) return lines
   const out: LayoutLine[] = lines.map((l) => ({ ...l, words: [...l.words] }))
   const medianH =
