@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.10.2'
+export const APP_VERSION = '1.11.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.11.0',
+    date: '2026-07-28',
+    title: 'More free AIs + per-AI on/off',
+    changes: [
+      'Added free no-key AIs: Mosaic (tile OCR), Wedge (deskew), Prism (multi-layout), Bloom (2× upscale)',
+      'Settings: enable/disable any non-core AI if your phone can’t handle it',
+      'Disable heavy / Enable all shortcuts; light mode still skips heavy tier',
+    ],
+  },
   {
     version: '1.10.2',
     date: '2026-07-28',

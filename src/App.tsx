@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AiId } from './aiRoster'
-import { AI_ROSTER, getAi } from './aiRoster'
+import {
+  AI_ROSTER,
+  getAi,
+  isAiEnabled,
+  isCoreAi,
+  isHeavyAi,
+  sanitizeDisabledAis,
+} from './aiRoster'
 import { runAiStabilitySuite, type StabilitySuiteResult } from './aiStability'
 import { probeDevice, type DeviceProbeResult } from './deviceProbe'
 import { CATEGORIES, getCategory } from './categories'
@@ -103,6 +110,7 @@ export default function App() {
     projectName: 'My Schoolie',
     lastSeenVersion: '',
     maxPowerMode: true,
+    disabledAis: [],
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -327,6 +335,7 @@ export default function App() {
       {screen.name === 'scan' && (
         <ScanScreen
           maxPowerMode={settings.maxPowerMode}
+          disabledAis={settings.disabledAis ?? []}
           retryBlob={screen.retryBlob}
           retryPreviewUrl={screen.retryPreviewUrl}
           rejected={screen.rejected}
@@ -708,6 +717,7 @@ function HomeScreen(props: {
 
 function ScanScreen(props: {
   maxPowerMode: boolean
+  disabledAis: AiId[]
   retryBlob?: Blob
   retryPreviewUrl?: string
   rejected?: RejectedScanSnapshot
@@ -731,12 +741,13 @@ function ScanScreen(props: {
   const autoStarted = useRef(false)
 
   const whoWillScan = useMemo(() => {
-    const base = AI_ROSTER.map((a) => a.name)
-    if (!props.maxPowerMode && !props.rejected) {
-      return base.filter((n) => n !== 'Hammer' && n !== 'Titan')
-    }
-    return base
-  }, [props.maxPowerMode, props.rejected])
+    return AI_ROSTER.filter((a) =>
+      isAiEnabled(a.id, {
+        disabledAis: props.disabledAis,
+        maxPowerMode: props.rejected ? true : props.maxPowerMode,
+      }),
+    ).map((a) => a.name)
+  }, [props.maxPowerMode, props.disabledAis, props.rejected])
 
   async function runScan(
     blob: Blob,
@@ -763,6 +774,7 @@ function ScanScreen(props: {
     try {
       const suggestion = await scanReceipt(blob, {
         maxPower: isRetry ? true : props.maxPowerMode,
+        disabledAis: props.disabledAis,
         rejected,
         onProgress: (p) => {
           setProgress(p.progress)
@@ -1697,6 +1709,9 @@ function SettingsScreen(props: {
 }) {
   const [projectName, setProjectName] = useState(props.settings.projectName)
   const [maxPowerMode, setMaxPowerMode] = useState(props.settings.maxPowerMode !== false)
+  const [disabledAis, setDisabledAis] = useState<AiId[]>(
+    () => sanitizeDisabledAis(props.settings.disabledAis ?? []),
+  )
   const [saving, setSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
   const [board, setBoard] = useState<LeaderboardMap>(defaultLeaderboard())
@@ -1777,6 +1792,7 @@ function SettingsScreen(props: {
               projectName: projectName.trim() || 'My Schoolie',
               lastSeenVersion: props.settings.lastSeenVersion,
               maxPowerMode,
+              disabledAis: sanitizeDisabledAis(disabledAis),
             })
             .finally(() => setSaving(false))
         }}
@@ -1784,9 +1800,9 @@ function SettingsScreen(props: {
         <div className="card settings-card">
           <strong>Max power mode</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            When on, every scan runs <strong>Hammer</strong> (parallel multi-worker OCR) and{' '}
-            <strong>Titan</strong> (free on-device neural OCR). Uses more CPU/GPU and battery — no
-            API key. First Titan run downloads a model (~tens of MB), then offline.
+            Quick switch: when off, all <strong>heavy</strong> free AIs are skipped (Hammer, Titan,
+            Mosaic, Bloom, Prism, Council, …). No API keys either way. Turn individual AIs on/off
+            below if your phone struggles.
           </p>
           <label className="power-toggle">
             <input
@@ -1794,8 +1810,78 @@ function SettingsScreen(props: {
               checked={maxPowerMode}
               onChange={(e) => setMaxPowerMode(e.target.checked)}
             />
-            <span>{maxPowerMode ? 'ON — push the phone hard' : 'OFF — lighter free team only'}</span>
+            <span>{maxPowerMode ? 'ON — heavy free AIs allowed' : 'OFF — light free team only'}</span>
           </label>
+        </div>
+
+        <div className="card settings-card">
+          <strong>Free AIs — enable / disable</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Every AI here is free and needs no API key. Heavy ones may not run well on older phones —
+            just turn them off. Core AIs (needed for a basic scan) stay on.
+          </p>
+          <div className="ai-toggle-list">
+            {AI_ROSTER.map((ai) => {
+              const core = isCoreAi(ai.id)
+              const on = isAiEnabled(ai.id, { disabledAis, maxPowerMode })
+              const forcedOffByLight = !maxPowerMode && isHeavyAi(ai.id) && !core
+              return (
+                <label
+                  key={ai.id}
+                  className={`ai-toggle-row${core ? ' ai-toggle-core' : ''}${!on ? ' ai-toggle-off' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={core || forcedOffByLight}
+                    onChange={(e) => {
+                      if (core || forcedOffByLight) return
+                      setDisabledAis((prev) => {
+                        if (e.target.checked) return prev.filter((id) => id !== ai.id)
+                        return sanitizeDisabledAis([...prev, ai.id])
+                      })
+                    }}
+                  />
+                  <span className="ai-toggle-emoji" style={{ color: ai.color }}>
+                    {ai.emoji}
+                  </span>
+                  <span className="ai-toggle-meta">
+                    <strong>
+                      {ai.name}
+                      {core ? ' · core' : isHeavyAi(ai.id) ? ' · heavy' : ''}
+                    </strong>
+                    <span className="muted">
+                      Load {ai.power}/10 · {ai.role}
+                      {forcedOffByLight ? ' · off in light mode' : ''}
+                      {ai.phoneWarning ? ` · ${ai.phoneWarning}` : ''}
+                    </span>
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+          <div className="row-actions" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() =>
+                setDisabledAis(
+                  sanitizeDisabledAis(
+                    AI_ROSTER.filter((a) => isHeavyAi(a.id)).map((a) => a.id),
+                  ),
+                )
+              }
+            >
+              Disable heavy
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setDisabledAis([])}
+            >
+              Enable all
+            </button>
+          </div>
         </div>
 
         <div className="card settings-card">

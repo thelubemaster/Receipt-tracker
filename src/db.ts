@@ -110,10 +110,14 @@ export async function getImage(id: string): Promise<Blob | undefined> {
 export async function getSettings(): Promise<AppSettings> {
   const db = await getDb()
   const row = await db.get('settings', SETTINGS_KEY)
+  const { sanitizeDisabledAis } = await import('./aiRoster')
   return {
     projectName: row?.projectName ?? 'My Schoolie',
     lastSeenVersion: row?.lastSeenVersion ?? '',
     maxPowerMode: row?.maxPowerMode !== false,
+    disabledAis: sanitizeDisabledAis(
+      (row as { disabledAis?: unknown } | undefined)?.disabledAis,
+    ),
   }
 }
 

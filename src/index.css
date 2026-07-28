@@ -794,6 +794,56 @@ a {
   align-items: center;
 }
 
+.ai-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.ai-toggle-row {
+  display: grid;
+  grid-template-columns: 22px 28px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+
+.ai-toggle-row.ai-toggle-off {
+  opacity: 0.55;
+}
+
+.ai-toggle-row.ai-toggle-core {
+  border-color: rgba(240, 195, 106, 0.22);
+}
+
+.ai-toggle-row input {
+  margin-top: 4px;
+}
+
+.ai-toggle-emoji {
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.ai-toggle-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.88rem;
+}
+
+.ai-toggle-meta .muted {
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
 .line-items-list {
   display: flex;
   flex-direction: column;

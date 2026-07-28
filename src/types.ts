@@ -44,8 +44,16 @@ export interface Purchase {
 export interface AppSettings {
   projectName: string
   lastSeenVersion: string
-  /** Run Hammer + Titan heavy engines (default true) */
+  /**
+   * Quick light mode: when false, skips all “heavy” tier AIs
+   * (Hammer, Titan, Mosaic, Bloom, Prism, Council, …).
+   */
   maxPowerMode: boolean
+  /**
+   * Free AIs the user turned off (e.g. phone too weak for Titan/Mosaic).
+   * Core AIs (Scout, Ledger, Cashier, Clerk, Arbiter) cannot be disabled.
+   */
+  disabledAis: import('./aiRoster').AiId[]
 }
 
 export interface ReceiptSuggestion {

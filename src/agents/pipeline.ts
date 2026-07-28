@@ -1,4 +1,5 @@
 import type { AiId } from '../aiRoster'
+import { isAiEnabled } from '../aiRoster'
 import type { ReceiptSuggestion } from '../types'
 import { runArbiterAgent } from './arbiterAgent'
 import { runForgeOcr } from './forgeOcr'
@@ -47,11 +48,17 @@ function parseFromText(
   label: string,
   ocrNote: string,
   extraAis: AiId[],
+  enabled: (id: AiId) => boolean,
 ): LocalAgentResult {
-  const sieve = runSieveAgent(rawText)
+  const ledgerOnly = runLineItemsAgent(rawText)
+  const sieve = enabled('sieve')
+    ? runSieveAgent(rawText)
+    : {
+        ...ledgerOnly,
+        notes: [...ledgerOnly.notes, 'Sieve disabled — Ledger only'],
+      }
   const totals = runTotalsAgent(rawText)
   const merchant = runMerchantAgent(rawText)
-  const ledgerOnly = runLineItemsAgent(rawText)
 
   const result = runArbiterAgent({
     rawText,
@@ -63,22 +70,24 @@ function parseFromText(
     merchant,
   })
 
-  result.aisUsed = Array.from(
-    new Set<AiId>(['ledger', 'sieve', 'cashier', 'clerk', 'arbiter', ...extraAis]),
-  )
+  const used: AiId[] = ['ledger', 'cashier', 'clerk', 'arbiter', ...extraAis]
+  if (enabled('sieve')) used.push('sieve')
+  result.aisUsed = Array.from(new Set<AiId>(used))
   result.activeAiLabel = label
   result.agentReport = [
     `Free parse path: ${label}`,
     ocrNote,
-    `Ledger: ${ledgerOnly.items.length} · Sieve: ${sieve.items.length}`,
+    `Ledger: ${ledgerOnly.items.length} · Sieve: ${enabled('sieve') ? sieve.items.length : 'off'}`,
     result.agentReport,
   ].join('\n')
   return result
 }
 
 export type PipelineOptions = {
-  /** Default true — run Hammer swarm + Titan neural (heavy phone load) */
+  /** Default true — heavy-tier free AIs allowed (unless individually disabled) */
   maxPower?: boolean
+  /** User-disabled free AIs (Settings toggles) */
+  disabledAis?: AiId[]
   /**
    * User pressed Try again — previous answer was wrong.
    * Pipeline diversifies OCR + picks a different parse.
@@ -112,8 +121,10 @@ export async function runMultiAgentReceiptPipeline(
   options: PipelineOptions = {},
 ): Promise<LocalAgentResult> {
   const rejected = options.rejected
-  // Retries always push hard — user already said the first answer was wrong
+  // Retries allow heavy tier unless user explicitly disabled those AIs
   const maxPower = rejected ? true : options.maxPower !== false
+  const disabledAis = options.disabledAis ?? []
+  const enabled = (id: AiId) => isAiEnabled(id, { disabledAis, maxPowerMode: maxPower })
   const attempt = rejected?.attempt ?? 0
 
   let workBlob = imageBlob
@@ -135,123 +146,113 @@ export async function runMultiAgentReceiptPipeline(
       stage: 'prepare',
       progress: 0.02,
       message: maxPower
-        ? 'Starting MAX-POWER free AI team (Hammer + Titan)…'
-        : 'Starting free AI team…',
-      aiId: 'hammer',
-      aiName: 'Hammer',
+        ? 'Starting free AI team (heavy engines allowed if enabled)…'
+        : 'Starting free AI team (light mode — heavy AIs off)…',
+      aiId: 'forge',
+      aiName: 'Forge',
     })
   }
 
   const ocrTexts: { label: string; text: string; note: string; ais: AiId[] }[] = []
+  const skipped: string[] = []
+
+  async function runOcrIfEnabled(
+    id: AiId,
+    label: string,
+    runner: () => Promise<{ text: string; note: string }>,
+  ) {
+    if (!enabled(id)) {
+      skipped.push(`${label} off`)
+      return
+    }
+    try {
+      const r = await runner()
+      if (r.text.trim()) {
+        ocrTexts.push({ label, text: r.text, note: r.note, ais: [id] })
+      }
+    } catch (e) {
+      onProgress?.({
+        stage: 'ocr',
+        progress: 0.45,
+        message: `${label} skipped: ${e instanceof Error ? e.message : 'error'}`,
+        aiId: id,
+        aiName: label.split(' ')[0],
+      })
+    }
+  }
 
   // --- Forge ---
-  try {
+  await runOcrIfEnabled('forge', 'Forge path', async () => {
     const forge = await runForgeOcr(workBlob, onProgress)
-    if (forge.text.trim()) {
-      ocrTexts.push({
-        label: 'Forge path',
-        text: forge.text,
-        note: `Forge best: ${forge.bestPass}`,
-        ais: ['forge'],
-      })
-    }
-  } catch (e) {
-    ocrTexts.push({
-      label: 'Forge path',
-      text: '',
-      note: `Forge failed: ${e instanceof Error ? e.message : 'error'}`,
-      ais: ['forge'],
-    })
-  }
+    return { text: forge.text, note: `Forge best: ${forge.bestPass}` }
+  })
 
   // --- Lens ---
-  try {
+  await runOcrIfEnabled('lens', 'Lens path', async () => {
     const lens = await runLensOcr(workBlob, onProgress)
-    if (lens.text.trim()) {
-      ocrTexts.push({
-        label: 'Lens path',
-        text: lens.text,
-        note: `Lens best: ${lens.bestPass}`,
-        ais: ['lens'],
-      })
-    }
-  } catch (e) {
-    /* optional */
-  }
+    return { text: lens.text, note: `Lens best: ${lens.bestPass}` }
+  })
 
-  // --- Ruler (layout-aware document rows: names + prices on the same line) ---
-  try {
+  // --- Ruler ---
+  await runOcrIfEnabled('ruler', 'Ruler layout path', async () => {
     const { runRulerOcr } = await import('./rulerOcr')
     const ruler = await runRulerOcr(workBlob, onProgress)
-    if (ruler.text.trim()) {
-      ocrTexts.push({
-        label: 'Ruler layout path',
-        text: ruler.text,
-        note: `Ruler: ${ruler.lineCount} document lines · ${ruler.wordCount} words · ${ruler.bestPass}`,
-        ais: ['ruler'],
-      })
-      // Prefer Ruler text for council hunting when it found more money-on-line rows
+    return {
+      text: ruler.text,
+      note: `Ruler: ${ruler.lineCount} document lines · ${ruler.wordCount} words · ${ruler.bestPass}`,
     }
-  } catch (e) {
-    onProgress?.({
-      stage: 'ocr',
-      progress: 0.48,
-      message: `Ruler skipped: ${e instanceof Error ? e.message : 'unavailable'}`,
-      aiId: 'ruler',
-      aiName: 'Ruler',
-    })
-  }
+  })
 
-  // --- Hammer (max power parallel swarm) ---
-  if (maxPower) {
-    try {
-      const hammer = await runHammerOcr(workBlob, onProgress)
-      if (hammer.text.trim()) {
-        ocrTexts.push({
-          label: 'Hammer path',
-          text: hammer.text,
-          note: `Hammer: ${hammer.workersUsed} workers × ${hammer.variantsRun} jobs · best ${hammer.bestPass}`,
-          ais: ['hammer'],
-        })
-      }
-    } catch (e) {
-      onProgress?.({
-        stage: 'ocr',
-        progress: 0.5,
-        message: `Hammer failed: ${e instanceof Error ? e.message : 'error'}`,
-        aiId: 'hammer',
-        aiName: 'Hammer',
-      })
+  // --- Wedge (deskew) ---
+  await runOcrIfEnabled('wedge', 'Wedge deskew path', async () => {
+    const { runWedgeOcr } = await import('./wedgeOcr')
+    const wedge = await runWedgeOcr(workBlob, onProgress)
+    return { text: wedge.text, note: `Wedge deskew ${wedge.angleDeg.toFixed(1)}° · ${wedge.bestPass}` }
+  })
+
+  // --- Prism (multi-PSM) ---
+  await runOcrIfEnabled('prism', 'Prism multi-layout path', async () => {
+    const { runPrismOcr } = await import('./prismOcr')
+    const prism = await runPrismOcr(workBlob, onProgress)
+    return { text: prism.text, note: `Prism ${prism.modesRun} modes · ${prism.bestPass}` }
+  })
+
+  // --- Bloom (2× upscale) ---
+  await runOcrIfEnabled('bloom', 'Bloom upscale path', async () => {
+    const { runBloomOcr } = await import('./bloomOcr')
+    const bloom = await runBloomOcr(workBlob, onProgress)
+    return { text: bloom.text, note: `Bloom ×${bloom.scale} · ${bloom.bestPass}` }
+  })
+
+  // --- Mosaic (tile) ---
+  await runOcrIfEnabled('mosaic', 'Mosaic tile path', async () => {
+    const { runMosaicOcr } = await import('./mosaicOcr')
+    const mosaic = await runMosaicOcr(workBlob, onProgress)
+    return { text: mosaic.text, note: `Mosaic ${mosaic.tiles} tiles · ${mosaic.bestPass}` }
+  })
+
+  // --- Hammer ---
+  await runOcrIfEnabled('hammer', 'Hammer path', async () => {
+    const hammer = await runHammerOcr(workBlob, onProgress)
+    return {
+      text: hammer.text,
+      note: `Hammer: ${hammer.workersUsed} workers × ${hammer.variantsRun} jobs · best ${hammer.bestPass}`,
     }
-  }
+  })
 
   // --- Titan neural ---
-  if (maxPower) {
-    try {
-      const { runTitanNeural } = await import('./titanNeural')
-      const titan = await runTitanNeural(workBlob, onProgress)
-      if (titan.text.trim()) {
-        ocrTexts.push({
-          label: 'Titan neural path',
-          text: titan.text,
-          note: `Titan ${titan.model} on ${titan.device} · ${titan.strips} strips`,
-          ais: ['titan'],
-        })
-      }
-    } catch (e) {
-      onProgress?.({
-        stage: 'ocr',
-        progress: 0.55,
-        message: `Titan skipped: ${e instanceof Error ? e.message : 'unavailable'}`,
-        aiId: 'titan',
-        aiName: 'Titan',
-      })
+  await runOcrIfEnabled('titan', 'Titan neural path', async () => {
+    const { runTitanNeural } = await import('./titanNeural')
+    const titan = await runTitanNeural(workBlob, onProgress)
+    return {
+      text: titan.text,
+      note: `Titan ${titan.model} on ${titan.device} · ${titan.strips} strips`,
     }
-  }
+  })
 
   const usable = ocrTexts.filter((o) => o.text.trim().length > 10)
   if (!usable.length) {
-    // last-ditch scout
+    // last-ditch scout (core — always allowed)
     try {
       const Tesseract = await import('tesseract.js')
       onProgress?.({
@@ -294,7 +295,7 @@ export async function runMultiAgentReceiptPipeline(
     aiName: 'Sieve',
   })
 
-  const parses = usable.map((u) => parseFromText(u.text, u.label, u.note, u.ais))
+  const parses = usable.map((u) => parseFromText(u.text, u.label, u.note, u.ais, enabled))
 
   // Merged OCR super-text (layout-first when Ruler present)
   let merged = usable[0].text
@@ -308,6 +309,7 @@ export async function runMultiAgentReceiptPipeline(
         'Merged multi-OCR path',
         `Merged ${usable.length} OCR engines (layout-first)`,
         usable.flatMap((u) => u.ais),
+        enabled,
       ),
     )
   }
@@ -336,18 +338,21 @@ export async function runMultiAgentReceiptPipeline(
     const picked = pickDiversifiedParse(parses, rejected, scoreParseCandidate)
     final = picked.winner
     diversifyReport = picked.report
-    // Still merge items from other candidates that don't match the rejected set
-    for (const p of parses) {
-      if (p === final) continue
-      if (similarityToRejected(p, rejected) < 0.7) {
-        final = runQuorumAgent(final, p)
+    if (enabled('quorum')) {
+      for (const p of parses) {
+        if (p === final) continue
+        if (similarityToRejected(p, rejected) < 0.7) {
+          final = runQuorumAgent(final, p)
+        }
       }
     }
-  } else {
+  } else if (enabled('quorum') && parses.length > 1) {
     final = parses[0]
     for (let i = 1; i < parses.length; i++) {
       final = runQuorumAgent(final, parses[i])
     }
+  } else {
+    final = parses[0]
   }
 
   if (!final.rawText || councilText.length > final.rawText.length) {
@@ -364,23 +369,27 @@ export async function runMultiAgentReceiptPipeline(
     aiName: 'Council',
   })
 
-  final = runCouncilAgent(
-    final,
-    councilText || final.rawText || '',
-    (msg, aiId) => {
-      onProgress?.({
-        stage: 'arbitrate',
-        progress: 0.94,
-        message: msg.slice(0, 120),
-        aiId: aiId ?? 'council',
-        aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
-      })
-    },
-    rejected,
-  )
+  if (enabled('council')) {
+    final = runCouncilAgent(
+      final,
+      councilText || final.rawText || '',
+      (msg, aiId) => {
+        onProgress?.({
+          stage: 'arbitrate',
+          progress: 0.94,
+          message: msg.slice(0, 120),
+          aiId: aiId ?? 'council',
+          aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+        })
+      },
+      rejected,
+    )
+  } else {
+    skipped.push('Council off')
+  }
 
   // If still nearly identical to rejected, force another council pass from alternate OCR
-  if (rejected && similarityToRejected(final, rejected) >= 0.82) {
+  if (enabled('council') && rejected && similarityToRejected(final, rejected) >= 0.82) {
     onProgress?.({
       stage: 'arbitrate',
       progress: 0.95,
@@ -388,7 +397,6 @@ export async function runMultiAgentReceiptPipeline(
       aiId: 'arbiter',
       aiName: 'Arbiter',
     })
-    // Prefer the lowest-similarity parse as a fresh draft
     const alt = pickDiversifiedParse(parses, rejected, (c) => scoreParseCandidate(c) * 0.5)
     final = runCouncilAgent(
       {
@@ -415,7 +423,7 @@ export async function runMultiAgentReceiptPipeline(
   }
 
   // Seeker — free internet enrichment (DuckDuckGo + Wikipedia via host proxy)
-  if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+  if (enabled('seeker') && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
     onProgress?.({
       stage: 'arbitrate',
       progress: 0.96,
@@ -435,59 +443,69 @@ export async function runMultiAgentReceiptPipeline(
           }),
       })
       final = applySeekerToDraft(final, seek)
-      // Re-run a light council pass so agents react to web facts
-      final = runCouncilAgent(
-        final,
-        councilText || final.rawText || '',
-        (msg, aiId) => {
-          onProgress?.({
-            stage: 'arbitrate',
-            progress: 0.98,
-            message: msg.slice(0, 120),
-            aiId: aiId ?? 'council',
-            aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
-          })
-        },
-        rejected,
-      )
+      if (enabled('council')) {
+        final = runCouncilAgent(
+          final,
+          councilText || final.rawText || '',
+          (msg, aiId) => {
+            onProgress?.({
+              stage: 'arbitrate',
+              progress: 0.98,
+              message: msg.slice(0, 120),
+              aiId: aiId ?? 'council',
+              aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+            })
+          },
+          rejected,
+        )
+      }
     } catch (e) {
       final.agentReport = [
         final.agentReport,
         `Seeker skipped: ${e instanceof Error ? e.message : 'offline or proxy unavailable'}`,
       ].join('\n')
     }
+  } else if (!enabled('seeker')) {
+    skipped.push('Seeker off')
   }
 
-  final.aisUsed = Array.from(
-    new Set<AiId>([
-      ...(final.aisUsed ?? []),
-      'forge',
-      'lens',
-      'ruler',
-      'hammer',
-      'titan',
-      'scout',
-      'ledger',
-      'sieve',
-      'cashier',
-      'clerk',
-      'arbiter',
-      'quorum',
-      'council',
-      'seeker',
-    ]),
-  )
+  const ranIds = new Set<AiId>([
+    ...(final.aisUsed ?? []),
+    ...usable.flatMap((u) => u.ais),
+    'scout',
+    'ledger',
+    'cashier',
+    'clerk',
+    'arbiter',
+  ])
+  for (const id of [
+    'forge',
+    'lens',
+    'ruler',
+    'wedge',
+    'prism',
+    'bloom',
+    'mosaic',
+    'hammer',
+    'titan',
+    'sieve',
+    'quorum',
+    'council',
+    'seeker',
+  ] as AiId[]) {
+    if (enabled(id)) ranIds.add(id)
+  }
+  final.aisUsed = Array.from(ranIds)
   final.activeAiLabel = rejected
     ? `Retry #${attempt} · free team (avoided rejected answer)`
     : maxPower
-      ? 'Max-power free team + Ruler layout + Council + Seeker'
-      : 'Free team + Ruler layout + Council + Seeker'
+      ? 'Free team (heavy allowed if enabled)'
+      : 'Free team (light mode)'
   final.agentReport = [
     rejected ? formatRejectionBrief(rejected) : null,
     diversifyReport || null,
-    maxPower
-      ? 'MAX POWER free AIs: Forge, Lens, Ruler, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker'
-      : 'Free AIs: Forge, Lens, Ruler, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker',
+    skipped.length ? `Disabled/skipped: ${skipped.join(', ')}` : null,
+    `Free AIs this run: ${Array.from(ranIds).join(', ')}`,
     ...usable.map((u) => u.note),
     final.agentReport,
   ]

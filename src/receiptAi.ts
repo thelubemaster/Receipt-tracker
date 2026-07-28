@@ -14,8 +14,10 @@ export type ScanResult = ReceiptSuggestion & {
 }
 
 export type ScanOptions = {
-  /** Default true — Hammer parallel OCR + Titan neural (heavy phone load) */
+  /** Default true — heavy-tier free AIs allowed unless disabled */
   maxPower?: boolean
+  /** Free AIs turned off in Settings */
+  disabledAis?: AiId[]
   /**
    * Prior scan the user rejected with Try again.
    * AIs diversify instead of returning the same answer.
@@ -39,7 +41,7 @@ export async function scanReceipt(
   imageBlob: Blob,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  const { onProgress, maxPower = true, rejected } = options
+  const { onProgress, maxPower = true, disabledAis = [], rejected } = options
 
   onProgress?.({
     stage: 'prepare',
@@ -47,17 +49,17 @@ export async function scanReceipt(
     message: rejected
       ? `Try again #${rejected.attempt}: AIs know the last result was wrong…`
       : maxPower
-        ? 'Starting MAX-POWER free AI team…'
-        : 'Starting free AI team…',
+        ? 'Starting free AI team…'
+        : 'Starting free AI team (light mode)…',
     engine: 'on-device',
-    aiId: rejected ? 'arbiter' : 'hammer',
-    aiName: rejected ? 'Arbiter' : 'Hammer',
+    aiId: rejected ? 'arbiter' : 'forge',
+    aiName: rejected ? 'Arbiter' : 'Forge',
   })
 
   const local: LocalAgentResult = await runOnDeviceReceiptAgent(
     imageBlob,
     (p) => onProgress?.({ ...p, engine: 'on-device', aiId: p.aiId, aiName: p.aiName }),
-    { maxPower: rejected ? true : maxPower, rejected },
+    { maxPower: rejected ? true : maxPower, disabledAis, rejected },
   )
 
   onProgress?.({
