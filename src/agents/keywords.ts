@@ -149,7 +149,22 @@ export const CATEGORY_KEYWORDS: Record<string, string[]> = {
     'clutch',
     'rebuild kit',
   ],
-  misc: ['tow', 'towing', 'wrecker', 'roadside', 'recovery', 'labor', 'service fee', 'convenience fee'],
+  towing: [
+    'tow',
+    'towing',
+    'towed',
+    'wrecker',
+    'roadside',
+    'recovery',
+    'flatbed',
+    'winch out',
+    'impound',
+    'hook up',
+    'tow truck',
+    'towing service',
+  ],
+  // labor / generic fees only — not towing (that has its own bucket)
+  misc: ['labor', 'service fee', 'convenience fee', 'processing fee'],
 }
 
 /**
@@ -157,6 +172,21 @@ export const CATEGORY_KEYWORDS: Record<string, string[]> = {
  * First strong match wins as a new/grouped category label.
  */
 const DYNAMIC_FAMILIES: { label: string; words: string[] }[] = [
+  {
+    label: 'Towing & Roadside',
+    words: [
+      'tow',
+      'towing',
+      'towed',
+      'wrecker',
+      'roadside',
+      'flatbed',
+      'impound',
+      'tow truck',
+      'towing service',
+      'winch',
+    ],
+  },
   {
     label: 'Engine & Powertrain',
     words: [
@@ -331,12 +361,15 @@ export function inventCategoryFromText(text: string): { categoryId: CategoryId; 
 
   if (bestScore >= 2 && bestLabel) {
     const cat = makeCustomCategory(bestLabel)
-    // Prefer stable builtin id when label matches engine preset
+    // Prefer stable builtin id when label matches a preset family
     if (bestLabel === 'Engine & Powertrain') {
       return { categoryId: 'engine', label: bestLabel, score: bestScore }
     }
     if (bestLabel === 'Fuel system') {
       return { categoryId: 'fuel', label: 'Fuel & Travel', score: bestScore }
+    }
+    if (bestLabel === 'Towing & Roadside') {
+      return { categoryId: 'towing', label: bestLabel, score: bestScore }
     }
     return { categoryId: cat.id, label: cat.label, score: bestScore }
   }
@@ -392,34 +425,49 @@ export function inventCategoryFromText(text: string): { categoryId: CategoryId; 
  * - Strong preset keyword match → use preset
  * - Else invent a free-form category (engine parts, filters, etc.)
  * - Avoid dumping everything into Misc when there is product signal
+ * - optional avoidId: user marked previous category ✗ — pick something else
  */
-export function categorizeText(text: string): {
+export function categorizeText(
+  text: string,
+  opts?: { avoidId?: CategoryId | null },
+): {
   categoryId: CategoryId
   score: number
   label?: string
   invented?: boolean
 } {
   const lower = text.toLowerCase()
-  let best: CategoryId = 'misc'
-  let bestScore = 0
+  const avoid = opts?.avoidId || null
 
+  // Rank all presets
+  const ranked: { id: CategoryId; score: number }[] = []
   for (const [id, words] of Object.entries(CATEGORY_KEYWORDS)) {
     if (id === 'misc') continue
     const score = scoreWords(lower, words)
-    if (score > bestScore) {
-      bestScore = score
-      best = id as CategoryId
-    }
+    if (score > 0) ranked.push({ id: id as CategoryId, score })
+  }
+  ranked.sort((a, b) => b.score - a.score)
+
+  let best: CategoryId = 'misc'
+  let bestScore = 0
+  for (const r of ranked) {
+    if (avoid && r.id === avoid) continue
+    best = r.id
+    bestScore = r.score
+    break
   }
 
-  // Strong preset hit
-  if (bestScore >= 4) {
+  // Strong preset hit (towing only needs a light hit — "towing service" is clear)
+  const strongThreshold = best === 'towing' ? 2 : 4
+  if (bestScore >= strongThreshold) {
     return { categoryId: best, score: bestScore, invented: false }
   }
 
   // Medium preset — still ok if better than invent
   const invented = inventCategoryFromText(text)
-  if (invented.score > bestScore || (bestScore < 3 && invented.score >= 2)) {
+  if (avoid && invented.categoryId === avoid) {
+    // invent landed on banned id — fall through
+  } else if (invented.score > bestScore || (bestScore < 3 && invented.score >= 2)) {
     return {
       categoryId: invented.categoryId,
       score: invented.score,
@@ -433,13 +481,18 @@ export function categorizeText(text: string): {
   }
 
   // Truly empty signal
-  if (invented.score > 0) {
+  if (invented.score > 0 && invented.categoryId !== avoid) {
     return {
       categoryId: invented.categoryId,
       score: invented.score,
       label: invented.label,
       invented: true,
     }
+  }
+
+  // Last resort when user banned misc: pick second-best keyword or invent towing-ish from "service"
+  if (avoid === 'misc' && /\btow|wrecker|roadside|flatbed\b/i.test(lower)) {
+    return { categoryId: 'towing', score: 2, invented: false }
   }
 
   return { categoryId: 'misc', score: 0, invented: false }

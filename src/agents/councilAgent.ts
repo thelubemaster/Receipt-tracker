@@ -10,6 +10,7 @@ import { Blackboard } from './blackboard'
 import { categorizeText } from './keywords'
 import {
   dedupeItemsByAmount,
+  extractFeeFromText,
   isFeeLineItem,
   isShippingLineItem,
   makeFeeLineItem,
@@ -77,14 +78,8 @@ function productSum(items: ReceiptLineItem[]): number {
   )
 }
 
-function extractFee(text: string): number | null {
-  const m = text.match(
-    /\bc[o0]nvenience\s*fee\b[\s\S]{0,24}?\$?\s*([\d,]+(?:\.\d{2})?)|\bservice\s*fee\b[\s\S]{0,24}?\$?\s*([\d,]+(?:\.\d{2})?)|\bpr[o0]cessing\s*fee\b[\s\S]{0,24}?\$?\s*([\d,]+(?:\.\d{2})?)/i,
-  )
-  if (!m) return null
-  const raw = m[1] || m[2] || m[3]
-  const n = Number(String(raw).replace(/,/g, ''))
-  return Number.isFinite(n) && n > 0 ? roundMoney(n) : null
+function extractFee(text: string, force = false, banAmount?: number | null): number | null {
+  return extractFeeFromText(text, { force, banAmount })?.amount ?? null
 }
 
 /**
@@ -243,7 +238,18 @@ export function runCouncilAgent(
         shipping = extractShipping(rawText)
       }
       if (marks.fees === 'wrong') {
-        talk('clerk', 'challenge', 'Fees marked wrong — re-read convenience/service fee.')
+        talk(
+          'clerk',
+          'challenge',
+          'Fees marked wrong — MUST fill Fees section (was empty or incorrect). Hunt convenience/service fee hard.',
+        )
+      }
+      if (marks.category === 'wrong') {
+        talk(
+          'ledger',
+          'challenge',
+          `Category marked wrong (was ${rejected.categoryId || '—'}) — re-classify from vendor + OCR, not Misc by default.`,
+        )
       }
       if (marks.missingItems === 'wrong') {
         talk('sieve', 'challenge', 'Product list incomplete — hunt for NEW items only.')
@@ -257,6 +263,7 @@ export function runCouncilAgent(
         ),
       )
       for (const f of freshLines.items) {
+        if (isFeeLineItem(f.description) || isShippingLineItem(f.description)) continue
         const k = `${f.description.toLowerCase().slice(0, 20)}|${roundMoney(f.amount).toFixed(2)}`
         if (wrongKeys.has(k)) continue
         const dup = items.find((i) => nearlyEqual(i.amount, f.amount))
@@ -270,11 +277,26 @@ export function runCouncilAgent(
       } else if (marks.shipping === 'wrong' || (shipping == null && freshLines.shipping != null)) {
         shipping = freshLines.shipping ?? shipping
       }
-      if (freshLines.fee != null && marks.fees !== 'wrong') {
-        const hasFee = items.some((i) =>
-          /\b(convenience|service fee|processing fee|handling)\b/i.test(i.description),
-        )
+      // Fees: when marked ✗, FORCE a re-hunt (including when previous section was empty).
+      // Bugfix: old code skipped adding fees when marks.fees === 'wrong'.
+      if (marks.fees === 'wrong') {
+        const prevFeeAmt = rejected.lineItems.find((i) => isFeeLineItem(i.description))?.amount ?? null
+        const forced =
+          extractFee(rawText, true, prevFeeAmt) ??
+          freshLines.fee ??
+          extractFee(rawText, true, null)
+        items = items.filter((i) => !isFeeLineItem(i.description))
+        if (forced != null && forced > 0) {
+          fee = forced
+          items.push(makeFeeLineItem(forced))
+          talk('clerk', 'answer', `Fees section filled after ✗ mark: $${forced.toFixed(2)}`)
+        } else {
+          talk('clerk', 'challenge', 'Still no fee amount found in OCR — user may need to type it.')
+        }
+      } else if (freshLines.fee != null) {
+        const hasFee = items.some((i) => isFeeLineItem(i.description))
         if (!hasFee) {
+          fee = freshLines.fee
           items.push(makeFeeLineItem(freshLines.fee))
           talk('clerk', 'answer', `Fees section: $${freshLines.fee.toFixed(2)}`)
         }
@@ -514,8 +536,8 @@ export function runCouncilAgent(
   }
   items = [...productsOnly, ...shipRows, ...feeRows]
 
-  // Towing / service invoice: rebuild as a service line (category: misc = services/labor)
-  if (/\btow(ing)?\b/i.test(rawText)) {
+  // Towing / roadside invoice: rebuild as Towing category (not Misc)
+  if (/\btow(ing)?\b|wrecker|roadside|flatbed/i.test(rawText)) {
     const towVendor = extractVendor(rawText)
     if (subtotal != null || amount != null) {
       const serviceAmt =
@@ -524,37 +546,34 @@ export function runCouncilAgent(
         talk(
           'council',
           'answer',
-          `Towing/service invoice detected — filing as service (Misc), not fuel/parts. $${serviceAmt.toFixed(2)}.`,
+          `Towing/roadside invoice — filing under Towing & Roadside, not Misc. $${serviceAmt.toFixed(2)}.`,
         )
-        const feeMatch = rawText.match(/convenience fee[\s\S]{0,20}?\$?\s*([\d,]+(?:\.\d{2})?)/i)
-        let fee: number | null = null
-        if (feeMatch) {
-          const n = Number(feeMatch[1].replace(/,/g, ''))
-          if (Number.isFinite(n)) fee = roundMoney(n)
-        }
+        const foundFee =
+          fee ??
+          extractFee(rawText, true) ??
+          extractFeeFromText(rawText, { force: true })?.amount ??
+          null
         items = [
           {
             id: 'council-tow-1',
             description: `${towVendor || 'Towing'} — towing service`,
             amount: serviceAmt,
-            categoryId: 'misc',
+            categoryId: 'towing',
           },
         ]
-        if (fee != null && fee > 0) {
-          items.push({
-            id: 'council-tow-fee',
-            description: 'Convenience / processing fee',
-            amount: fee,
-            categoryId: 'misc',
-          })
+        if (foundFee != null && foundFee > 0) {
+          fee = foundFee
+          items.push(makeFeeLineItem(foundFee, 'Convenience fee', 'council-tow-fee'))
         }
         vendor = towVendor || vendor
       }
     }
   }
 
-  // --- Round 4: Re-categorize materials (not service invoices already handled) ---
-  if (!/\btow(ing)?\b/i.test(rawText)) {
+  // --- Round 4: Re-categorize materials (and towing lines) ---
+  {
+    const avoidCat =
+      rejected?.marks?.category === 'wrong' ? rejected.categoryId ?? null : null
     items = items.map((i) => {
       if (isShippingLineItem(i.description)) {
         return { ...i, description: 'Shipping', categoryId: 'misc' as const }
@@ -562,7 +581,8 @@ export function runCouncilAgent(
       if (isFeeLineItem(i.description)) {
         return { ...i, categoryId: 'misc' as const }
       }
-      const { categoryId } = categorizeText(i.description)
+      const blob = `${i.description} ${vendor} ${rawText.slice(0, 400)}`
+      const { categoryId } = categorizeText(blob, { avoidId: avoidCat })
       if (categoryId !== i.categoryId) {
         talk('ledger', 'answer', `Recategorized “${i.description.slice(0, 36)}” → ${categoryId}`)
         return { ...i, categoryId }
@@ -630,9 +650,49 @@ export function runCouncilAgent(
       : draft.description
 
   let categoryId = items.length ? primaryCategoryFromItems(items) : draft.categoryId
+  // Overall text (vendor + OCR) often knows towing better than line labels
+  {
+    const overall = categorizeText(
+      `${vendor} ${draft.description} ${rawText.slice(0, 800)} ${items.map((i) => i.description).join(' ')}`,
+      {
+        avoidId:
+          rejected?.marks?.category === 'wrong' ? rejected.categoryId ?? null : null,
+      },
+    )
+    if (
+      overall.categoryId === 'towing' ||
+      (overall.score >= 4 && overall.categoryId !== 'misc') ||
+      (rejected?.marks?.category === 'wrong' &&
+        overall.categoryId !== rejected.categoryId &&
+        overall.score > 0)
+    ) {
+      categoryId = overall.categoryId
+      talk('ledger', 'decision', `Receipt-level category → ${categoryId}`)
+    }
+  }
   // Respect category marked ✓ right
   if (rejected?.marks?.category === 'right' && rejected.categoryId) {
     categoryId = rejected.categoryId
+  } else if (rejected?.marks?.category === 'wrong') {
+    // Force off the banned category
+    if (categoryId === rejected.categoryId || !categoryId) {
+      const forced = categorizeText(
+        `${vendor} ${rawText} ${items.map((i) => i.description).join(' ')}`,
+        { avoidId: rejected.categoryId },
+      )
+      categoryId = forced.categoryId
+      talk(
+        'ledger',
+        'decision',
+        `Category was ✗ (${rejected.categoryId}) — switched to ${categoryId}`,
+      )
+    }
+    // Stamp product lines with the corrected bucket (fees/shipping stay misc)
+    items = items.map((i) =>
+      isShippingLineItem(i.description) || isFeeLineItem(i.description)
+        ? i
+        : { ...i, categoryId },
+    )
   }
   // Respect total / vendor marked ✓ right
   if (rejected?.marks?.total === 'right' && rejected.amount != null) {
@@ -640,6 +700,19 @@ export function runCouncilAgent(
   }
   if (rejected?.marks?.vendor === 'right' && rejected.vendor) {
     vendor = rejected.vendor
+  }
+  // Final fee ensure when user said fees wrong
+  if (rejected?.marks?.fees === 'wrong') {
+    const hasFee = items.some((i) => isFeeLineItem(i.description))
+    if (!hasFee) {
+      const prevFee = rejected.lineItems.find((i) => isFeeLineItem(i.description))?.amount
+      const forced = extractFee(rawText, true, prevFee ?? null)
+      if (forced != null) {
+        items.push(makeFeeLineItem(forced))
+        fee = forced
+        talk('clerk', 'decision', `Forced fee after marks: $${forced.toFixed(2)}`)
+      }
+    }
   }
 
   let confidence = draft.confidence ?? 0.5

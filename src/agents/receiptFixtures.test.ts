@@ -193,10 +193,11 @@ describe('Receipt C — towing invoice with convenience fee', () => {
     expect(fee?.amount).toBe(TRUTH_C.fee)
   })
 
-  it('is misc/service not fuel', () => {
+  it('is towing/roadside not fuel or misc', () => {
     const r = parseReceiptText(RECEIPT_C_TOW)
-    expect(r.categoryId).toBe('misc')
+    expect(r.categoryId).toBe('towing')
     expect(r.categoryId).not.toBe('fuel')
+    expect(r.categoryId).not.toBe('misc')
   })
 })
 

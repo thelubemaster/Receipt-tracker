@@ -5,7 +5,13 @@
  */
 import type { CategoryId, FieldSources, ReceiptLineItem } from '../types'
 import type { LocalAgentResult } from './pipeline'
-import { isFeeLineItem, isShippingLineItem } from './lineItemsAgent'
+import { categorizeText } from './keywords'
+import {
+  extractFeeFromText,
+  isFeeLineItem,
+  isShippingLineItem,
+  makeFeeLineItem,
+} from './lineItemsAgent'
 import { roundMoney } from './moneyParse'
 
 /** User mark on a field or line item */
@@ -282,6 +288,22 @@ export function similarityToRejected(
     }
   }
 
+  if (marks.fees === 'wrong') {
+    checks++
+    const prevFees = rejected.lineItems.filter((i) => isFeeLineItem(i.description))
+    const newFees = (result.lineItems ?? []).filter((i) => isFeeLineItem(i.description))
+    if (prevFees.length === 0) {
+      // User said fees wrong because section was EMPTY — still empty = same bad answer
+      if (newFees.length === 0) bad++
+    } else {
+      // Still has the same wrong fee amount(s)
+      const same = prevFees.every((p) =>
+        newFees.some((n) => nearly(n.amount, p.amount)),
+      )
+      if (same && newFees.length > 0) bad++
+    }
+  }
+
   if (checks === 0) return 0
   return bad / checks
 }
@@ -328,7 +350,12 @@ export function formatRejectionBrief(rejected: RejectedScanSnapshot): string {
       if (ship) keepBits.push(`SHIPPING keep $${ship.amount.toFixed(2)}`)
     }
     if (marks.fees === 'wrong') {
-      wrongBits.push('FEES wrong — re-read convenience/service fee')
+      const prevFee = rejected.lineItems.find((i) => isFeeLineItem(i.description))
+      wrongBits.push(
+        prevFee
+          ? `FEES wrong (was $${prevFee.amount.toFixed(2)}) — MUST change amount`
+          : 'FEES wrong (section was EMPTY) — MUST find convenience/service fee from OCR',
+      )
     }
     for (const li of rejected.lineItems) {
       const m = lineMarkOf(li, marks)
@@ -417,6 +444,27 @@ export function applyUserMarksToResult(
   if (shouldKeepMark(marks.category, partial) && rejected.categoryId) {
     categoryId = rejected.categoryId
     notes.push('kept category')
+  } else if (marks.category === 'wrong') {
+    const blob = [
+      vendor,
+      result.description,
+      result.rawText?.slice(0, 900),
+      items.map((i) => i.description).join(' '),
+    ]
+      .filter(Boolean)
+      .join(' ')
+    const next = categorizeText(blob, { avoidId: rejected.categoryId })
+    if (next.categoryId && next.categoryId !== rejected.categoryId) {
+      categoryId = next.categoryId
+      notes.push(`category was ✗ (${rejected.categoryId}) → ${categoryId}`)
+    } else if (/\btow|wrecker|roadside|flatbed/i.test(blob)) {
+      categoryId = 'towing'
+      notes.push('category was ✗ misc → towing (OCR/vendor signal)')
+    } else if (categoryId === rejected.categoryId) {
+      // still stuck — prefer non-misc invent
+      categoryId = next.categoryId || 'misc'
+      notes.push(`category forced off ${rejected.categoryId} → ${categoryId}`)
+    }
   }
   if (shouldKeepMark(marks.date, partial) && rejected.date) {
     date = rejected.date
@@ -488,13 +536,9 @@ export function applyUserMarksToResult(
   }
 
   // Fees section (convenience / service)
-  const prevFees = rejected.lineItems.filter((i) =>
-    /\b(convenience|service fee|processing fee|handling)\b/i.test(i.description),
-  )
+  const prevFees = rejected.lineItems.filter((i) => isFeeLineItem(i.description))
   if (shouldKeepMark(marks.fees, partial) && prevFees.length) {
-    items = items.filter(
-      (i) => !/\b(convenience|service fee|processing fee|handling)\b/i.test(i.description),
-    )
+    items = items.filter((i) => !isFeeLineItem(i.description))
     for (const f of prevFees) {
       items.push({
         id: f.id || `fee-kept-${f.amount}`,
@@ -504,15 +548,51 @@ export function applyUserMarksToResult(
       })
     }
   } else if (marks.fees === 'wrong') {
+    // Drop previous wrong fee amounts
     for (const f of prevFees) {
       items = items.filter(
-        (i) =>
-          !(
-            /\b(convenience|service fee|processing fee|handling)\b/i.test(i.description) &&
-            nearly(i.amount, f.amount)
-          ),
+        (i) => !(isFeeLineItem(i.description) && nearly(i.amount, f.amount)),
       )
     }
+    const hasFee = items.some((i) => isFeeLineItem(i.description))
+    if (!hasFee) {
+      // User said fees wrong — most often because the section was EMPTY.
+      // Hunt OCR hard (and total−subtotal−tax) so we don't come back empty again.
+      const ban = prevFees[0]?.amount ?? null
+      const found =
+        extractFeeFromText(result.rawText || rejected.rawText || '', {
+          force: true,
+          banAmount: ban,
+        }) ||
+        extractFeeFromText(result.rawText || rejected.rawText || '', { force: true })
+      if (found) {
+        items.push(makeFeeLineItem(found.amount, found.label))
+        notes.push(`fees was ✗ — filled $${found.amount.toFixed(2)} from OCR`)
+      } else if (
+        rejected.amount != null &&
+        rejected.subtotal != null &&
+        rejected.amount > rejected.subtotal
+      ) {
+        const implied = roundMoney(
+          rejected.amount - rejected.subtotal - (rejected.tax ?? 0),
+        )
+        if (implied > 0.2 && (ban == null || !nearly(implied, ban))) {
+          items.push(makeFeeLineItem(implied))
+          notes.push(`fees was ✗ — used total−subtotal−tax = $${implied.toFixed(2)}`)
+        }
+      } else {
+        notes.push('fees was ✗ but OCR still has no fee amount — type it in Fees')
+      }
+    }
+  }
+
+  // After category fix, stamp non-fee product lines when category was ✗
+  if (marks.category === 'wrong' && categoryId) {
+    items = items.map((i) =>
+      isShippingLineItem(i.description) || isFeeLineItem(i.description)
+        ? i
+        : { ...i, categoryId },
+    )
   }
 
   // If missing items marked wrong, prefer keeping previous products + any NEW amounts from parse

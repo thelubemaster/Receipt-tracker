@@ -74,9 +74,12 @@ describe('Falzone towing invoice (user debug)', () => {
     expect(blob).toMatch(/tow|falzone|service/)
   })
 
-  it('categorizes towing as misc (service), not fuel', () => {
+  it('categorizes towing as Towing & Roadside, not misc/fuel', () => {
     const r = parseReceiptText(TOW_OCR)
-    expect(r.categoryId).toBe('misc')
-    expect(r.lineItems.every((i) => i.categoryId === 'misc')).toBe(true)
+    expect(r.categoryId).toBe('towing')
+    const products = r.lineItems.filter((i) => !/fee|shipping/i.test(i.description))
+    expect(products.every((i) => i.categoryId === 'towing')).toBe(true)
+    expect(r.categoryId).not.toBe('fuel')
+    expect(r.categoryId).not.toBe('misc')
   })
 })

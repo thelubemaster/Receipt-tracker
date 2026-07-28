@@ -12,11 +12,14 @@ const SHIPPING_LINE =
   /\b(shipping|freight|delivery|postage|ship\s*fee|delivery\s*fee)\b/i
 
 const FEE_LINE =
-  /\b(shipping|freight|delivery|handling|c[o0]nvenience fee|service fee|processing fee|postage)\b/i
+  /\b(shipping|freight|delivery|handling|c[o0]nvenience\s*fee|service\s*fee|pr[o0]cessing\s*fee|postage)\b/i
 
-/** Convenience / service / processing fees — own Fees section (0/O OCR tolerant) */
+/**
+ * Convenience / service / processing fees — own Fees section (0/O OCR tolerant).
+ * Also matches "Convenience Fee", "CC Fee", "Surcharge" common on invoices.
+ */
 const NON_SHIP_FEE =
-  /\b(c[o0]nvenience fee|service fee|pr[o0]cessing fee|handling fee|handling)\b/i
+  /\b(c[o0]nvenience(\s*fee)?|service\s*fee|pr[o0]cessing(\s*fee)?|handling(\s*fee)?|cc\s*fee|card\s*fee|surcharge|service\s*charge)\b/i
 
 const ADDRESS_LINE =
   /\b(shipped to|pennsylvania|bangor|street| st\b| rd,| road|ave|avenue|zip|,\s*\d{5}|\bus\b)\b/i
@@ -73,7 +76,97 @@ export function makeShippingLineItem(amount: number, id = 'li-shipping'): Receip
 export function isFeeLineItem(desc: string): boolean {
   if (!desc) return false
   if (isShippingLineItem(desc)) return false
-  return NON_SHIP_FEE.test(desc)
+  return NON_SHIP_FEE.test(desc) || /^fee\b/i.test(desc.trim()) || /\bfee\b/i.test(desc)
+}
+
+/**
+ * Aggressive fee hunt from OCR text.
+ * Used on first parse and when the user marks Fees ✗ (especially when the section was empty).
+ */
+export function extractFeeFromText(
+  text: string,
+  opts?: { force?: boolean; banAmount?: number | null },
+): { amount: number; label: string } | null {
+  const cleaned = normalizeOcrText(text || '')
+  if (!cleaned.trim()) return null
+  const ban =
+    opts?.banAmount != null && opts.banAmount > 0
+      ? roundMoney(opts.banAmount)
+      : null
+  const ok = (n: number) =>
+    n > 0 && n < 50000 && (ban == null || Math.abs(n - ban) > 0.02)
+
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+
+  const feeish =
+    /\b(c[o0]nvenience|service\s*fee|pr[o0]cessing|handling\s*fee|cc\s*fee|card\s*fee|surcharge|service\s*charge|\bfee\b)\b/i
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!feeish.test(line)) continue
+    if (/\b(ship|freight|delivery|postage)\b/i.test(line)) continue
+    const onLine = parseMoneyTokens(line)
+    if (onLine.length) {
+      const amt = roundMoney(onLine[onLine.length - 1])
+      if (ok(amt)) return { amount: amt, label: line }
+    }
+    // Amount on following lines (invoice apps put $ on the next row)
+    for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+      if (/^(tax|subtotal|grand\s*total|total|payer|payment)/i.test(lines[j])) break
+      const next = parseMoneyTokens(lines[j])
+      if (next.length) {
+        const amt = roundMoney(next[next.length - 1])
+        if (ok(amt)) return { amount: amt, label: line }
+      }
+    }
+  }
+
+  // Cross-line regex (OCR often collapses newlines oddly)
+  const m = cleaned.match(
+    /\b(c[o0]nvenience\s*fee|service\s*fee|pr[o0]cessing\s*fee|handling\s*fee|cc\s*fee|surcharge)[\s\S]{0,40}?\$?\s*([\d,]+(?:\.\d{2})?)/i,
+  )
+  if (m?.[2]) {
+    const n = Number(m[2].replace(/,/g, ''))
+    if (Number.isFinite(n) && ok(n)) return { amount: roundMoney(n), label: m[1] }
+  }
+
+  // Arithmetic: total − subtotal − tax (classic convenience-fee invoices)
+  let subtotal: number | null = null
+  let tax: number | null = null
+  let total: number | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const amts = parseMoneyTokens(line)
+    const nextAmts = i + 1 < lines.length ? parseMoneyTokens(lines[i + 1]) : []
+    const pick = (labelHit: boolean) => {
+      if (!labelHit) return null
+      if (amts.length) return roundMoney(amts[amts.length - 1])
+      if (nextAmts.length) return roundMoney(nextAmts[nextAmts.length - 1])
+      return null
+    }
+    if (/\bsub[\s\-]*t[o0]tal\b/i.test(line)) subtotal = pick(true) ?? subtotal
+    else if (/\b(sales\s*)?tax\b/i.test(line) && !/\bpre-?tax\b/i.test(line)) tax = pick(true) ?? tax
+    else if (/\b(grand\s*)?t[o0]tal\b/i.test(line) && !/\bsub\b/i.test(line) && !/\bitem\s*total\b/i.test(line)) {
+      total = pick(true) ?? total
+    }
+  }
+  if (subtotal != null && total != null) {
+    const implied = roundMoney(total - subtotal - (tax ?? 0))
+    // Fees are usually small vs subtotal; force mode loosens that
+    const plausible =
+      implied > 0.2 &&
+      (opts?.force
+        ? implied < total
+        : implied <= Math.max(subtotal * 0.2, 80) && implied < subtotal)
+    if (plausible && ok(implied)) {
+      return { amount: implied, label: 'Convenience fee' }
+    }
+  }
+
+  return null
 }
 
 export function makeFeeLineItem(
@@ -410,25 +503,12 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     }
   }
 
-  // Catch "Convenience Fee" / "$47.15" on next line
+  // Catch "Convenience Fee" / "$47.15" on next line + arithmetic total−subtotal−tax
   if (fee == null) {
-    for (let i = 0; i < lines.length; i++) {
-      if (NON_SHIP_FEE.test(lines[i])) {
-        const a = parseMoneyTokens(lines[i])
-        if (a.length) {
-          fee = roundMoney(a[a.length - 1])
-          feeLabel = lines[i]
-          break
-        }
-        if (i + 1 < lines.length) {
-          const b = parseMoneyTokens(lines[i + 1])
-          if (b.length) {
-            fee = roundMoney(b[b.length - 1])
-            feeLabel = lines[i]
-            break
-          }
-        }
-      }
+    const found = extractFeeFromText(text)
+    if (found) {
+      fee = found.amount
+      feeLabel = found.label
     }
   }
 

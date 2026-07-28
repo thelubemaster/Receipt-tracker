@@ -194,4 +194,115 @@ describe('retry feedback — user rejected a scan', () => {
     expect(result.lineItems.some((i) => i.description === 'Racor filter')).toBe(true)
     expect(result.lineItems.some((i) => i.description === 'Wrong line')).toBe(false)
   })
+
+  it('fees marked wrong when empty forces a fee from OCR', () => {
+    const marks = emptyPartMarks()
+    marks.fees = 'wrong'
+    const ocr = `
+Falzone Towing Service Inc
+Subtotal
+$1,178.75
+Convenience Fee
+$47.15
+Tax
+$0.00
+Total
+$1,225.90
+`
+    const rejected = snapshotFromSuggestion({
+      amount: 1225.9,
+      vendor: 'Falzone Towing',
+      categoryId: 'misc',
+      subtotal: 1178.75,
+      tax: 0,
+      marks,
+      rawText: ocr,
+      // previous answer had NO fee lines — that's what the user marked wrong
+      lineItems: [
+        {
+          id: 'svc',
+          description: 'Falzone Towing — towing service',
+          amount: 1225.9,
+          categoryId: 'misc',
+        },
+      ],
+    })
+    // Rescan still forgot the fee
+    const result = applyUserMarksToResult(
+      fake({
+        amount: 1225.9,
+        vendor: 'Falzone Towing',
+        categoryId: 'misc',
+        rawText: ocr,
+        lineItems: [
+          {
+            id: 'svc',
+            description: 'Falzone Towing — towing service',
+            amount: 1225.9,
+            categoryId: 'misc',
+          },
+        ],
+      }),
+      rejected,
+    )
+    const fee = result.lineItems.find((i) => /fee|convenience/i.test(i.description))
+    expect(fee?.amount).toBe(47.15)
+    expect(similarityToRejected(result, rejected)).toBeLessThan(1)
+  })
+
+  it('category marked wrong leaves misc for towing OCR', () => {
+    const marks = emptyPartMarks()
+    marks.category = 'wrong'
+    const ocr = 'Falzone Towing Service Inc invoice for roadside tow recovery'
+    const rejected = snapshotFromSuggestion({
+      amount: 200,
+      vendor: 'Falzone Towing Service Inc',
+      categoryId: 'misc',
+      marks,
+      rawText: ocr,
+      lineItems: [
+        { id: '1', description: 'Towing service', amount: 200, categoryId: 'misc' },
+      ],
+    })
+    const result = applyUserMarksToResult(
+      fake({
+        amount: 200,
+        vendor: 'Falzone Towing Service Inc',
+        categoryId: 'misc',
+        rawText: ocr,
+        lineItems: [
+          { id: '1', description: 'Towing service', amount: 200, categoryId: 'misc' },
+        ],
+      }),
+      rejected,
+    )
+    expect(result.categoryId).toBe('towing')
+    expect(result.categoryId).not.toBe('misc')
+  })
+
+  it('similarity treats still-empty fees as a repeat wrong answer', () => {
+    const marks = emptyPartMarks()
+    marks.fees = 'wrong'
+    const rejected = snapshotFromSuggestion({
+      amount: 100,
+      vendor: 'X',
+      marks,
+      lineItems: [{ id: '1', description: 'Service', amount: 100, categoryId: 'misc' }],
+    })
+    const stillEmpty = fake({
+      amount: 100,
+      vendor: 'X',
+      lineItems: [{ id: '1', description: 'Service', amount: 100, categoryId: 'misc' }],
+    })
+    expect(similarityToRejected(stillEmpty, rejected)).toBe(1)
+    const fixed = fake({
+      amount: 100,
+      vendor: 'X',
+      lineItems: [
+        { id: '1', description: 'Service', amount: 95, categoryId: 'misc' },
+        { id: '2', description: 'Convenience fee', amount: 5, categoryId: 'misc' },
+      ],
+    })
+    expect(similarityToRejected(fixed, rejected)).toBe(0)
+  })
 })
