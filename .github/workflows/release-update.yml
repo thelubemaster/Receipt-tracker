@@ -1,0 +1,118 @@
+# Build Schoolie web bundle and publish OTA assets to GitHub.
+# - GitHub Pages: site + app-update.json + downloads/web-update.zip
+# - GitHub Release: tag vX.Y.Z with web-update.zip
+#
+# One-time: Settings → Pages → Source: GitHub Actions
+name: Release web update
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - run: npm run build
+
+      - name: Pack OTA zip + manifests
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/downloads
+          rm -f dist/downloads/schoolie.apk
+          (
+            cd dist
+            rm -f downloads/web-update.zip
+            zip -qr downloads/web-update.zip . \
+              -x 'downloads/schoolie.apk' \
+              -x 'downloads/web-update.zip'
+          )
+          BASE="https://thelubemaster.github.io/Receipt-tracker"
+          printf '%s\n' "{
+            \"version\": \"${V}\",
+            \"url\": \"${BASE}/downloads/web-update.zip\",
+            \"notes\": \"Schoolie v${V} from GitHub\"
+          }" > dist/app-update.json
+          printf '%s\n' "{
+            \"baseUrl\": \"${BASE}\",
+            \"version\": \"${V}\",
+            \"source\": \"github-pages\",
+            \"updatedAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+          }" > dist/update-server.json
+          node -e "const fs=require('fs');const p='dist/version.json';let j={version:process.env.V,name:'schoolie-tracker',builtAt:new Date().toISOString()};try{Object.assign(j,JSON.parse(fs.readFileSync(p,'utf8')))}catch{};j.version=process.env.V;fs.writeFileSync(p,JSON.stringify(j,null,2))"
+          ls -lh dist/downloads/web-update.zip dist/app-update.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: schoolie-dist
+          path: dist
+          retention-days: 7
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: schoolie-dist
+          path: dist
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: schoolie-dist
+          path: dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          name: Schoolie v${{ needs.build.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/downloads/web-update.zip
+            dist/app-update.json
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -40,7 +40,9 @@ interface SchoolieDB extends DBSchema {
 }
 
 const DB_NAME = 'schoolie-tracker'
-const DB_VERSION = 2
+/** Bump when stores change. v3: always recreate any missing stores (fixes partial DBs). */
+const DB_VERSION = 3
+const REQUIRED_STORES = ['purchases', 'images', 'settings', 'meta'] as const
 const SETTINGS_KEY = 'app'
 const META_KEY = 'meta'
 const MEMORY_KEY = 'receipt-memory'
@@ -111,34 +113,56 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   }) as Promise<T>
 }
 
-function ensureStores(db: IDBPDatabase<SchoolieDB>, oldVersion: number) {
-  if (oldVersion < 1) {
-    if (!db.objectStoreNames.contains('purchases')) {
-      const purchases = db.createObjectStore('purchases', { keyPath: 'id' })
-      purchases.createIndex('by-date', 'date')
-      purchases.createIndex('by-created', 'createdAt')
-    }
-    if (!db.objectStoreNames.contains('images')) {
-      db.createObjectStore('images', { keyPath: 'id' })
-    }
-    if (!db.objectStoreNames.contains('settings')) {
-      db.createObjectStore('settings', { keyPath: 'id' })
-    }
+function hasAllStores(db: { objectStoreNames: DOMStringList }): boolean {
+  return REQUIRED_STORES.every((name) => db.objectStoreNames.contains(name))
+}
+
+function missingStores(db: { objectStoreNames: DOMStringList }): string[] {
+  return REQUIRED_STORES.filter((name) => !db.objectStoreNames.contains(name))
+}
+
+/**
+ * Create every required object store that is missing.
+ * Must NOT gate on oldVersion alone — partial DBs at version 1/2/3 need repair.
+ */
+function ensureStores(db: IDBPDatabase<SchoolieDB>, _oldVersion: number) {
+  if (!db.objectStoreNames.contains('purchases')) {
+    const purchases = db.createObjectStore('purchases', { keyPath: 'id' })
+    purchases.createIndex('by-date', 'date')
+    purchases.createIndex('by-created', 'createdAt')
   }
-  if (oldVersion < 2 || !db.objectStoreNames.contains('meta')) {
-    if (!db.objectStoreNames.contains('meta')) {
-      db.createObjectStore('meta', { keyPath: 'id' })
-    }
+  if (!db.objectStoreNames.contains('images')) {
+    db.createObjectStore('images', { keyPath: 'id' })
+  }
+  if (!db.objectStoreNames.contains('settings')) {
+    db.createObjectStore('settings', { keyPath: 'id' })
+  }
+  if (!db.objectStoreNames.contains('meta')) {
+    db.createObjectStore('meta', { keyPath: 'id' })
   }
 }
 
 function openIdbAtVersion(version: number): Promise<IDBPDatabase<SchoolieDB>> {
   return openDB<SchoolieDB>(DB_NAME, version, {
-    upgrade(db, oldVersion) {
+    upgrade(db, oldVersion, _newVersion, transaction) {
       ensureStores(db as IDBPDatabase<SchoolieDB>, oldVersion)
+      // Repair purchases indexes if store pre-existed without them
+      try {
+        if (db.objectStoreNames.contains('purchases') && transaction) {
+          const store = transaction.objectStore('purchases')
+          if (!store.indexNames.contains('by-date')) {
+            store.createIndex('by-date', 'date')
+          }
+          if (!store.indexNames.contains('by-created')) {
+            store.createIndex('by-created', 'createdAt')
+          }
+        }
+      } catch (e) {
+        console.warn('[schoolie] index repair skipped', e)
+      }
     },
     blocked() {
-      console.warn('[schoolie] IDB open blocked')
+      console.warn('[schoolie] IDB open blocked — close other Schoolie tabs if load fails')
     },
     blocking() {
       try {
@@ -190,52 +214,103 @@ function deleteIdb(): Promise<void> {
 }
 
 /**
- * Open IDB without picking a fight over version:
- * 1) open current version as-is
- * 2) if stores missing, bump +1 and create them
- * 3) if that fails, recreate clean v2
+ * Open IDB and guarantee all required stores exist.
+ * 1) open existing as-is if complete and version ≥ schema
+ * 2) upgrade (create missing stores) if incomplete or outdated
+ * 3) wipe + recreate as last resort (localStorage backup still holds purchases)
  */
 async function openIdbFriendly(): Promise<IDBPDatabase<SchoolieDB> | null> {
   if (typeof indexedDB === 'undefined') return null
 
-  // 1) Open whatever version already exists (no upgrade → no block from version change)
+  // 1) Open whatever version already exists
   try {
-    const existing = await withTimeout(openDB<SchoolieDB>(DB_NAME), 4000, 'open existing')
-    const needMeta = !existing.objectStoreNames.contains('meta')
-    const needPurchases = !existing.objectStoreNames.contains('purchases')
-    if (!needMeta && !needPurchases) {
+    const existing = await withTimeout(openDB<SchoolieDB>(DB_NAME), 5000, 'open existing')
+    const missing = missingStores(existing)
+    const needsUpgrade = missing.length > 0 || existing.version < DB_VERSION
+
+    if (!needsUpgrade && hasAllStores(existing)) {
       return existing as IDBPDatabase<SchoolieDB>
     }
-    const nextVer = Math.max(existing.version, 1) + 1
+
+    // Upgrade: at least DB_VERSION, or +1 past current if already higher but incomplete
+    const target = Math.max(DB_VERSION, existing.version + (missing.length ? 1 : 0))
+    if (missing.length) {
+      console.warn('[schoolie] IDB missing stores:', missing.join(', '), '→ upgrading to', target)
+    }
     existing.close()
-    return await withTimeout(openIdbAtVersion(nextVer), 4000, 'upgrade stores')
+    const upgraded = await withTimeout(openIdbAtVersion(target), 6000, 'upgrade stores')
+    if (hasAllStores(upgraded)) return upgraded
+    console.warn('[schoolie] upgrade still missing stores:', missingStores(upgraded).join(', '))
+    try {
+      upgraded.close()
+    } catch {
+      /* ignore */
+    }
   } catch (e) {
     console.warn('[schoolie] open existing failed', e)
   }
 
-  // 2) Fresh open at our schema version
+  // 2) Open at current schema version (fresh install or after close)
   try {
-    return await withTimeout(openIdbAtVersion(DB_VERSION), 4000, 'open v2')
+    const db = await withTimeout(openIdbAtVersion(DB_VERSION), 5000, 'open schema')
+    if (hasAllStores(db)) return db
+    try {
+      db.close()
+    } catch {
+      /* ignore */
+    }
   } catch (e) {
-    console.warn('[schoolie] open v2 failed', e)
+    console.warn('[schoolie] open schema failed', e)
   }
 
-  // 3) Higher version left over
+  // 3) Higher leftover version (e.g. old experiment at v4+)
   try {
-    return await withTimeout(openIdbAtVersion(3), 4000, 'open v3')
+    const probe = await withTimeout(openDB<SchoolieDB>(DB_NAME), 4000, 'probe version')
+    const ver = Math.max(probe.version, DB_VERSION) + 1
+    probe.close()
+    const db = await withTimeout(openIdbAtVersion(ver), 5000, 'open next')
+    if (hasAllStores(db)) return db
+    try {
+      db.close()
+    } catch {
+      /* ignore */
+    }
   } catch (e) {
-    console.warn('[schoolie] open v3 failed', e)
+    console.warn('[schoolie] open next failed', e)
   }
 
-  // 4) Wipe once and recreate
+  // 4) Wipe once and recreate clean schema (purchases survive in localStorage backup)
   try {
     await deleteIdb()
-    return await withTimeout(openIdbAtVersion(DB_VERSION), 4000, 'open fresh')
+    const db = await withTimeout(openIdbAtVersion(DB_VERSION), 5000, 'open fresh')
+    if (hasAllStores(db)) return db
+    try {
+      db.close()
+    } catch {
+      /* ignore */
+    }
   } catch (e) {
     console.warn('[schoolie] recreate failed', e)
   }
 
   return null
+}
+
+function isMissingStoreError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e ?? '')
+  return /object store|not found|NotFoundError/i.test(msg)
+}
+
+/** Drop broken IDB handle so the next call re-opens / repairs. */
+function invalidateIdb() {
+  try {
+    idb?.close()
+  } catch {
+    /* ignore */
+  }
+  idb = null
+  mode = null
+  initPromise = null
 }
 
 async function ensureStorage(): Promise<void> {
@@ -334,15 +409,35 @@ function sortPurchases(list: Purchase[]): Purchase[] {
     })
 }
 
+async function useLocalPurchases(): Promise<Purchase[]> {
+  return sortPurchases(lsRead<Purchase[]>(LS_PURCHASES, []))
+}
+
 export async function listPurchases(): Promise<Purchase[]> {
   await ensureStorage()
-  if (mode === 'local') {
-    return sortPurchases(lsRead<Purchase[]>(LS_PURCHASES, []))
+  if (mode !== 'idb' || !idb) return useLocalPurchases()
+  try {
+    const all = await idb.getAll('purchases')
+    const sorted = sortPurchases(all)
+    backupPurchaseList(sorted)
+    return sorted
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    console.warn('[schoolie] listPurchases store missing — repairing', e)
+    invalidateIdb()
+    await ensureStorage()
+    const db = idb
+    if (mode !== 'idb' || !db) return useLocalPurchases()
+    try {
+      const all = await db.getAll('purchases')
+      const sorted = sortPurchases(all)
+      backupPurchaseList(sorted)
+      return sorted
+    } catch {
+      mode = 'local'
+      return useLocalPurchases()
+    }
   }
-  const all = await idb!.getAll('purchases')
-  const sorted = sortPurchases(all)
-  backupPurchaseList(sorted)
-  return sorted
 }
 
 export async function getPurchase(id: string): Promise<Purchase | undefined> {
@@ -351,8 +446,16 @@ export async function getPurchase(id: string): Promise<Purchase | undefined> {
     const p = lsRead<Purchase[]>(LS_PURCHASES, []).find((x) => x.id === id)
     return p ? normalizePurchase(p) : undefined
   }
-  const p = await idb!.get('purchases', id)
-  return p ? normalizePurchase(p) : undefined
+  try {
+    const p = await idb!.get('purchases', id)
+    return p ? normalizePurchase(p) : undefined
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    invalidateIdb()
+    await ensureStorage()
+    const p = lsRead<Purchase[]>(LS_PURCHASES, []).find((x) => x.id === id)
+    return p ? normalizePurchase(p) : undefined
+  }
 }
 
 export async function savePurchase(purchase: Purchase): Promise<void> {
@@ -364,13 +467,25 @@ export async function savePurchase(purchase: Purchase): Promise<void> {
     lsWrite(LS_PURCHASES, list)
     return
   }
-  await idb!.put('purchases', row)
-  // keep backup in sync
   try {
-    const all = await idb!.getAll('purchases')
-    backupPurchaseList(all)
-  } catch {
-    /* ignore */
+    await idb!.put('purchases', row)
+    try {
+      const all = await idb!.getAll('purchases')
+      backupPurchaseList(all)
+    } catch {
+      backupPurchaseList([row, ...lsRead<Purchase[]>(LS_PURCHASES, []).filter((p) => p.id !== row.id)])
+    }
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    invalidateIdb()
+    await ensureStorage()
+    if (mode === 'idb' && idb) {
+      await idb.put('purchases', row)
+      return
+    }
+    const list = lsRead<Purchase[]>(LS_PURCHASES, []).filter((p) => p.id !== row.id)
+    list.push(row)
+    lsWrite(LS_PURCHASES, list)
   }
 }
 
@@ -390,15 +505,28 @@ export async function deletePurchase(id: string): Promise<void> {
     }
     return
   }
-  const purchase = await idb!.get('purchases', id)
-  await idb!.delete('purchases', id)
-  if (purchase?.receiptImageId) {
-    await idb!.delete('images', purchase.receiptImageId)
-  }
   try {
-    backupPurchaseList(await idb!.getAll('purchases'))
-  } catch {
-    /* ignore */
+    const purchase = await idb!.get('purchases', id)
+    await idb!.delete('purchases', id)
+    if (purchase?.receiptImageId) {
+      try {
+        await idb!.delete('images', purchase.receiptImageId)
+      } catch {
+        /* image store optional */
+      }
+    }
+    try {
+      backupPurchaseList(await idb!.getAll('purchases'))
+    } catch {
+      /* ignore */
+    }
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    invalidateIdb()
+    mode = 'local'
+    initPromise = Promise.resolve()
+    const list = lsRead<Purchase[]>(LS_PURCHASES, []).filter((p) => p.id !== id)
+    lsWrite(LS_PURCHASES, list)
   }
 }
 
@@ -420,30 +548,47 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob | undefined> {
   }
 }
 
+async function saveImageLocal(id: string, blob: Blob): Promise<void> {
+  try {
+    if (blob.size < 1_200_000) {
+      const dataUrl = await blobToDataUrl(blob)
+      const imgs = lsRead<Record<string, string>>(LS_IMAGES, {})
+      imgs[id] = dataUrl
+      const keys = Object.keys(imgs)
+      if (keys.length > 30) {
+        for (const k of keys.slice(0, keys.length - 30)) delete imgs[k]
+      }
+      lsWrite(LS_IMAGES, imgs)
+    }
+  } catch {
+    /* image optional in local mode */
+  }
+}
+
 export async function saveImage(blob: Blob): Promise<string> {
   await ensureStorage()
   const id = newId()
   const row: ImageRow = { id, blob, createdAt: new Date().toISOString() }
   if (mode === 'local') {
-    try {
-      // Cap size ~1.5MB data URL to avoid filling localStorage
-      if (blob.size < 1_200_000) {
-        const dataUrl = await blobToDataUrl(blob)
-        const imgs = lsRead<Record<string, string>>(LS_IMAGES, {})
-        imgs[id] = dataUrl
-        // keep last 30 images
-        const keys = Object.keys(imgs)
-        if (keys.length > 30) {
-          for (const k of keys.slice(0, keys.length - 30)) delete imgs[k]
-        }
-        lsWrite(LS_IMAGES, imgs)
-      }
-    } catch {
-      /* image optional in local mode */
-    }
+    await saveImageLocal(id, blob)
     return id
   }
-  await idb!.put('images', row)
+  try {
+    await idb!.put('images', row)
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    invalidateIdb()
+    await ensureStorage()
+    if (mode === 'idb' && idb) {
+      try {
+        await idb.put('images', row)
+        return id
+      } catch {
+        /* fall through */
+      }
+    }
+    await saveImageLocal(id, blob)
+  }
   return id
 }
 
@@ -455,8 +600,16 @@ export async function getImage(id: string): Promise<Blob | undefined> {
     if (!dataUrl) return undefined
     return dataUrlToBlob(dataUrl)
   }
-  const row = await idb!.get('images', id)
-  return row?.blob
+  try {
+    const row = await idb!.get('images', id)
+    return row?.blob
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    const imgs = lsRead<Record<string, string>>(LS_IMAGES, {})
+    const dataUrl = imgs[id]
+    if (!dataUrl) return undefined
+    return dataUrlToBlob(dataUrl)
+  }
 }
 
 function parseSettingsRow(
@@ -494,20 +647,48 @@ export async function getSettings(): Promise<AppSettings> {
   if (mode === 'local') {
     return parseSettingsRow(lsRead<AppSettings | null>(LS_SETTINGS, null))
   }
-  const row = await idb!.get('settings', SETTINGS_KEY)
-  const parsed = parseSettingsRow(row)
-  lsWrite(LS_SETTINGS, parsed)
-  return parsed
+  try {
+    const row = await idb!.get('settings', SETTINGS_KEY)
+    const parsed = parseSettingsRow(row)
+    lsWrite(LS_SETTINGS, parsed)
+    return parsed
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    console.warn('[schoolie] settings store missing — repairing', e)
+    invalidateIdb()
+    await ensureStorage()
+    if (mode === 'idb' && idb) {
+      try {
+        const row = await idb.get('settings', SETTINGS_KEY)
+        const parsed = parseSettingsRow(row)
+        lsWrite(LS_SETTINGS, parsed)
+        return parsed
+      } catch {
+        /* fall through */
+      }
+    }
+    return parseSettingsRow(lsRead<AppSettings | null>(LS_SETTINGS, null))
+  }
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
   await ensureStorage()
-  if (mode === 'local') {
-    lsWrite(LS_SETTINGS, settings)
-    return
-  }
-  await idb!.put('settings', { id: SETTINGS_KEY, ...settings })
   lsWrite(LS_SETTINGS, settings)
+  if (mode === 'local') return
+  try {
+    await idb!.put('settings', { id: SETTINGS_KEY, ...settings })
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    invalidateIdb()
+    await ensureStorage()
+    if (mode === 'idb' && idb) {
+      try {
+        await idb.put('settings', { id: SETTINGS_KEY, ...settings })
+      } catch {
+        /* localStorage already has it */
+      }
+    }
+  }
 }
 
 export async function getLeaderboard(): Promise<LeaderboardMap | null> {
@@ -515,16 +696,26 @@ export async function getLeaderboard(): Promise<LeaderboardMap | null> {
   if (mode === 'local') {
     return lsRead<LeaderboardMap | null>(LS_LEADERBOARD, null)
   }
-  const row = await idb!.get('meta', META_KEY)
-  return row?.leaderboard ?? lsRead<LeaderboardMap | null>(LS_LEADERBOARD, null)
+  try {
+    const row = await idb!.get('meta', META_KEY)
+    return row?.leaderboard ?? lsRead<LeaderboardMap | null>(LS_LEADERBOARD, null)
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    return lsRead<LeaderboardMap | null>(LS_LEADERBOARD, null)
+  }
 }
 
 export async function saveLeaderboard(leaderboard: LeaderboardMap): Promise<void> {
   await ensureStorage()
   lsWrite(LS_LEADERBOARD, leaderboard)
   if (mode === 'local') return
-  const existing = await idb!.get('meta', META_KEY)
-  await idb!.put('meta', { ...existing, id: META_KEY, leaderboard })
+  try {
+    const existing = await idb!.get('meta', META_KEY)
+    await idb!.put('meta', { ...existing, id: META_KEY, leaderboard })
+  } catch (e) {
+    if (!isMissingStoreError(e)) throw e
+    /* localStorage already has it */
+  }
 }
 
 export async function getReceiptMemory(): Promise<ReceiptMemory> {
@@ -566,37 +757,54 @@ export async function clearReceiptMemory(): Promise<void> {
 }
 
 export async function clearAllData(): Promise<void> {
-  await ensureStorage()
-  if (mode === 'local') {
-    lsWrite(LS_PURCHASES, [])
-    lsWrite(LS_IMAGES, {})
-    lsWrite(LS_MEMORY, emptyReceiptMemory())
-    return
-  }
-  await idb!.clear('purchases')
-  await idb!.clear('images')
-  await clearReceiptMemory()
   lsWrite(LS_PURCHASES, [])
   lsWrite(LS_IMAGES, {})
+  lsWrite(LS_MEMORY, emptyReceiptMemory())
+  await ensureStorage()
+  if (mode === 'local' || !idb) return
+  try {
+    if (idb.objectStoreNames.contains('purchases')) await idb.clear('purchases')
+    if (idb.objectStoreNames.contains('images')) await idb.clear('images')
+    if (idb.objectStoreNames.contains('meta')) {
+      await idb.delete('meta', MEMORY_KEY).catch(() => undefined)
+    }
+  } catch (e) {
+    console.warn('[schoolie] clearAllData IDB partial', e)
+  }
 }
 
+/**
+ * Wipe IndexedDB and reopen a clean schema.
+ * Also clears purchases/images/memory in localStorage so "Reset local data" is a full wipe.
+ */
 export async function resetDatabase(): Promise<void> {
-  initPromise = null
-  mode = null
   try {
     idb?.close()
   } catch {
     /* ignore */
   }
   idb = null
+  mode = null
+  initPromise = null
+
+  // Full wipe so a half-broken schema cannot come back from LS migration only half-fixed
+  try {
+    localStorage.removeItem(LS_PURCHASES)
+    localStorage.removeItem(LS_IMAGES)
+    localStorage.removeItem(LS_MEMORY)
+    localStorage.removeItem(LS_LEADERBOARD)
+    // keep settings (project name) — less annoying after reset
+  } catch {
+    /* ignore */
+  }
+
   try {
     await deleteIdb()
   } catch {
     /* ignore */
   }
-  // Keep localStorage purchases unless user is wiping everything via clearAllData
+
+  // Force a clean open. ensureStorage falls back to localStorage if IDB is broken.
   await ensureStorage()
-  if (mode === 'idb') {
-    storageNotice = null
-  }
+  storageNotice = null
 }

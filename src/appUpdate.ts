@@ -1,8 +1,19 @@
 /**
  * Over-the-air updates for the installed Android app.
- * Downloads a small web bundle from your PC (npm run start:android) —
- * no full APK reinstall needed for most changes.
+ *
+ * Sources (first that works wins):
+ * 1. User-set update server (LAN: npm run start:android)
+ * 2. Bundled default → GitHub Pages
+ * 3. GitHub Releases (latest) for web-update.zip
+ *
+ * No full APK reinstall needed for most web/feature changes.
  */
+import {
+  GITHUB_PAGES_BASE,
+  GITHUB_RELEASES_LATEST,
+  GITHUB_REPO_URL,
+  UPDATE_MANIFEST_PATH,
+} from './githubConfig'
 import { APP_VERSION } from './version'
 import { isNativeCapacitorApp } from './installApp'
 
@@ -56,7 +67,7 @@ export async function getUpdateServer(): Promise<string> {
   } catch {
     /* ignore */
   }
-  // 2) Bundled default from serve-android / build
+  // 2) Bundled default from build / GitHub Pages
   try {
     const res = await fetch('./update-server.json', { cache: 'no-store' })
     if (res.ok) {
@@ -66,7 +77,8 @@ export async function getUpdateServer(): Promise<string> {
   } catch {
     /* ignore */
   }
-  return ''
+  // 3) Hard-coded GitHub Pages for this project
+  return GITHUB_PAGES_BASE
 }
 
 export async function setUpdateServer(url: string): Promise<void> {
@@ -122,41 +134,135 @@ export async function setAutoUpdate(on: boolean): Promise<void> {
   }
 }
 
+function resolveManifestUrl(base: string, url: string): string {
+  if (/^https?:\/\//i.test(url)) return url
+  if (url.startsWith('/')) return `${base}${url}`
+  return `${base}/${url.replace(/^\.\//, '')}`
+}
+
+async function fetchJson(url: string): Promise<unknown | null> {
+  try {
+    const res = await fetch(url, {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+/** Try LAN API then static app-update.json on the same base. */
+async function loadManifestFromBase(base: string): Promise<UpdateManifest | null> {
+  const b = normalizeBase(base)
+  // LAN server shape
+  const api = await fetchJson(`${b}/api/app-update`)
+  if (api && typeof api === 'object') {
+    const m = api as Partial<UpdateManifest>
+    if (m.version && m.url) {
+      return {
+        version: String(m.version).replace(/^v/i, ''),
+        url: resolveManifestUrl(b, String(m.url)),
+        notes: m.notes,
+      }
+    }
+  }
+  // Static GitHub Pages / CDN shape
+  const file = await fetchJson(`${b}/${UPDATE_MANIFEST_PATH}`)
+  if (file && typeof file === 'object') {
+    const m = file as Partial<UpdateManifest>
+    if (m.version && m.url) {
+      return {
+        version: String(m.version).replace(/^v/i, ''),
+        url: resolveManifestUrl(b, String(m.url)),
+        notes: m.notes,
+      }
+    }
+  }
+  return null
+}
+
+/** Public GitHub Releases → web-update.zip (or schoolie-web-update.zip). */
+async function loadManifestFromGitHubReleases(): Promise<UpdateManifest | null> {
+  const data = await fetchJson(GITHUB_RELEASES_LATEST)
+  if (!data || typeof data !== 'object') return null
+  const rel = data as {
+    tag_name?: string
+    name?: string
+    body?: string
+    assets?: Array<{ name?: string; browser_download_url?: string }>
+  }
+  const version = String(rel.tag_name || rel.name || '')
+    .replace(/^v/i, '')
+    .trim()
+  if (!version) return null
+  const assets = rel.assets || []
+  const zip =
+    assets.find((a) => a.name === 'web-update.zip') ||
+    assets.find((a) => a.name === 'schoolie-web-update.zip') ||
+    assets.find((a) => (a.name || '').endsWith('.zip') && (a.name || '').includes('update')) ||
+    assets.find((a) => (a.name || '').endsWith('.zip'))
+  if (!zip?.browser_download_url) return null
+  return {
+    version,
+    url: zip.browser_download_url,
+    notes: rel.body?.slice(0, 200) || `Release from ${GITHUB_REPO_URL}`,
+  }
+}
+
+/**
+ * Check for a newer web bundle.
+ * Order: explicit server → default server (GitHub Pages) → GitHub Releases.
+ */
 export async function checkForAppBundleUpdate(
   serverBase?: string,
 ): Promise<UpdateCheckResult> {
-  const base = normalizeBase(serverBase || (await getUpdateServer()))
-  if (!base) {
-    return {
-      status: 'skipped',
-      message: 'Set your update server (computer HTTPS address) first.',
+  const preferred = normalizeBase(serverBase || (await getUpdateServer()))
+  const candidates = [
+    preferred,
+    GITHUB_PAGES_BASE,
+  ].filter((v, i, arr) => v && arr.indexOf(v) === i)
+
+  let lastError = ''
+  for (const base of candidates) {
+    try {
+      const manifest = await loadManifestFromBase(base)
+      if (!manifest) continue
+      if (compareVersions(manifest.version, APP_VERSION) > 0) {
+        return { status: 'available', manifest }
+      }
+      return { status: 'current', version: APP_VERSION }
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : 'check failed'
     }
   }
+
+  // GitHub Releases fallback (works without Pages)
   try {
-    const res = await fetch(`${base}/api/app-update`, { cache: 'no-store' })
-    if (!res.ok) {
-      return { status: 'error', message: `Server returned ${res.status}` }
+    const manifest = await loadManifestFromGitHubReleases()
+    if (manifest) {
+      if (compareVersions(manifest.version, APP_VERSION) > 0) {
+        return { status: 'available', manifest }
+      }
+      return { status: 'current', version: APP_VERSION }
     }
-    const manifest = (await res.json()) as UpdateManifest
-    if (!manifest.version || !manifest.url) {
-      return { status: 'error', message: 'Invalid update response from server' }
-    }
-    // Resolve relative zip URLs against server base
-    if (manifest.url.startsWith('/')) {
-      manifest.url = `${base}${manifest.url}`
-    }
-    if (compareVersions(manifest.version, APP_VERSION) > 0) {
-      return { status: 'available', manifest }
-    }
-    return { status: 'current', version: APP_VERSION }
   } catch (e) {
+    lastError = e instanceof Error ? e.message : lastError
+  }
+
+  if (!preferred) {
     return {
-      status: 'error',
-      message:
-        e instanceof Error
-          ? e.message
-          : 'Could not reach update server. Is the computer running npm run start:android?',
+      status: 'skipped',
+      message: `No update source. Repo: ${GITHUB_REPO_URL}`,
     }
+  }
+
+  return {
+    status: 'error',
+    message:
+      lastError ||
+      'Could not reach GitHub updates yet. Push a release (or enable Pages) on the Receipt-tracker repo.',
   }
 }
 

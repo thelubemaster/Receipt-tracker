@@ -19,3 +19,8 @@ android/capacitor-cordova-android-plugins/build/
 android/local.properties
 android/.idea/
 release/
+
+# Large binary installers — build with npm run apk / publish via Releases if needed
+public/downloads/*.apk
+public/downloads/*.zip
+dist/downloads/
