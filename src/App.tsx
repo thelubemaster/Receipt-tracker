@@ -85,6 +85,15 @@ import {
   rememberSkipInstaller,
   shouldShowAndroidInstaller,
 } from './AndroidInstaller'
+import {
+  applyAppBundleUpdate,
+  checkForAppBundleUpdate,
+  getAutoUpdate,
+  getUpdateServer,
+  setAutoUpdate,
+  setUpdateServer,
+} from './appUpdate'
+import { isNativeCapacitorApp } from './installApp'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -2786,6 +2795,41 @@ function SettingsScreen(props: {
     }
   }
 
+  const [otaServer, setOtaServer] = useState('')
+  const [otaAuto, setOtaAuto] = useState(true)
+  const [otaStatus, setOtaStatus] = useState<string | null>(null)
+  const [otaBusy, setOtaBusy] = useState(false)
+  const nativeApp = isNativeCapacitorApp()
+
+  useEffect(() => {
+    void getUpdateServer().then(setOtaServer)
+    void getAutoUpdate().then(setOtaAuto)
+  }, [])
+
+  async function handleOtaCheck() {
+    setOtaBusy(true)
+    setOtaStatus('Checking for updates…')
+    try {
+      if (otaServer.trim()) await setUpdateServer(otaServer)
+      await setAutoUpdate(otaAuto)
+      const result = await checkForAppBundleUpdate(otaServer)
+      if (result.status === 'current') {
+        setOtaStatus(`You're up to date (v${result.version}).`)
+      } else if (result.status === 'available') {
+        setOtaStatus(`Update v${result.manifest.version} available — downloading…`)
+        const applied = await applyAppBundleUpdate(result.manifest, (m) => setOtaStatus(m))
+        if (!applied.ok) setOtaStatus(applied.message)
+        else setOtaStatus(`Updated to v${result.manifest.version}. Restarting…`)
+      } else if (result.status === 'skipped') {
+        setOtaStatus(result.message)
+      } else {
+        setOtaStatus(result.message)
+      }
+    } finally {
+      setOtaBusy(false)
+    }
+  }
+
   return (
     <>
       <header className="topbar">
@@ -2812,6 +2856,57 @@ function SettingsScreen(props: {
             .finally(() => setSaving(false))
         }}
       >
+        {nativeApp && (
+          <div className="card settings-card">
+            <strong>App updates (no re-download APK)</strong>
+            <p className="muted" style={{ margin: '6px 0 12px' }}>
+              While your computer runs <code style={{ fontSize: '0.85em' }}>npm run start:android</code>,
+              this phone can pull new features over Wi‑Fi. You only reinstall the APK for big native
+              changes.
+            </p>
+            <label className="field" style={{ display: 'block', marginBottom: 10 }}>
+              <span className="muted" style={{ fontSize: '0.8rem' }}>
+                Update server (from the computer terminal)
+              </span>
+              <input
+                type="url"
+                inputMode="url"
+                autoCapitalize="off"
+                autoCorrect="off"
+                placeholder="https://192.168.x.x:4190"
+                value={otaServer}
+                onChange={(e) => setOtaServer(e.target.value)}
+                style={{ width: '100%', marginTop: 4 }}
+              />
+            </label>
+            <label className="power-toggle" style={{ marginBottom: 12 }}>
+              <input
+                type="checkbox"
+                checked={otaAuto}
+                onChange={(e) => {
+                  setOtaAuto(e.target.checked)
+                  void setAutoUpdate(e.target.checked)
+                }}
+              />
+              <span>Auto-check when I open the app</span>
+            </label>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: '100%' }}
+              disabled={otaBusy}
+              onClick={() => void handleOtaCheck()}
+            >
+              {otaBusy ? 'Working…' : 'Check for updates now'}
+            </button>
+            {otaStatus && (
+              <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.88rem' }}>
+                {otaStatus}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="card settings-card">
           <strong>How you run Schoolie</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
