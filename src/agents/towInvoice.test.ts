@@ -74,12 +74,13 @@ describe('Falzone towing invoice (user debug)', () => {
     expect(blob).toMatch(/tow|falzone|service/)
   })
 
-  it('categorizes towing as Towing & Roadside, not misc/fuel', () => {
+  it('invents free-form Towing from the word on the receipt (not a hardcoded preset)', () => {
     const r = parseReceiptText(TOW_OCR)
-    expect(r.categoryId).toBe('towing')
-    const products = r.lineItems.filter((i) => !/fee|shipping/i.test(i.description))
-    expect(products.every((i) => i.categoryId === 'towing')).toBe(true)
+    // Free-form slug from inventing "Towing" — not Misc/Fuel schoolie dump
+    expect(r.categoryId).toMatch(/tow/i)
     expect(r.categoryId).not.toBe('fuel')
     expect(r.categoryId).not.toBe('misc')
+    const products = r.lineItems.filter((i) => !/fee|shipping/i.test(i.description))
+    expect(products.every((i) => /tow/i.test(i.categoryId))).toBe(true)
   })
 })

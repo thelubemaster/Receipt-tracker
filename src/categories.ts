@@ -29,7 +29,6 @@ export const BUILTIN_CATEGORIES: Category[] = [
   { id: 'safety', label: 'Safety', color: '#c0392b' },
   { id: 'fuel', label: 'Fuel & Travel', color: '#2c3e50' },
   { id: 'engine', label: 'Engine & Powertrain', color: '#6d4c41' },
-  { id: 'towing', label: 'Towing & Roadside', color: '#455a64' },
   { id: 'misc', label: 'Misc', color: '#7f8c8d' },
 ]
 

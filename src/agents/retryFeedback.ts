@@ -456,12 +456,10 @@ export function applyUserMarksToResult(
     const next = categorizeText(blob, { avoidId: rejected.categoryId })
     if (next.categoryId && next.categoryId !== rejected.categoryId) {
       categoryId = next.categoryId
-      notes.push(`category was ✗ (${rejected.categoryId}) → ${categoryId}`)
-    } else if (/\btow|wrecker|roadside|flatbed/i.test(blob)) {
-      categoryId = 'towing'
-      notes.push('category was ✗ misc → towing (OCR/vendor signal)')
+      notes.push(
+        `category was ✗ (${rejected.categoryId}) → ${next.label || categoryId}${next.invented ? ' (invented)' : ''}`,
+      )
     } else if (categoryId === rejected.categoryId) {
-      // still stuck — prefer non-misc invent
       categoryId = next.categoryId || 'misc'
       notes.push(`category forced off ${rejected.categoryId} → ${categoryId}`)
     }

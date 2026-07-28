@@ -149,31 +149,19 @@ export const CATEGORY_KEYWORDS: Record<string, string[]> = {
     'clutch',
     'rebuild kit',
   ],
-  towing: [
-    'tow',
-    'towing',
-    'towed',
-    'wrecker',
-    'roadside',
-    'recovery',
-    'flatbed',
-    'winch out',
-    'impound',
-    'hook up',
-    'tow truck',
-    'towing service',
-  ],
-  // labor / generic fees only — not towing (that has its own bucket)
+  // No hardcoded service buckets — free-form invent reads the receipt (e.g. "towing")
   misc: ['labor', 'service fee', 'convenience fee', 'processing fee'],
 }
 
 /**
  * Free-form families — invent these when built-in score is weak.
  * First strong match wins as a new/grouped category label.
+ * Labels are invented names (not schoolie presets), e.g. "Towing" when OCR says towing.
  */
 const DYNAMIC_FAMILIES: { label: string; words: string[] }[] = [
   {
-    label: 'Towing & Roadside',
+    // Name matches what appears on invoices — free-form, not a builtin preset
+    label: 'Towing',
     words: [
       'tow',
       'towing',
@@ -185,6 +173,7 @@ const DYNAMIC_FAMILIES: { label: string; words: string[] }[] = [
       'tow truck',
       'towing service',
       'winch',
+      'recovery',
     ],
   },
   {
@@ -361,16 +350,14 @@ export function inventCategoryFromText(text: string): { categoryId: CategoryId; 
 
   if (bestScore >= 2 && bestLabel) {
     const cat = makeCustomCategory(bestLabel)
-    // Prefer stable builtin id when label matches a preset family
+    // Prefer stable builtin id only for schoolie build-out presets
     if (bestLabel === 'Engine & Powertrain') {
       return { categoryId: 'engine', label: bestLabel, score: bestScore }
     }
     if (bestLabel === 'Fuel system') {
       return { categoryId: 'fuel', label: 'Fuel & Travel', score: bestScore }
     }
-    if (bestLabel === 'Towing & Roadside') {
-      return { categoryId: 'towing', label: bestLabel, score: bestScore }
-    }
+    // Free-form invent (Towing, Filters & fluids, …) — not hardcoded presets
     return { categoryId: cat.id, label: cat.label, score: bestScore }
   }
 
@@ -457,13 +444,12 @@ export function categorizeText(
     break
   }
 
-  // Strong preset hit (towing only needs a light hit — "towing service" is clear)
-  const strongThreshold = best === 'towing' ? 2 : 4
-  if (bestScore >= strongThreshold) {
+  // Strong schoolie-preset hit
+  if (bestScore >= 4) {
     return { categoryId: best, score: bestScore, invented: false }
   }
 
-  // Medium preset — still ok if better than invent
+  // Prefer free-form invent from words on the receipt (towing, filters, etc.)
   const invented = inventCategoryFromText(text)
   if (avoid && invented.categoryId === avoid) {
     // invent landed on banned id — fall through
@@ -488,11 +474,6 @@ export function categorizeText(
       label: invented.label,
       invented: true,
     }
-  }
-
-  // Last resort when user banned misc: pick second-best keyword or invent towing-ish from "service"
-  if (avoid === 'misc' && /\btow|wrecker|roadside|flatbed\b/i.test(lower)) {
-    return { categoryId: 'towing', score: 2, invented: false }
   }
 
   return { categoryId: 'misc', score: 0, invented: false }

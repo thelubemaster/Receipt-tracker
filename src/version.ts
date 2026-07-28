@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.17.1'
+export const APP_VERSION = '1.17.2'
 
 export type ChangelogEntry = {
   version: string
@@ -17,13 +17,22 @@ export type ChangelogEntry = {
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.17.2',
+    date: '2026-07-28',
+    title: 'Towing is invented from the receipt, not hardcoded',
+    changes: [
+      'No schoolie preset for towing — free-form AI invents “Towing” when that word is on the receipt',
+      'Same invent path as other free-form groups (filters, engine parts, …)',
+      'Fee ✗ and category ✗ fixes from 1.17.1 still apply',
+    ],
+  },
+  {
     version: '1.17.1',
     date: '2026-07-28',
     title: '✗ marks actually fix fees & categories',
     changes: [
       'Marking Fees ✗ when empty now hunts convenience/service fees hard (no more blank fee section)',
       'Also uses total − subtotal − tax when the fee line is hard to OCR',
-      'Towing receipts file under Towing & Roadside instead of Misc',
       'Marking Category ✗ forces a new bucket (won’t stick on Misc)',
     ],
   },

@@ -250,7 +250,7 @@ $1,225.90
     expect(similarityToRejected(result, rejected)).toBeLessThan(1)
   })
 
-  it('category marked wrong leaves misc for towing OCR', () => {
+  it('category marked wrong invents Towing from OCR text (not hardcoded preset)', () => {
     const marks = emptyPartMarks()
     marks.category = 'wrong'
     const ocr = 'Falzone Towing Service Inc invoice for roadside tow recovery'
@@ -276,7 +276,7 @@ $1,225.90
       }),
       rejected,
     )
-    expect(result.categoryId).toBe('towing')
+    expect(result.categoryId).toMatch(/tow/i)
     expect(result.categoryId).not.toBe('misc')
   })
 

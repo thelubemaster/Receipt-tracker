@@ -536,37 +536,42 @@ export function runCouncilAgent(
   }
   items = [...productsOnly, ...shipRows, ...feeRows]
 
-  // Towing / roadside invoice: rebuild as Towing category (not Misc)
-  if (/\btow(ing)?\b|wrecker|roadside|flatbed/i.test(rawText)) {
+  // Service-style invoice (subtotal + fee, little product catalog): rebuild from OCR words
+  // Category is free-form invent (e.g. receipt says "towing" → group "Towing"), not a hardcoded preset.
+  if (
+    /\btow(ing)?\b|wrecker|roadside|flatbed/i.test(rawText) &&
+    (subtotal != null || amount != null)
+  ) {
     const towVendor = extractVendor(rawText)
-    if (subtotal != null || amount != null) {
-      const serviceAmt =
-        subtotal ?? (amount != null && shipping != null ? roundMoney(amount - shipping) : amount)
-      if (serviceAmt != null) {
-        talk(
-          'council',
-          'answer',
-          `Towing/roadside invoice — filing under Towing & Roadside, not Misc. $${serviceAmt.toFixed(2)}.`,
-        )
-        const foundFee =
-          fee ??
-          extractFee(rawText, true) ??
-          extractFeeFromText(rawText, { force: true })?.amount ??
-          null
-        items = [
-          {
-            id: 'council-tow-1',
-            description: `${towVendor || 'Towing'} — towing service`,
-            amount: serviceAmt,
-            categoryId: 'towing',
-          },
-        ]
-        if (foundFee != null && foundFee > 0) {
-          fee = foundFee
-          items.push(makeFeeLineItem(foundFee, 'Convenience fee', 'council-tow-fee'))
-        }
-        vendor = towVendor || vendor
+    const serviceAmt =
+      subtotal ?? (amount != null && shipping != null ? roundMoney(amount - shipping) : amount)
+    if (serviceAmt != null) {
+      const invented = categorizeText(
+        `${towVendor} ${rawText.slice(0, 600)} towing service roadside`,
+      )
+      talk(
+        'council',
+        'answer',
+        `Service invoice — category from receipt text → ${invented.label || invented.categoryId}. $${serviceAmt.toFixed(2)}.`,
+      )
+      const foundFee =
+        fee ??
+        extractFee(rawText, true) ??
+        extractFeeFromText(rawText, { force: true })?.amount ??
+        null
+      items = [
+        {
+          id: 'council-tow-1',
+          description: `${towVendor || 'Service'} — ${invented.label || 'service'}`,
+          amount: serviceAmt,
+          categoryId: invented.categoryId,
+        },
+      ]
+      if (foundFee != null && foundFee > 0) {
+        fee = foundFee
+        items.push(makeFeeLineItem(foundFee, 'Convenience fee', 'council-tow-fee'))
       }
+      vendor = towVendor || vendor
     }
   }
 
@@ -650,7 +655,7 @@ export function runCouncilAgent(
       : draft.description
 
   let categoryId = items.length ? primaryCategoryFromItems(items) : draft.categoryId
-  // Overall text (vendor + OCR) often knows towing better than line labels
+  // Overall OCR text invents free-form groups (e.g. "towing" on the page → Towing)
   {
     const overall = categorizeText(
       `${vendor} ${draft.description} ${rawText.slice(0, 800)} ${items.map((i) => i.description).join(' ')}`,
@@ -660,14 +665,18 @@ export function runCouncilAgent(
       },
     )
     if (
-      overall.categoryId === 'towing' ||
+      (overall.invented && overall.score >= 2 && overall.categoryId !== 'misc') ||
       (overall.score >= 4 && overall.categoryId !== 'misc') ||
       (rejected?.marks?.category === 'wrong' &&
         overall.categoryId !== rejected.categoryId &&
         overall.score > 0)
     ) {
       categoryId = overall.categoryId
-      talk('ledger', 'decision', `Receipt-level category → ${categoryId}`)
+      talk(
+        'ledger',
+        'decision',
+        `Receipt-level category → ${overall.label || categoryId}${overall.invented ? ' (invented from text)' : ''}`,
+      )
     }
   }
   // Respect category marked ✓ right
