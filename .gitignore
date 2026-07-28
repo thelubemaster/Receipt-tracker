@@ -24,3 +24,8 @@ release/
 public/downloads/*.apk
 public/downloads/*.zip
 dist/downloads/
+
+# Never commit APKs (GitHub 100MB limit) — ship via Releases only
+public/downloads/**
+!public/downloads/.gitkeep
+*.apk
