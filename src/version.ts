@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.19.2'
+export const APP_VERSION = '1.19.3'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.19.3',
+    date: '2026-07-28',
+    title: 'Android home-screen install',
+    changes: [
+      'Big Install card on the home screen for Android (app tray icon)',
+      'Chrome: Install app / Add to Home screen — full-screen Schoolie with bus logo',
+      'Electron is for desktop only; phones use this install path',
+    ],
+  },
   {
     version: '1.19.2',
     date: '2026-07-28',

@@ -72,6 +72,14 @@ import {
   parseMoneyInputLoose,
   sanitizeMoneyTyping,
 } from './money'
+import {
+  hasNativeInstallPrompt,
+  isAndroid,
+  isIos,
+  isStandaloneApp,
+  promptInstall,
+  subscribeInstallPrompt,
+} from './installApp'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -849,6 +857,126 @@ function WhatsNewModal(props: {
   )
 }
 
+/** Android/iOS: put Schoolie on the home screen / app tray with the bus logo */
+function AndroidInstallCard() {
+  const [standalone, setStandalone] = useState(() => isStandaloneApp())
+  const [canPrompt, setCanPrompt] = useState(() => hasNativeInstallPrompt())
+  const [busy, setBusy] = useState(false)
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem('schoolie-install-dismissed') === '1'
+    } catch {
+      return false
+    }
+  })
+  const android = isAndroid()
+  const ios = isIos()
+
+  useEffect(() => {
+    const unsub = subscribeInstallPrompt(() => setCanPrompt(hasNativeInstallPrompt()))
+    const onChange = () => setStandalone(isStandaloneApp())
+    window.matchMedia('(display-mode: standalone)').addEventListener?.('change', onChange)
+    return () => {
+      unsub()
+      window.matchMedia('(display-mode: standalone)').removeEventListener?.('change', onChange)
+    }
+  }, [])
+
+  if (standalone) {
+    return (
+      <div className="card install-card install-card-done">
+        <div className="install-card-row">
+          <img src="./pwa-192.png" alt="" className="install-logo" width={48} height={48} />
+          <div>
+            <strong>Schoolie is installed on this phone</strong>
+            <p className="muted" style={{ margin: '4px 0 0' }}>
+              You&apos;re in the full-screen app — open it from your home screen / app tray anytime.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (dismissed) return null
+
+  async function onInstall() {
+    setBusy(true)
+    try {
+      const result = await promptInstall()
+      if (result === 'unavailable') {
+        // Fall through — steps below stay visible
+      }
+      if (result === 'accepted') setStandalone(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function dismiss() {
+    setDismissed(true)
+    try {
+      sessionStorage.setItem('schoolie-install-dismissed', '1')
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <div className="card install-card">
+      <div className="install-card-row">
+        <img src="./pwa-192.png" alt="Schoolie" className="install-logo" width={56} height={56} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <strong>Install Schoolie on this phone</strong>
+          <p className="muted" style={{ margin: '4px 0 10px' }}>
+            {android
+              ? 'Add the school bus icon to your Android home screen / app tray. Opens full-screen like a normal app — free, offline-capable, no Play Store needed.'
+              : ios
+                ? 'Add Schoolie to your Home Screen for a full-screen app icon.'
+                : 'Install Schoolie as an app on this device for a home-screen icon.'}
+          </p>
+          {canPrompt ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: '100%', minHeight: 48 }}
+              disabled={busy}
+              onClick={() => void onInstall()}
+            >
+              {busy ? 'Installing…' : 'Install app · add icon'}
+            </button>
+          ) : (
+            <ol className="install-steps">
+              {android ? (
+                <>
+                  <li>Open this page in <strong>Chrome</strong> (not an in-app browser)</li>
+                  <li>Tap the <strong>⋮</strong> menu (top right)</li>
+                  <li>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong></li>
+                  <li>Confirm — the Schoolie bus logo appears in your app tray</li>
+                </>
+              ) : ios ? (
+                <>
+                  <li>Tap the <strong>Share</strong> button in Safari</li>
+                  <li>Scroll and tap <strong>Add to Home Screen</strong></li>
+                  <li>Tap <strong>Add</strong> — Schoolie appears on your home screen</li>
+                </>
+              ) : (
+                <>
+                  <li>Use your browser menu</li>
+                  <li>Choose <strong>Install app</strong> or <strong>Add to Home screen</strong></li>
+                </>
+              )}
+            </ol>
+          )}
+          <button type="button" className="install-dismiss" onClick={dismiss}>
+            Not now
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function HomeScreen(props: {
   projectName: string
   total: number
@@ -922,6 +1050,8 @@ function HomeScreen(props: {
           </div>
         </div>
       </section>
+
+      <AndroidInstallCard />
 
       <div className="section-title">
         <span>By category</span>
@@ -2668,15 +2798,19 @@ function SettingsScreen(props: {
                 You&apos;re in the <strong>standalone desktop app</strong> (not a browser tab).
                 Receipt AI and data stay free and local on this machine.
               </>
+            ) : isStandaloneApp() ? (
+              <>
+                You&apos;re in the <strong>installed Android/home-screen app</strong>. Open it from
+                your app tray anytime — free and on-device.
+              </>
             ) : (
               <>
-                <strong>Phone:</strong> browser menu → <em>Add to Home Screen</em> / Install for a
-                full-screen app icon.
+                <strong>Android:</strong> on the home screen, use the yellow{' '}
+                <em>Install Schoolie on this phone</em> card, or Chrome ⋮ →{' '}
+                <em>Install app</em> / <em>Add to Home screen</em>. That puts the bus logo in your
+                app tray.
                 <br />
-                <strong>Computer:</strong> run{' '}
-                <code style={{ fontSize: '0.85em' }}>npm run app:icon</code> once to put the school
-                bus logo on your Desktop — double-click it to start. Or{' '}
-                <code style={{ fontSize: '0.85em' }}>npm run app</code> from the project folder.
+                <strong>Computer:</strong> <code style={{ fontSize: '0.85em' }}>npm run app:icon</code>
               </>
             )}
           </p>

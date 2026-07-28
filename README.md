@@ -24,13 +24,18 @@ That installs a **Schoolie bus logo** on your Desktop and in the app menu.
 | `npm run app:pack` | Build Linux AppImage under `release/` |
 | `npm run app:pack:deb` | Build `.deb` installer |
 
-### Phone (full-screen icon)
+### Android phone (app tray icon)
 
-1. `npm start` (or host the `dist/` build)
-2. Open the URL on your phone
-3. Browser menu → **Add to Home Screen** / **Install app**
+Electron/desktop installers **do not** put icons on Android. On a phone:
 
-That installs the PWA so it opens full-screen without browser chrome. Data and OCR stay on the phone.
+1. On the computer: `npm start` (or `npm run preview`)
+2. On the phone (same Wi‑Fi): open the printed URL in **Chrome**
+3. On the Schoolie **home screen**, use the yellow **Install Schoolie on this phone** card  
+   **or** Chrome ⋮ → **Install app** / **Add to Home screen**
+4. Confirm — the school bus logo appears on your **home screen / app tray**
+5. Open it from there anytime (full-screen, no browser bar)
+
+Data and OCR stay free and on-device.
 
 ## Features
 
