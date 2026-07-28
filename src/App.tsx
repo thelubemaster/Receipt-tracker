@@ -1180,6 +1180,7 @@ function PurchaseFormScreen(props: {
     (partMarks.date === 'wrong' ? 1 : 0) +
     (partMarks.missingItems === 'wrong' ? 1 : 0) +
     (partMarks.shipping === 'wrong' ? 1 : 0) +
+    (partMarks.fees === 'wrong' ? 1 : 0) +
     Object.values(partMarks.lines).filter((m) => m === 'wrong').length
 
   const fromScan = Boolean(props.receiptBlob || props.receiptPreviewUrl)
@@ -1302,10 +1303,14 @@ function PurchaseFormScreen(props: {
   }
 
   const itemsSum = form.lineItems.reduce((s, li) => s + (Number(li.amount) || 0), 0)
-  const { products: productLines, shipping: shippingLines, other: otherFeeLines } =
-    partitionLineItems(form.lineItems)
+  const {
+    products: productLines,
+    shipping: shippingLines,
+    fees: feeLines,
+  } = partitionLineItems(form.lineItems)
   const productSum = productLines.reduce((s, li) => s + (Number(li.amount) || 0), 0)
   const shippingSum = shippingLines.reduce((s, li) => s + (Number(li.amount) || 0), 0)
+  const feeSum = feeLines.reduce((s, li) => s + (Number(li.amount) || 0), 0)
 
   function renderLineRow(li: (typeof form.lineItems)[0], tone?: 'shipping' | 'fee') {
     const mark = partMarks.lines[li.id] ?? 'unset'
@@ -1409,8 +1414,8 @@ function PurchaseFormScreen(props: {
                 : 'Mark what’s right or wrong'}
           </strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
-            Tap <strong>✓</strong> if a field or line looks good, <strong>✗</strong> if it’s wrong.
-            Then <strong>Fix marked parts</strong> — free AIs re-read and keep the ✓ pieces.
+            Tap <strong>✗</strong> only on what’s wrong. Anything you leave unmarked is treated as{' '}
+            <strong>correct</strong> and kept. Optional <strong>✓</strong> also locks a field.
             {typeof form.confidence === 'number' ? (
               <>
                 {' '}
@@ -1563,21 +1568,35 @@ function PurchaseFormScreen(props: {
               ) : null}
             </div>
 
-            {otherFeeLines.length > 0 && (
-              <div className="line-section">
-                <div className="line-section-head">
-                  <span>Other fees</span>
-                </div>
-                <div className="line-items-list">
-                  {otherFeeLines.map((li) => renderLineRow(li, 'fee'))}
+            <div className="line-section line-section-fees">
+              <div className="line-section-head">
+                <span>Fees</span>
+                <div className="line-section-head-right">
+                  <span className="muted">{formatMoney(feeSum)}</span>
+                  {props.onTryAgain && (
+                    <MarkPair
+                      label="Fees section"
+                      value={partMarks.fees}
+                      onChange={(m) => setMark('fees', m)}
+                    />
+                  )}
                 </div>
               </div>
-            )}
+              {feeLines.length > 0 ? (
+                <div className="line-items-list">
+                  {feeLines.map((li) => renderLineRow(li, 'fee'))}
+                </div>
+              ) : props.onTryAgain ? (
+                <p className="muted mark-hint">
+                  No fee line yet (convenience / service / processing). Mark ✗ if one is missing.
+                </p>
+              ) : null}
+            </div>
 
             {/* Fallback if partitions empty but items exist (manual edge cases) */}
             {productLines.length === 0 &&
               shippingLines.length === 0 &&
-              otherFeeLines.length === 0 && (
+              feeLines.length === 0 && (
                 <div className="line-items-list">
                   {form.lineItems.map((li) => renderLineRow(li))}
                 </div>
@@ -1587,6 +1606,7 @@ function PurchaseFormScreen(props: {
               <span className="muted">
                 All lines {formatMoney(itemsSum)}
                 {shippingSum > 0 ? ` · ship ${formatMoney(shippingSum)}` : ''}
+                {feeSum > 0 ? ` · fees ${formatMoney(feeSum)}` : ''}
               </span>
               <div className="line-items-foot-actions">
                 <button
@@ -1611,6 +1631,35 @@ function PurchaseFormScreen(props: {
                   }}
                 >
                   + Shipping
+                </button>
+                <button
+                  type="button"
+                  className="version-link"
+                  onClick={() => {
+                    setForm((f) => {
+                      if (
+                        f.lineItems.some((li) =>
+                          /\b(convenience|service fee|processing fee)\b/i.test(li.description),
+                        )
+                      ) {
+                        return f
+                      }
+                      return {
+                        ...f,
+                        lineItems: [
+                          ...f.lineItems,
+                          {
+                            id: `fee-${crypto.randomUUID()}`,
+                            description: 'Convenience fee',
+                            amount: 0,
+                            categoryId: 'misc' as CategoryId,
+                          },
+                        ],
+                      }
+                    })
+                  }}
+                >
+                  + Fee
                 </button>
                 <button type="button" className="version-link" onClick={addLine}>
                   + Add line

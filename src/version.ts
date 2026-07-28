@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.13.0'
+export const APP_VERSION = '1.14.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.14.0',
+    date: '2026-07-28',
+    title: 'Unmarked = correct; Fees section; stronger wrong-fix',
+    changes: [
+      'If you don’t mark a field wrong, the rescan keeps it as correct',
+      'Only ✗ parts are rewritten — banned from repeating the same answer',
+      'Convenience / service / processing fees go in a Fees section',
+    ],
+  },
   {
     version: '1.13.0',
     date: '2026-07-28',

@@ -954,6 +954,15 @@ a {
   color: #8ec8ff;
 }
 
+.line-section-fees .line-section-head {
+  color: #ffb74d;
+}
+
+.line-item-row-fee {
+  border-color: rgba(255, 183, 77, 0.35);
+  background: rgba(255, 183, 77, 0.07);
+}
+
 .line-item-row-shipping {
   border-color: rgba(66, 165, 245, 0.35);
   background: rgba(66, 165, 245, 0.08);

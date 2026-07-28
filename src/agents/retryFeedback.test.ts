@@ -126,8 +126,8 @@ describe('retry feedback — user rejected a scan', () => {
         ],
       }),
     )
-    expect(brief).toMatch(/FIX THESE/i)
-    expect(brief).toMatch(/KEEP THESE|TOTAL correct/i)
+    expect(brief).toMatch(/FIX ONLY THESE|FIX THESE/i)
+    expect(brief).toMatch(/KEEP THESE|TOTAL keep/i)
     expect(brief).toMatch(/LINE WRONG|Bad filter/i)
   })
 
@@ -160,5 +160,38 @@ describe('retry feedback — user rejected a scan', () => {
     expect(result.vendor).toBe('KeepMe')
     expect(result.lineItems.some((i) => i.description === 'Wrong part')).toBe(false)
     expect(result.lineItems.some((i) => i.description === 'Good part')).toBe(true)
+  })
+
+  it('unmarked fields stay kept when something else is marked wrong', () => {
+    const marks = emptyPartMarks()
+    marks.lines = { bad: 'wrong' }
+    // total/vendor unset — should keep previous
+    const rejected = snapshotFromSuggestion({
+      amount: 76.67,
+      vendor: 'Swag',
+      categoryId: 'fuel',
+      marks,
+      lineItems: [
+        { id: 'good', description: 'Racor filter', amount: 39.97, categoryId: 'fuel' },
+        { id: 'bad', description: 'Wrong line', amount: 1, categoryId: 'misc' },
+      ],
+    })
+    const result = applyUserMarksToResult(
+      fake({
+        amount: 999,
+        vendor: 'Changed',
+        categoryId: 'tools',
+        lineItems: [
+          { id: 'x', description: 'Wrong line', amount: 1, categoryId: 'misc' },
+          { id: 'y', description: 'Something else', amount: 5, categoryId: 'misc' },
+        ],
+      }),
+      rejected,
+    )
+    expect(result.amount).toBe(76.67)
+    expect(result.vendor).toBe('Swag')
+    expect(result.categoryId).toBe('fuel')
+    expect(result.lineItems.some((i) => i.description === 'Racor filter')).toBe(true)
+    expect(result.lineItems.some((i) => i.description === 'Wrong line')).toBe(false)
   })
 })

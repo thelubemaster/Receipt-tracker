@@ -20,6 +20,8 @@ export type ScanPartMarks = {
   missingItems: FieldMark
   /** Shipping section overall */
   shipping: FieldMark
+  /** Fees section (convenience / service / processing) */
+  fees: FieldMark
   /** Per line-item id */
   lines: Record<string, FieldMark>
 }
@@ -32,6 +34,7 @@ export function emptyPartMarks(): ScanPartMarks {
     date: 'unset',
     missingItems: 'unset',
     shipping: 'unset',
+    fees: 'unset',
     lines: {},
   }
 }
@@ -44,11 +47,32 @@ export function hasAnyWrongMark(marks?: ScanPartMarks | null): boolean {
     marks.category === 'wrong' ||
     marks.date === 'wrong' ||
     marks.missingItems === 'wrong' ||
-    marks.shipping === 'wrong'
+    marks.shipping === 'wrong' ||
+    marks.fees === 'wrong'
   ) {
     return true
   }
   return Object.values(marks.lines).some((m) => m === 'wrong')
+}
+
+/**
+ * When the user marked anything ✗, unmarked fields count as “leave it”
+ * (implicitly correct). Explicit ✓ also keeps. Only ✗ is rewritten.
+ */
+export function shouldKeepMark(m: FieldMark | undefined, partialMode: boolean): boolean {
+  if (m === 'wrong') return false
+  if (m === 'right') return true
+  // unset
+  return partialMode
+}
+
+export function lineMarkOf(
+  li: { id?: string; mark?: FieldMark },
+  marks?: ScanPartMarks | null,
+): FieldMark {
+  if (li.mark && li.mark !== 'unset') return li.mark
+  if (li.id && marks?.lines[li.id]) return marks.lines[li.id]
+  return 'unset'
 }
 
 export function hasAnyRightMark(marks?: ScanPartMarks | null): boolean {
@@ -150,117 +174,175 @@ function descKey(d: string): string {
 
 /**
  * 0 = totally different, 1 = essentially the same answer the user already rejected.
+ * When partial marks exist, only fields/lines marked ✗ count toward “same wrong answer”.
  */
 export function similarityToRejected(
-  result: Pick<LocalAgentResult, 'amount' | 'vendor' | 'description' | 'lineItems'>,
+  result: Pick<LocalAgentResult, 'amount' | 'vendor' | 'description' | 'lineItems'> & {
+    categoryId?: LocalAgentResult['categoryId']
+    date?: LocalAgentResult['date']
+  },
   rejected: RejectedScanSnapshot,
 ): number {
-  let score = 0
-  let weight = 0
+  const marks = rejected.marks
+  const partial = hasAnyWrongMark(marks)
 
-  // Totals
-  weight += 0.35
-  if (result.amount != null && rejected.amount != null) {
-    if (nearly(result.amount, rejected.amount)) score += 0.35
-    else if (Math.abs(result.amount - rejected.amount) < rejected.amount * 0.05) score += 0.15
-  } else if (result.amount == null && rejected.amount == null) {
-    score += 0.1
+  // Full reject path (no field marks): classic overall similarity
+  if (!partial || !marks) {
+    let score = 0
+    let weight = 0
+    weight += 0.35
+    if (result.amount != null && rejected.amount != null) {
+      if (nearly(result.amount, rejected.amount)) score += 0.35
+      else if (Math.abs(result.amount - rejected.amount) < rejected.amount * 0.05) score += 0.15
+    }
+    weight += 0.4
+    const a = amountSet(result.lineItems ?? [])
+    const b = amountSet(rejected.lineItems)
+    if (a && b && a === b) score += 0.4
+    else if (a && b) {
+      const sa = new Set(a.split('|'))
+      const sb = new Set(b.split('|'))
+      let inter = 0
+      for (const x of sa) if (sb.has(x)) inter++
+      const union = new Set([...sa, ...sb]).size || 1
+      score += 0.4 * (inter / union)
+    }
+    weight += 0.15
+    const da = new Set((result.lineItems ?? []).map((i) => descKey(i.description)).filter(Boolean))
+    const db = new Set(rejected.lineItems.map((i) => descKey(i.description)).filter(Boolean))
+    if (da.size && db.size) {
+      let inter = 0
+      for (const x of da) if (db.has(x)) inter++
+      score += 0.15 * (inter / Math.max(da.size, db.size))
+    }
+    weight += 0.1
+    const va = (result.vendor || '').toLowerCase().trim()
+    const vb = (rejected.vendor || '').toLowerCase().trim()
+    if (va && vb && (va === vb || va.includes(vb) || vb.includes(va))) score += 0.1
+    return Math.min(1, score / Math.max(0.5, weight) * weight)
   }
 
-  // Line item amount multiset
-  weight += 0.4
-  const a = amountSet(result.lineItems ?? [])
-  const b = amountSet(rejected.lineItems)
-  if (a && b && a === b) score += 0.4
-  else if (a && b) {
-    const sa = new Set(a.split('|'))
-    const sb = new Set(b.split('|'))
-    let inter = 0
-    for (const x of sa) if (sb.has(x)) inter++
-    const union = new Set([...sa, ...sb]).size || 1
-    score += 0.4 * (inter / union)
+  // Partial: only penalize repeating ✗ fields
+  let bad = 0
+  let checks = 0
+  if (marks.total === 'wrong') {
+    checks++
+    if (
+      result.amount != null &&
+      rejected.amount != null &&
+      nearly(result.amount, rejected.amount)
+    ) {
+      bad++
+    }
+  }
+  if (marks.vendor === 'wrong') {
+    checks++
+    const va = (result.vendor || '').toLowerCase().trim()
+    const vb = (rejected.vendor || '').toLowerCase().trim()
+    if (va && vb && (va === vb || va.includes(vb) || vb.includes(va))) bad++
+  }
+  if (marks.category === 'wrong') {
+    checks++
+    if (result.categoryId && rejected.categoryId && result.categoryId === rejected.categoryId) {
+      bad++
+    }
+  }
+  if (marks.date === 'wrong') {
+    checks++
+    if (result.date && rejected.date && result.date === rejected.date) bad++
   }
 
-  // Descriptions overlap
-  weight += 0.15
-  const da = new Set((result.lineItems ?? []).map((i) => descKey(i.description)).filter(Boolean))
-  const db = new Set(rejected.lineItems.map((i) => descKey(i.description)).filter(Boolean))
-  if (da.size && db.size) {
-    let inter = 0
-    for (const x of da) if (db.has(x)) inter++
-    score += 0.15 * (inter / Math.max(da.size, db.size))
-  } else if (
-    result.description &&
-    rejected.description &&
-    descKey(result.description) === descKey(rejected.description)
-  ) {
-    score += 0.12
+  const wrongLines = rejected.lineItems.filter(
+    (li) => lineMarkOf(li, marks) === 'wrong',
+  )
+  for (const w of wrongLines) {
+    checks++
+    const hit = (result.lineItems ?? []).some(
+      (i) =>
+        nearly(i.amount, w.amount) &&
+        (descKey(i.description) === descKey(w.description) ||
+          descKey(i.description).includes(descKey(w.description).slice(0, 12)) ||
+          descKey(w.description).includes(descKey(i.description).slice(0, 12))),
+    )
+    if (hit) bad++
   }
 
-  // Vendor
-  weight += 0.1
-  const va = (result.vendor || '').toLowerCase().trim()
-  const vb = (rejected.vendor || '').toLowerCase().trim()
-  if (va && vb && (va === vb || va.includes(vb) || vb.includes(va))) score += 0.1
+  if (marks.shipping === 'wrong') {
+    checks++
+    const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
+    if (prevShip) {
+      const hit = (result.lineItems ?? []).some(
+        (i) => isShippingLineItem(i.description) && nearly(i.amount, prevShip.amount),
+      )
+      if (hit) bad++
+    }
+  }
 
-  return Math.min(1, score / Math.max(0.5, weight) * weight)
+  if (checks === 0) return 0
+  return bad / checks
 }
 
 /** Human-readable brief for agent reports */
 export function formatRejectionBrief(rejected: RejectedScanSnapshot): string {
   const marks = rejected.marks
   const wrongBits: string[] = []
-  const rightBits: string[] = []
+  const keepBits: string[] = []
+  const partial = hasAnyWrongMark(marks)
 
   if (marks) {
     if (marks.total === 'wrong') {
       wrongBits.push(
-        `TOTAL wrong (was ${rejected.amount != null ? `$${rejected.amount.toFixed(2)}` : 'empty'})`,
+        `TOTAL wrong (was ${rejected.amount != null ? `$${rejected.amount.toFixed(2)}` : 'empty'}) — MUST change`,
       )
-    } else if (marks.total === 'right' && rejected.amount != null) {
-      rightBits.push(`TOTAL correct at $${rejected.amount.toFixed(2)} — keep it`)
+    } else if (shouldKeepMark(marks.total, partial) && rejected.amount != null) {
+      keepBits.push(`TOTAL keep $${rejected.amount.toFixed(2)}`)
     }
     if (marks.vendor === 'wrong') {
-      wrongBits.push(`VENDOR wrong (was “${rejected.vendor || '—'}”)`)
-    } else if (marks.vendor === 'right' && rejected.vendor) {
-      rightBits.push(`VENDOR correct “${rejected.vendor}” — keep it`)
+      wrongBits.push(`VENDOR wrong (was “${rejected.vendor || '—'}”) — MUST change`)
+    } else if (shouldKeepMark(marks.vendor, partial) && rejected.vendor) {
+      keepBits.push(`VENDOR keep “${rejected.vendor}”`)
     }
     if (marks.category === 'wrong') {
       wrongBits.push(`CATEGORY wrong (was ${rejected.categoryId || '—'})`)
-    } else if (marks.category === 'right' && rejected.categoryId) {
-      rightBits.push(`CATEGORY correct ${rejected.categoryId} — keep it`)
+    } else if (shouldKeepMark(marks.category, partial) && rejected.categoryId) {
+      keepBits.push(`CATEGORY keep ${rejected.categoryId}`)
     }
-    if (marks.date === 'wrong') wrongBits.push('DATE wrong')
-    else if (marks.date === 'right' && rejected.date) {
-      rightBits.push(`DATE correct ${rejected.date} — keep it`)
+    if (marks.date === 'wrong') wrongBits.push('DATE wrong — MUST change')
+    else if (shouldKeepMark(marks.date, partial) && rejected.date) {
+      keepBits.push(`DATE keep ${rejected.date}`)
     }
     if (marks.missingItems === 'wrong') {
-      wrongBits.push('PRODUCT LIST incomplete — hunt for MISSING line items')
+      wrongBits.push('PRODUCT LIST incomplete — hunt MISSING items; keep unmarked lines')
     }
     if (marks.shipping === 'wrong') {
       const ship = rejected.lineItems.find((i) => isShippingLineItem(i.description))
       wrongBits.push(
-        `SHIPPING wrong${ship ? ` (was $${ship.amount.toFixed(2)})` : ' or missing'}`,
+        `SHIPPING wrong${ship ? ` (was $${ship.amount.toFixed(2)})` : ''} — MUST change`,
       )
-    } else if (marks.shipping === 'right') {
+    } else if (shouldKeepMark(marks.shipping, partial)) {
       const ship = rejected.lineItems.find((i) => isShippingLineItem(i.description))
-      if (ship) rightBits.push(`SHIPPING correct $${ship.amount.toFixed(2)} — keep it`)
+      if (ship) keepBits.push(`SHIPPING keep $${ship.amount.toFixed(2)}`)
+    }
+    if (marks.fees === 'wrong') {
+      wrongBits.push('FEES wrong — re-read convenience/service fee')
     }
     for (const li of rejected.lineItems) {
-      const m = li.mark ?? (li.id ? marks.lines[li.id] : undefined) ?? 'unset'
+      const m = lineMarkOf(li, marks)
       const label = `${li.description.slice(0, 36)} $${li.amount.toFixed(2)}`
-      if (m === 'wrong') wrongBits.push(`LINE WRONG: ${label}`)
-      if (m === 'right') rightBits.push(`LINE OK: ${label}`)
+      if (m === 'wrong') wrongBits.push(`LINE WRONG (ban this): ${label}`)
+      else if (shouldKeepMark(m, partial)) keepBits.push(`LINE KEEP: ${label}`)
     }
   }
 
-  if (wrongBits.length || rightBits.length) {
+  if (wrongBits.length || keepBits.length) {
     const note = rejected.userNote ? ` Note: ${rejected.userNote}` : ''
     return [
       `USER MARKED parts on attempt #${rejected.attempt}.`,
-      wrongBits.length ? `FIX THESE: ${wrongBits.join(' · ')}` : null,
-      rightBits.length ? `KEEP THESE: ${rightBits.join(' · ')}` : null,
-      'Do not change marked-right fields. Re-read OCR to fix only marked-wrong parts.',
+      wrongBits.length ? `FIX ONLY THESE (do not repeat): ${wrongBits.join(' · ')}` : null,
+      keepBits.length
+        ? `KEEP THESE (unmarked or ✓ — do not change): ${keepBits.join(' · ')}`
+        : null,
+      'Unmarked sections are treated as correct. Only rewrite ✗ parts.',
       note.trim() || null,
     ]
       .filter(Boolean)
@@ -280,8 +362,9 @@ export function formatRejectionBrief(rejected: RejectedScanSnapshot): string {
 }
 
 /**
- * After a diversified re-parse, re-apply fields the user marked ✓ right
- * and drop line items they marked ✗ wrong when possible.
+ * After a re-parse: keep unmarked/✓ fields from the previous answer,
+ * ban ✗ lines, and force different values for ✗ totals/vendor when the
+ * new parse still cloned them.
  */
 export function applyUserMarksToResult(
   result: LocalAgentResult,
@@ -290,47 +373,86 @@ export function applyUserMarksToResult(
   const marks = rejected.marks
   if (!marks) return result
 
+  const partial = hasAnyWrongMark(marks)
   let amount = result.amount
   let vendor = result.vendor
   let categoryId = result.categoryId
   let date = result.date
   let items = [...(result.lineItems ?? [])]
+  const notes: string[] = []
 
-  if (marks.total === 'right' && rejected.amount != null) {
+  // --- Scalar fields: keep unless marked wrong ---
+  if (shouldKeepMark(marks.total, partial) && rejected.amount != null) {
     amount = rejected.amount
-  }
-  if (marks.vendor === 'right' && rejected.vendor) {
-    vendor = rejected.vendor
-  }
-  if (marks.category === 'right' && rejected.categoryId) {
-    categoryId = rejected.categoryId
-  }
-  if (marks.date === 'right' && rejected.date) {
-    date = rejected.date
+    notes.push('kept total (✓ or unmarked)')
+  } else if (marks.total === 'wrong' && rejected.amount != null) {
+    if (amount != null && nearly(amount, rejected.amount)) {
+      // Still the same — try product+fee sum if different
+      const sum = roundMoney(items.reduce((s, i) => s + i.amount, 0))
+      if (sum > 0 && !nearly(sum, rejected.amount)) {
+        amount = sum
+        notes.push(`total was still wrong clone — used line sum $${sum.toFixed(2)}`)
+      } else {
+        notes.push('total still matched rejected; left for user to edit')
+      }
+    }
   }
 
-  // Keep line items marked right from the previous answer
-  const keepRight = rejected.lineItems.filter((li) => {
-    const m = li.mark ?? (li.id ? marks.lines[li.id!] : 'unset')
-    return m === 'right'
-  })
-  const wrongKeys = new Set(
-    rejected.lineItems
-      .filter((li) => {
-        const m = li.mark ?? (li.id ? marks.lines[li.id!] : 'unset')
-        return m === 'wrong'
-      })
-      .map((li) => `${descKey(li.description)}|${roundMoney(li.amount).toFixed(2)}`),
+  if (shouldKeepMark(marks.vendor, partial) && rejected.vendor) {
+    vendor = rejected.vendor
+    notes.push('kept vendor')
+  } else if (marks.vendor === 'wrong' && rejected.vendor) {
+    const va = (vendor || '').toLowerCase()
+    const vb = rejected.vendor.toLowerCase()
+    if (va && (va === vb || va.includes(vb) || vb.includes(va))) {
+      vendor = ''
+      notes.push('cleared vendor clone of rejected')
+    }
+  }
+
+  if (shouldKeepMark(marks.category, partial) && rejected.categoryId) {
+    categoryId = rejected.categoryId
+    notes.push('kept category')
+  }
+  if (shouldKeepMark(marks.date, partial) && rejected.date) {
+    date = rejected.date
+    notes.push('kept date')
+  }
+
+  // --- Lines: ban wrong; keep right + unmarked (in partial mode) ---
+  const wrongLines = rejected.lineItems.filter((li) => lineMarkOf(li, marks) === 'wrong')
+  const keepLines = rejected.lineItems.filter((li) =>
+    shouldKeepMark(lineMarkOf(li, marks), partial),
   )
 
-  // Drop new items that clone wrong lines
+  const wrongKeys = new Set(
+    wrongLines.map((li) => `${descKey(li.description)}|${roundMoney(li.amount).toFixed(2)}`),
+  )
+  const wrongAmounts = new Set(wrongLines.map((li) => roundMoney(li.amount).toFixed(2)))
+  // Only ban amount alone if no kept line uses that amount
+  for (const li of keepLines) {
+    wrongAmounts.delete(roundMoney(li.amount).toFixed(2))
+  }
+
   items = items.filter((li) => {
     const k = `${descKey(li.description)}|${roundMoney(li.amount).toFixed(2)}`
-    return !wrongKeys.has(k)
+    if (wrongKeys.has(k)) return false
+    // Drop reintroduced wrong amounts (same $ as banned line) when not kept elsewhere
+    if (wrongAmounts.has(roundMoney(li.amount).toFixed(2))) {
+      // allow if description clearly different product words
+      const hitWrong = wrongLines.some(
+        (w) =>
+          nearly(w.amount, li.amount) &&
+          (descKey(w.description) === descKey(li.description) ||
+            descKey(li.description).includes(descKey(w.description).slice(0, 10))),
+      )
+      if (hitWrong) return false
+    }
+    return true
   })
 
-  // Ensure right lines are present
-  for (const li of keepRight) {
+  // Ensure keep lines present
+  for (const li of keepLines) {
     const k = `${descKey(li.description)}|${roundMoney(li.amount).toFixed(2)}`
     const exists = items.some(
       (x) => `${descKey(x.description)}|${roundMoney(x.amount).toFixed(2)}` === k,
@@ -345,31 +467,53 @@ export function applyUserMarksToResult(
     }
   }
 
-  // Shipping marked right
-  if (marks.shipping === 'right') {
-    const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
-    if (prevShip) {
-      items = items.filter((i) => !isShippingLineItem(i.description))
+  // Shipping section
+  const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
+  if (shouldKeepMark(marks.shipping, partial) && prevShip) {
+    items = items.filter((i) => !isShippingLineItem(i.description))
+    items.push({
+      id: prevShip.id || 'ship-kept',
+      description: 'Shipping',
+      amount: prevShip.amount,
+      categoryId: 'misc',
+    })
+  } else if (marks.shipping === 'wrong' && prevShip) {
+    items = items.filter(
+      (i) => !(isShippingLineItem(i.description) && nearly(i.amount, prevShip.amount)),
+    )
+  }
+
+  // Fees section (convenience / service)
+  const prevFees = rejected.lineItems.filter((i) =>
+    /\b(convenience|service fee|processing fee|handling)\b/i.test(i.description),
+  )
+  if (shouldKeepMark(marks.fees, partial) && prevFees.length) {
+    items = items.filter(
+      (i) => !/\b(convenience|service fee|processing fee|handling)\b/i.test(i.description),
+    )
+    for (const f of prevFees) {
       items.push({
-        id: prevShip.id || 'ship-kept',
-        description: 'Shipping',
-        amount: prevShip.amount,
+        id: f.id || `fee-kept-${f.amount}`,
+        description: f.description || 'Convenience fee',
+        amount: f.amount,
         categoryId: 'misc',
       })
     }
-  }
-  // Shipping marked wrong — drop same shipping amount
-  if (marks.shipping === 'wrong') {
-    const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
-    if (prevShip) {
+  } else if (marks.fees === 'wrong') {
+    for (const f of prevFees) {
       items = items.filter(
         (i) =>
           !(
-            isShippingLineItem(i.description) &&
-            Math.abs(i.amount - prevShip.amount) < 0.02
+            /\b(convenience|service fee|processing fee|handling)\b/i.test(i.description) &&
+            nearly(i.amount, f.amount)
           ),
       )
     }
+  }
+
+  // If missing items marked wrong, prefer keeping previous products + any NEW amounts from parse
+  if (marks.missingItems === 'wrong') {
+    notes.push('missing-items mode: kept unmarked lines, accepted new non-banned lines')
   }
 
   const description =
@@ -391,7 +535,8 @@ export function applyUserMarksToResult(
     description,
     agentReport: [
       result.agentReport,
-      'Applied user ✓/✗ marks (kept right fields, dropped wrong line clones).',
+      'Applied user marks: unmarked = keep; ✗ banned from repeating.',
+      ...notes,
     ]
       .filter(Boolean)
       .join('\n'),

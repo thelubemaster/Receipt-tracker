@@ -11,6 +11,7 @@ import { categorizeText } from './keywords'
 import {
   dedupeItemsByAmount,
   isShippingLineItem,
+  makeFeeLineItem,
   makeShippingLineItem,
   primaryCategoryFromItems,
   runLineItemsAgent,
@@ -22,6 +23,8 @@ import {
   applyUserMarksToResult,
   formatRejectionBrief,
   hasAnyWrongMark,
+  lineMarkOf,
+  shouldKeepMark,
   similarityToRejected,
   type RejectedScanSnapshot,
 } from './retryFeedback'
@@ -181,48 +184,93 @@ export function runCouncilAgent(
       'arbiter',
       'challenge',
       partial
-        ? `User marked specific parts wrong on attempt #${rejected.attempt}. Fix only those — keep ✓ fields.`
+        ? `User marked specific parts wrong on attempt #${rejected.attempt}. Unmarked = keep. Fix only ✗.`
         : `User pressed Try again (#${rejected.attempt}). Treat the previous answer as untrusted — re-check OCR.`,
     )
 
-    // Drop only lines the user marked ✗ wrong
-    if (marks) {
-      const wrongLines = rejected.lineItems.filter((li) => {
-        const m = li.mark ?? (li.id ? marks.lines[li.id] : 'unset')
-        return m === 'wrong'
-      })
-      if (wrongLines.length) {
-        const before = items.length
-        items = items.filter((i) => {
-          return !wrongLines.some(
-            (w) =>
-              nearlyEqual(w.amount, i.amount) &&
-              w.description.toLowerCase().slice(0, 24) === i.description.toLowerCase().slice(0, 24),
-          )
-        })
-        if (items.length < before) {
-          talk('ledger', 'decision', `Removed ${before - items.length} line(s) you marked wrong.`)
+    // Partial marks: seed with previous lines that were NOT marked wrong
+    if (marks && partial) {
+      const keepPrev = rejected.lineItems.filter((li) =>
+        shouldKeepMark(lineMarkOf(li, marks), true),
+      )
+      const wrongLines = rejected.lineItems.filter((li) => lineMarkOf(li, marks) === 'wrong')
+      // Start from kept previous lines
+      items = keepPrev.map((li) => ({
+        id: li.id || `kept-${li.amount}`,
+        description: li.description,
+        amount: li.amount,
+        categoryId: (li.categoryId ?? 'misc') as import('../types').CategoryId,
+      }))
+      talk(
+        'ledger',
+        'decision',
+        `Seeded ${items.length} kept line(s); banned ${wrongLines.length} wrong line(s).`,
+      )
+      if (shouldKeepMark(marks.total, true) && rejected.amount != null) {
+        amount = rejected.amount
+        talk('cashier', 'decision', `Keeping total $${amount.toFixed(2)} (unmarked/✓).`)
+      } else if (marks.total === 'wrong') {
+        talk('cashier', 'challenge', 'Total marked wrong — must not reuse previous total.')
+        if (amount != null && rejected.amount != null && nearlyEqual(amount, rejected.amount)) {
+          amount = null
         }
       }
+      if (shouldKeepMark(marks.vendor, true) && rejected.vendor) {
+        vendor = rejected.vendor
+      } else if (marks.vendor === 'wrong') {
+        talk('clerk', 'challenge', 'Vendor marked wrong — re-read store name from OCR.')
+        vendor = ''
+      }
       if (marks.shipping === 'wrong') {
-        const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
-        items = items.filter((i) => {
-          if (!isShippingLineItem(i.description)) return true
-          if (prevShip && nearlyEqual(i.amount, prevShip.amount)) return false
-          return true
-        })
         talk('clerk', 'challenge', 'Shipping marked wrong — re-read shipping from OCR.')
         shipping = extractShipping(rawText)
       }
-      if (marks.total === 'wrong') {
-        talk('cashier', 'challenge', 'Total marked wrong — re-evaluating grand total from OCR.')
+      if (marks.fees === 'wrong') {
+        talk('clerk', 'challenge', 'Fees marked wrong — re-read convenience/service fee.')
       }
       if (marks.missingItems === 'wrong') {
-        talk('sieve', 'challenge', 'Product list marked incomplete — hunt harder for missing items.')
+        talk('sieve', 'challenge', 'Product list incomplete — hunt for NEW items only.')
       }
-      if (marks.vendor === 'wrong') {
-        talk('clerk', 'challenge', 'Vendor marked wrong — re-read store name from OCR.')
-        vendor = ''
+      // Merge fresh OCR products that aren't banned wrong clones
+      const freshLines = runLineItemsAgent(rawText)
+      const wrongKeys = new Set(
+        wrongLines.map(
+          (w) =>
+            `${w.description.toLowerCase().slice(0, 20)}|${roundMoney(w.amount).toFixed(2)}`,
+        ),
+      )
+      for (const f of freshLines.items) {
+        const k = `${f.description.toLowerCase().slice(0, 20)}|${roundMoney(f.amount).toFixed(2)}`
+        if (wrongKeys.has(k)) continue
+        const dup = items.find((i) => nearlyEqual(i.amount, f.amount))
+        if (!dup) {
+          items.push(f)
+          talk('sieve', 'answer', `Added candidate line $${f.amount.toFixed(2)}: ${f.description.slice(0, 40)}`)
+        }
+      }
+      if (freshLines.shipping != null && marks.shipping !== 'wrong' && shouldKeepMark(marks.shipping, true)) {
+        // keep prior shipping if any
+      } else if (marks.shipping === 'wrong' || (shipping == null && freshLines.shipping != null)) {
+        shipping = freshLines.shipping ?? shipping
+      }
+      if (freshLines.fee != null && marks.fees !== 'wrong') {
+        const hasFee = items.some((i) =>
+          /\b(convenience|service fee|processing fee|handling)\b/i.test(i.description),
+        )
+        if (!hasFee) {
+          items.push(makeFeeLineItem(freshLines.fee))
+          talk('clerk', 'answer', `Fees section: $${freshLines.fee.toFixed(2)}`)
+        }
+      }
+      // Fresh totals only when total marked wrong
+      if (marks.total === 'wrong') {
+        const freshTotals = runTotalsAgent(rawText)
+        if (freshTotals.total != null && (rejected.amount == null || !nearlyEqual(freshTotals.total, rejected.amount))) {
+          amount = freshTotals.total
+          talk('cashier', 'answer', `New total from OCR: $${amount.toFixed(2)}`)
+        }
+        if (freshTotals.subtotal != null) subtotal = freshTotals.subtotal
+        if (freshTotals.tax != null) tax = freshTotals.tax
       }
     } else if (
       rejected.lineItems.length > 0 &&
@@ -258,44 +306,44 @@ export function runCouncilAgent(
       }
     }
 
-    // Re-read totals + line items fresh from OCR (ignore draft clones of rejected)
-    const freshTotals = runTotalsAgent(rawText)
-    const freshLines = runLineItemsAgent(rawText)
-    if (freshTotals.total != null) {
-      if (rejected.amount == null || !nearlyEqual(freshTotals.total, rejected.amount) || amount == null) {
-        if (amount == null || (rejected.amount != null && nearlyEqual(amount, rejected.amount))) {
-          amount = freshTotals.total
-          talk('cashier', 'answer', `Fresh total from OCR: $${amount.toFixed(2)}`)
+    // Full reject only: re-read everything. Partial marks already seeded above.
+    if (!partial) {
+      const freshTotals = runTotalsAgent(rawText)
+      const freshLines = runLineItemsAgent(rawText)
+      if (freshTotals.total != null) {
+        if (rejected.amount == null || !nearlyEqual(freshTotals.total, rejected.amount) || amount == null) {
+          if (amount == null || (rejected.amount != null && nearlyEqual(amount, rejected.amount))) {
+            amount = freshTotals.total
+            talk('cashier', 'answer', `Fresh total from OCR: $${amount.toFixed(2)}`)
+          }
         }
+        if (freshTotals.subtotal != null) subtotal = freshTotals.subtotal
+        if (freshTotals.tax != null) tax = freshTotals.tax
       }
-      if (freshTotals.subtotal != null) subtotal = freshTotals.subtotal
-      if (freshTotals.tax != null) tax = freshTotals.tax
-    }
-    // If products were cleared or still look like the rejected set, adopt fresh OCR lines
-    const productCount = items.filter((i) => !isShippingLineItem(i.description)).length
-    if (productCount === 0 && freshLines.items.length > 0) {
-      items = [...freshLines.items]
-      talk('ledger', 'answer', `Loaded ${items.length} line(s) from a fresh OCR pass.`)
-    } else if (
-      freshLines.items.length > 0 &&
-      similarityToRejected(
-        { amount, vendor, description: draft.description, lineItems: items },
-        rejected,
-      ) >= 0.8
-    ) {
-      // Prefer fresh if it differs from rejected more than current draft
-      const freshSim = similarityToRejected(
-        {
-          amount: freshTotals.total,
-          vendor,
-          description: freshLines.items.map((i) => i.description).join('; '),
-          lineItems: freshLines.items,
-        },
-        rejected,
-      )
-      if (freshSim < 0.8) {
+      const productCount = items.filter((i) => !isShippingLineItem(i.description)).length
+      if (productCount === 0 && freshLines.items.length > 0) {
         items = [...freshLines.items]
-        talk('ledger', 'answer', `Swapped in alternate OCR lines (less like the rejected answer).`)
+        talk('ledger', 'answer', `Loaded ${items.length} line(s) from a fresh OCR pass.`)
+      } else if (
+        freshLines.items.length > 0 &&
+        similarityToRejected(
+          { amount, vendor, description: draft.description, lineItems: items },
+          rejected,
+        ) >= 0.8
+      ) {
+        const freshSim = similarityToRejected(
+          {
+            amount: freshTotals.total,
+            vendor,
+            description: freshLines.items.map((i) => i.description).join('; '),
+            lineItems: freshLines.items,
+          },
+          rejected,
+        )
+        if (freshSim < 0.8) {
+          items = [...freshLines.items]
+          talk('ledger', 'answer', `Swapped in alternate OCR lines (less like the rejected answer).`)
+        }
       }
     }
   }

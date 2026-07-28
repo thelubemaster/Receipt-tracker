@@ -51,12 +51,19 @@ describe('Falzone towing invoice (user debug)', () => {
     expect(v.toLowerCase()).toMatch(/falzone|towing/)
   })
 
-  it('does not treat subtotal/total/fees as product catalog junk', () => {
+  it('does not treat subtotal/total as product catalog junk', () => {
     const lines = runLineItemsAgent(TOW_OCR)
     // Should not list Total / Subtotal / Payment Date as products
     expect(lines.items.every((i) => !/^(subtotal|total|payment date|created date)$/i.test(i.description.trim()))).toBe(
       true,
     )
+  })
+
+  it('puts convenience fee in the Fees section', () => {
+    const lines = runLineItemsAgent(TOW_OCR)
+    expect(lines.fee).toBe(47.15)
+    const feeLine = lines.items.find((i) => /convenience|fee/i.test(i.description))
+    expect(feeLine?.amount).toBe(47.15)
   })
 
   it('full parse recognizes towing service amount', () => {
