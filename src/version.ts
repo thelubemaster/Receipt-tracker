@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.19.1'
+export const APP_VERSION = '1.19.2'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.19.2',
+    date: '2026-07-28',
+    title: 'App tray + system tray',
+    changes: [
+      'Installed in the applications menu/tray with the school bus logo',
+      'While running, Schoolie stays in the system tray — click to show/hide',
+      'Closing the window hides to tray instead of quitting',
+    ],
+  },
   {
     version: '1.19.1',
     date: '2026-07-28',

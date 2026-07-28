@@ -1,22 +1,34 @@
 /**
  * Schoolie Cost Tracker — standalone desktop shell (Electron).
- * Loads the built Vite app from dist/ — no browser tab required.
- * All OCR / storage stays on-device (Chromium inside this app window only).
+ * System tray icon + app menu install. No browser tab required.
  */
-const { app, BrowserWindow, shell, Menu, nativeImage } = require('electron')
+const {
+  app,
+  BrowserWindow,
+  shell,
+  Menu,
+  Tray,
+  nativeImage,
+} = require('electron')
 const path = require('path')
 const fs = require('fs')
 
 const isDev = !app.isPackaged && process.env.SCHOOLIE_DEV === '1'
 const DEV_URL = process.env.SCHOOLIE_DEV_URL || 'http://127.0.0.1:5173'
 
-/** Phone-like portrait window by default */
 const DEFAULT_W = 420
 const DEFAULT_H = 860
+
+/** @type {BrowserWindow | null} */
+let mainWindow = null
+/** @type {Tray | null} */
+let tray = null
+let isQuitting = false
 
 function iconPath() {
   const candidates = [
     path.join(__dirname, '../public/pwa-512.png'),
+    path.join(__dirname, '../public/pwa-192.png'),
     path.join(__dirname, '../dist/pwa-512.png'),
     path.join(process.resourcesPath || '', 'pwa-512.png'),
   ]
@@ -26,8 +38,32 @@ function iconPath() {
   return undefined
 }
 
+function loadAppIcon() {
+  const p = iconPath()
+  if (!p) return nativeImage.createEmpty()
+  let img = nativeImage.createFromPath(p)
+  if (img.isEmpty()) return img
+  // Tray icons are small; resize for crisp tray / dock
+  if (process.platform === 'darwin') {
+    img = img.resize({ width: 22, height: 22 })
+  } else {
+    img = img.resize({ width: 32, height: 32 })
+  }
+  return img
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
 function createWindow() {
-  const icon = iconPath()
+  const fullIcon = iconPath()
   const win = new BrowserWindow({
     width: DEFAULT_W,
     height: DEFAULT_H,
@@ -37,20 +73,26 @@ function createWindow() {
     backgroundColor: '#0c0e13',
     autoHideMenuBar: true,
     show: false,
-    icon: icon ? nativeImage.createFromPath(icon) : undefined,
+    icon: fullIcon ? nativeImage.createFromPath(fullIcon) : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // Required for some WASM OCR paths
       webSecurity: true,
     },
   })
 
   win.once('ready-to-show', () => win.show())
 
-  // External links open in the OS browser, not inside the app
+  // Close to tray (stay in app tray) instead of quitting
+  win.on('close', (e) => {
+    if (!isQuitting && tray && process.platform !== 'darwin') {
+      e.preventDefault()
+      win.hide()
+    }
+  })
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http:') || url.startsWith('https:')) {
       void shell.openExternal(url)
@@ -63,21 +105,63 @@ function createWindow() {
   } else {
     const indexHtml = path.join(__dirname, '../dist/index.html')
     if (!fs.existsSync(indexHtml)) {
-      win.loadURL(
+      void win.loadURL(
         'data:text/html;charset=utf-8,' +
           encodeURIComponent(
             `<body style="font-family:system-ui;background:#0c0e13;color:#eee;padding:2rem">
               <h1>Build missing</h1>
-              <p>Run <code>npm run build</code> then <code>npm run app</code>.</p>
+              <p>Run <code>npm run build</code> then launch Schoolie again.</p>
             </body>`,
           ),
       )
-      return win
+    } else {
+      void win.loadFile(indexHtml)
     }
-    void win.loadFile(indexHtml)
   }
 
+  mainWindow = win
   return win
+}
+
+function createTray() {
+  if (tray) return tray
+
+  const icon = loadAppIcon()
+  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
+  tray.setToolTip('Schoolie Cost Tracker')
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Open Schoolie',
+      click: () => showMainWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => {
+        isQuitting = true
+        app.quit()
+      },
+    },
+  ])
+  tray.setContextMenu(contextMenu)
+
+  // Left-click: show/hide window (common tray pattern)
+  tray.on('click', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      showMainWindow()
+      return
+    }
+    if (mainWindow.isVisible()) {
+      mainWindow.hide()
+    } else {
+      showMainWindow()
+    }
+  })
+
+  tray.on('double-click', () => showMainWindow())
+
+  return tray
 }
 
 function buildMenu() {
@@ -90,12 +174,6 @@ function buildMenu() {
             submenu: [
               { role: 'about' },
               { type: 'separator' },
-              { role: 'services' },
-              { type: 'separator' },
-              { role: 'hide' },
-              { role: 'hideOthers' },
-              { role: 'unhide' },
-              { type: 'separator' },
               { role: 'quit' },
             ],
           },
@@ -103,7 +181,24 @@ function buildMenu() {
       : []),
     {
       label: 'File',
-      submenu: [isMac ? { role: 'close' } : { role: 'quit' }],
+      submenu: [
+        {
+          label: 'Hide to tray',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+          },
+        },
+        { type: 'separator' },
+        isMac
+          ? { role: 'close' }
+          : {
+              label: 'Quit',
+              click: () => {
+                isQuitting = true
+                app.quit()
+              },
+            },
+      ],
     },
     {
       label: 'Edit',
@@ -141,19 +236,37 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-// Allow packaging/dev under root (e.g. containers) without crash
 if (process.getuid && process.getuid() === 0) {
   app.commandLine.appendSwitch('no-sandbox')
 }
 
-app.whenReady().then(() => {
-  buildMenu()
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+// Single instance so tray doesn't duplicate
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    showMainWindow()
   })
+
+  app.whenReady().then(() => {
+    buildMenu()
+    createTray()
+    createWindow()
+    app.on('activate', () => {
+      showMainWindow()
+    })
+  })
+}
+
+app.on('before-quit', () => {
+  isQuitting = true
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // Keep running in the tray on Linux/Windows
+  if (process.platform === 'darwin') {
+    /* mac uses dock */
+  }
+  // do not quit — tray keeps the app alive
 })
