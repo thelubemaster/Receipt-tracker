@@ -5,7 +5,7 @@
  * Primary source: GitHub Releases (no PC required).
  * LAN source: same-origin /downloads/schoolie.apk when served from the PC.
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   GITHUB_APK_LATEST,
   GITHUB_PAGES_BASE,
@@ -271,14 +271,15 @@ function saveBlobAsApk(blob: Blob) {
 
 export function AndroidInstaller(props: Props) {
   const [downloading, setDownloading] = useState(false)
-  const [progress, setProgress] = useState<string | null>(null)
+  const [progress, setProgress] = useState<string | null>('Preparing automatic download…')
   const [error, setError] = useState<string | null>(null)
   const fromGitHub = !isLanInstallerHost()
+  const autoStarted = useRef(false)
 
   async function downloadApk() {
     setDownloading(true)
     setError(null)
-    setProgress(fromGitHub ? 'Opening GitHub download…' : 'Starting reliable download…')
+    setProgress(fromGitHub ? 'Auto-starting download from GitHub…' : 'Starting reliable download…')
 
     // Remember update source so the installed app can OTA later
     try {
@@ -294,7 +295,7 @@ export function AndroidInstaller(props: Props) {
       try {
         startBrowserDownload(url)
         setProgress(
-          'Download started from GitHub. Open schoolie.apk when it finishes, then tap Install.',
+          'Download started automatically. When schoolie.apk finishes, open it and tap Install.',
         )
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Download failed'
@@ -330,6 +331,26 @@ export function AndroidInstaller(props: Props) {
     }
   }
 
+  // Auto-start APK download when this page opens on Android
+  useEffect(() => {
+    if (autoStarted.current) return
+    autoStarted.current = true
+    try {
+      if (new URLSearchParams(window.location.search).get('nodl') === '1') {
+        setProgress('Auto-download paused (?nodl=1). Tap the button to download.')
+        return
+      }
+    } catch {
+      /* ignore */
+    }
+    const t = window.setTimeout(() => {
+      void downloadApk()
+    }, 450)
+    return () => window.clearTimeout(t)
+    // one-shot on mount only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return (
     <div className="installer-shell">
       <div className="installer-card">
@@ -343,8 +364,9 @@ export function AndroidInstaller(props: Props) {
         <p className="installer-kicker">Android app · {formatVersionLabel()}</p>
         <h1 className="installer-title">Install Schoolie</h1>
         <p className="installer-lead">
-          Download the real Android app (APK) from GitHub. Your phone opens the normal Android
-          installer — same as any other app. No Play Store required.
+          On Android this page <strong>starts the APK download automatically</strong>. When it
+          finishes, open <strong>schoolie.apk</strong> and tap Install (Android always asks once —
+          that can&apos;t be skipped for security).
         </p>
 
         <button
@@ -353,7 +375,7 @@ export function AndroidInstaller(props: Props) {
           disabled={downloading}
           onClick={() => void downloadApk()}
         >
-          {downloading ? 'Downloading…' : 'Download app from GitHub'}
+          {downloading ? 'Downloading…' : 'Download again'}
         </button>
         {progress && <p className="installer-status">{progress}</p>}
         {error && <p className="installer-status">{error}</p>}
@@ -380,6 +402,10 @@ export function AndroidInstaller(props: Props) {
             <li>
               Tap <strong>Open</strong> — Schoolie is now in your app tray with the bus logo.
             </li>
+            <li>
+              <strong>Later updates:</strong> the installed app auto-downloads a small{' '}
+              <code>web-update.zip</code> from GitHub, unpacks it, and restarts — no APK reinstall.
+            </li>
           </ol>
         </div>
 
@@ -387,7 +413,11 @@ export function AndroidInstaller(props: Props) {
           <h3>Tips</h3>
           <ul>
             <li>
-              Easiest: download from{' '}
+              First install = <strong>schoolie.apk</strong> (one time). Updates = automatic zip
+              inside the app.
+            </li>
+            <li>
+              Releases:{' '}
               <a href={GITHUB_RELEASES_PAGE} target="_blank" rel="noreferrer">
                 GitHub Releases
               </a>
@@ -395,7 +425,7 @@ export function AndroidInstaller(props: Props) {
             <li>Stay on Wi‑Fi until the APK finishes (about 60 MB)</li>
             <li>If install is blocked: Settings → Apps → Special access → Install unknown apps</li>
             <li>
-              Later updates come from GitHub automatically (Settings → Check for updates). Source:{' '}
+              Source:{' '}
               <a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
                 {GITHUB_REPO_URL.replace('https://', '')}
               </a>
