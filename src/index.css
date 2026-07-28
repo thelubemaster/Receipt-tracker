@@ -548,6 +548,14 @@ a {
   padding: 10px;
 }
 
+.installer-apk-link {
+  display: inline-block;
+  margin-top: 14px;
+  color: var(--accent-bright);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
 .tips-list {
   margin: 10px 0 0;
   padding-left: 1.15rem;

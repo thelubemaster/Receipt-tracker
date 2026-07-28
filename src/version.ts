@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.20.0'
+export const APP_VERSION = '1.21.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.21.0',
+    date: '2026-07-28',
+    title: 'Real Android APK install',
+    changes: [
+      'Download schoolie.apk and install like a normal Android app',
+      'Installer page offers Download & install (not browser shortcuts)',
+      'Build with npm run apk; serve with npm run start:android',
+    ],
+  },
   {
     version: '1.20.0',
     date: '2026-07-28',

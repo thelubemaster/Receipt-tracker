@@ -32,6 +32,7 @@ const MIME = {
   '.wasm': 'application/wasm',
   '.webmanifest': 'application/manifest+json',
   '.map': 'application/json',
+  '.apk': 'application/vnd.android.package-archive',
 }
 
 function lanIps() {
@@ -121,7 +122,10 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('')
   console.log('  1) Open the https:// link in Chrome')
   console.log('  2) Advanced → Proceed (one-time cert warning)')
-  console.log('  3) Tap Install Schoolie on the install page')
+  console.log('  3) Tap “Download & install app” (real APK)')
+  console.log('  4) Allow install → Open Schoolie from app tray')
+  const apk = join(DIST, 'downloads/schoolie.apk')
+  console.log(existsSync(apk) ? '  APK: ready at /downloads/schoolie.apk' : '  APK missing — run npm run apk')
   console.log('==============================================')
   console.log('')
 })

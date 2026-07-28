@@ -1,7 +1,7 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.20.0",
+  "version": "1.21.0",
   "description": "Schoolie Cost Tracker — free on-device receipt scans for bus conversions",
   "author": "Schoolie",
   "type": "module",
@@ -13,6 +13,7 @@
     "preview": "vite preview --host 0.0.0.0 --port 4190",
     "start": "bash scripts/ensure-running.sh",
     "start:android": "node scripts/serve-android.mjs",
+    "apk": "bash scripts/build-apk.sh",
     "stop": "bash scripts/stop-server.sh",
     "test": "vitest run",
     "app": "bash scripts/run-desktop.sh",
