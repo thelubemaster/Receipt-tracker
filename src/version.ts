@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.18.1'
+export const APP_VERSION = '1.18.2'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.18.2',
+    date: '2026-07-28',
+    title: 'App always opens even if the database is stuck',
+    changes: [
+      'Auto-repairs or rebuilds a blocked IndexedDB instead of showing an error',
+      'Falls back to temporary in-memory storage so the home screen always loads',
+      'No more “Database is taking too long to open” dead-end',
+    ],
+  },
   {
     version: '1.18.1',
     date: '2026-07-28',

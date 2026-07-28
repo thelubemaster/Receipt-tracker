@@ -40,6 +40,9 @@ import {
   saveReceiptMemory,
   clearReceiptMemory,
   resetDatabase,
+  getStorageNotice,
+  clearStorageNotice,
+  isUsingMemoryStorage,
 } from './db'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
 import { downloadCsv, downloadPdfSummary } from './exportData'
@@ -202,6 +205,15 @@ export default function App() {
       try {
         const s = await refresh()
         if (cancelled) return
+        const notice = getStorageNotice()
+        if (notice) {
+          setInfo(notice)
+          clearStorageNotice()
+        } else if (isUsingMemoryStorage()) {
+          setInfo(
+            'Temporary memory storage is active — close other Schoolie tabs and refresh for permanent saves.',
+          )
+        }
         if (s.lastSeenVersion !== APP_VERSION) {
           const entries = getUpdatesSince(s.lastSeenVersion || null)
           if (entries.length) {
@@ -211,11 +223,27 @@ export default function App() {
         }
       } catch (e) {
         if (!cancelled) {
-          setError(
-            e instanceof Error
-              ? e.message
-              : 'Failed to load data. Try refresh, or reset local data in the message below.',
-          )
+          // Last-ditch: reset DB and try once more so user is never stuck on spinner
+          try {
+            await resetDatabase()
+            const s = await refresh()
+            if (cancelled) return
+            setInfo(
+              'Local database was rebuilt automatically so the app can open. Re-scan any receipts you need.',
+            )
+            if (s.lastSeenVersion !== APP_VERSION) {
+              const entries = getUpdatesSince(s.lastSeenVersion || null)
+              if (entries.length) setWhatsNew(entries)
+            }
+          } catch (e2) {
+            setError(
+              e2 instanceof Error
+                ? e2.message
+                : e instanceof Error
+                  ? e.message
+                  : 'Failed to load data.',
+            )
+          }
         }
       } finally {
         if (!cancelled) setLoading(false)

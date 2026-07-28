@@ -1,3 +1,8 @@
+/**
+ * Local storage for Schoolie — IndexedDB with automatic recovery.
+ * If IDB is blocked/broken, fall back to in-memory so the app always boots.
+ * Free · on-device only · no network.
+ */
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { sanitizeDisabledAis } from './aiRoster'
 import type { LeaderboardMap } from './leaderboard'
@@ -26,26 +31,81 @@ interface SchoolieDB extends DBSchema {
     value: {
       id: string
       leaderboard?: LeaderboardMap
-      /** On-device learnings from saved receipts — free, never leaves the phone */
       receiptMemory?: ReceiptMemory
     }
   }
 }
 
 const DB_NAME = 'schoolie-tracker'
-/**
- * Schema version. Receipt memory uses the existing `meta` store (no new stores).
- * We open at 2; if a device already has a higher version (partial v3 bump), open that.
- */
 const DB_VERSION = 2
 const SETTINGS_KEY = 'app'
 const META_KEY = 'meta'
 const MEMORY_KEY = 'receipt-memory'
 
-/** Max time to wait for IndexedDB open (blocked upgrades used to hang forever). */
-const DB_OPEN_MS = 6000
+type ImageRow = { id: string; blob: Blob; createdAt: string }
+type MetaRow = {
+  id: string
+  leaderboard?: LeaderboardMap
+  receiptMemory?: ReceiptMemory
+}
 
-let dbPromise: Promise<IDBPDatabase<SchoolieDB>> | null = null
+/** Session fallback when IndexedDB will not open */
+type MemoryBackend = {
+  purchases: Map<string, Purchase>
+  images: Map<string, ImageRow>
+  settings: (AppSettings & { id: string }) | null
+  meta: Map<string, MetaRow>
+}
+
+type StorageMode = 'idb' | 'memory'
+
+let mode: StorageMode | null = null
+let idb: IDBPDatabase<SchoolieDB> | null = null
+let mem: MemoryBackend | null = null
+let initPromise: Promise<void> | null = null
+/** Soft notice for the UI (auto-recovered storage) */
+let storageNotice: string | null = null
+
+export function getStorageNotice(): string | null {
+  return storageNotice
+}
+
+export function clearStorageNotice(): void {
+  storageNotice = null
+}
+
+export function isUsingMemoryStorage(): boolean {
+  return mode === 'memory'
+}
+
+function defaultSettings(): AppSettings {
+  return {
+    projectName: 'My Schoolie',
+    lastSeenVersion: '',
+    maxPowerMode: true,
+    disabledAis: [],
+    customCategories: [],
+  }
+}
+
+function emptyMemoryBackend(): MemoryBackend {
+  return {
+    purchases: new Map(),
+    images: new Map(),
+    settings: null,
+    meta: new Map(),
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+  }) as Promise<T>
+}
 
 function upgradeSchoolie(db: IDBPDatabase<SchoolieDB>, oldVersion: number) {
   if (oldVersion < 1) {
@@ -62,67 +122,121 @@ function upgradeSchoolie(db: IDBPDatabase<SchoolieDB>, oldVersion: number) {
   }
 }
 
-function openSchoolieDb(version: number): Promise<IDBPDatabase<SchoolieDB>> {
+function openIdb(version: number): Promise<IDBPDatabase<SchoolieDB>> {
   return openDB<SchoolieDB>(DB_NAME, version, {
     upgrade(db, oldVersion) {
       upgradeSchoolie(db as IDBPDatabase<SchoolieDB>, oldVersion)
     },
     blocked() {
-      console.warn(
-        '[schoolie] IndexedDB open blocked — close other Schoolie tabs and refresh.',
-      )
+      console.warn('[schoolie] IndexedDB blocked by another tab')
     },
     blocking() {
-      console.warn('[schoolie] IndexedDB connection is blocking; closing for upgrade.')
+      // Another tab wants to upgrade — release our connection
+      try {
+        idb?.close()
+      } catch {
+        /* ignore */
+      }
+      idb = null
+      mode = null
+      initPromise = null
     },
     terminated() {
-      dbPromise = null
+      idb = null
+      mode = null
+      initPromise = null
     },
   })
 }
 
-async function openSchoolieDbResilient(): Promise<IDBPDatabase<SchoolieDB>> {
-  try {
-    return await openSchoolieDb(DB_VERSION)
-  } catch (e) {
-    // Existing DB is a higher version (e.g. brief v3 experiment) — open without downgrade
-    const msg = e instanceof Error ? e.message : String(e)
-    if (/version|less than/i.test(msg)) {
-      return await openSchoolieDb(3)
+function deleteIdb(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      idb?.close()
+    } catch {
+      /* ignore */
     }
-    throw e
-  }
+    idb = null
+    const req = indexedDB.deleteDatabase(DB_NAME)
+    req.onsuccess = () => resolve()
+    req.onerror = () => reject(req.error ?? new Error('deleteDatabase failed'))
+    req.onblocked = () => {
+      // Still resolve after a short wait so we can fall back to memory
+      console.warn('[schoolie] deleteDatabase blocked')
+      setTimeout(() => resolve(), 500)
+    }
+  })
 }
 
-function getDb(): Promise<IDBPDatabase<SchoolieDB>> {
-  if (!dbPromise) {
-    const open = openSchoolieDbResilient()
-    const timeout = new Promise<never>((_, reject) => {
-      const t =
-        typeof globalThis.setTimeout === 'function'
-          ? globalThis.setTimeout.bind(globalThis)
-          : (fn: () => void, ms: number) => {
-              /* node fallback */
-              return setTimeout(fn, ms)
-            }
-      t(() => {
-        reject(
-          new Error(
-            'Database is taking too long to open. Close other Schoolie tabs, then refresh. If it still hangs, use “Reset local data” or clear site data for this app.',
-          ),
-        )
-      }, DB_OPEN_MS)
-    })
-    dbPromise = Promise.race([open, timeout]).catch((err) => {
-      dbPromise = null
-      throw err
-    })
+async function tryOpenIdb(): Promise<IDBPDatabase<SchoolieDB> | null> {
+  // Prefer current schema version
+  try {
+    return await withTimeout(openIdb(DB_VERSION), 2500, 'openDB v2')
+  } catch (e) {
+    console.warn('[schoolie] open v2 failed', e)
   }
-  return dbPromise
+  // Higher version left behind by a partial upgrade attempt
+  try {
+    return await withTimeout(openIdb(3), 2500, 'openDB v3')
+  } catch (e) {
+    console.warn('[schoolie] open v3 failed', e)
+  }
+  // Wipe and recreate
+  try {
+    await withTimeout(deleteIdb(), 2000, 'deleteDatabase')
+    return await withTimeout(openIdb(DB_VERSION), 2500, 'openDB fresh')
+  } catch (e) {
+    console.warn('[schoolie] recreate failed', e)
+  }
+  return null
+}
+
+function useMemory(reason: string) {
+  mode = 'memory'
+  mem = emptyMemoryBackend()
+  idb = null
+  storageNotice =
+    reason ||
+    'Using temporary in-memory storage (IndexedDB unavailable). Data lasts until you close this tab.'
+  console.warn('[schoolie]', storageNotice)
+}
+
+/**
+ * Ensure storage is ready. Never hangs forever — falls back to memory.
+ */
+async function ensureStorage(): Promise<void> {
+  if (mode === 'idb' && idb) return
+  if (mode === 'memory' && mem) return
+  if (initPromise) return initPromise
+
+  initPromise = (async () => {
+    // Environments without IndexedDB
+    if (typeof indexedDB === 'undefined') {
+      useMemory('IndexedDB is not available in this browser — using temporary memory storage.')
+      return
+    }
+    const db = await tryOpenIdb()
+    if (db) {
+      mode = 'idb'
+      idb = db
+      storageNotice = null
+      return
+    }
+    useMemory(
+      'Could not open the local database (often another tab blocking it). Using temporary memory storage for this session. Close other Schoolie tabs and refresh to use permanent storage.',
+    )
+  })().finally(() => {
+    // keep initPromise resolved so we don't re-enter loops; reset only on explicit reset
+  })
+
+  return initPromise
 }
 
 export function newId(): string {
-  return crypto.randomUUID()
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 function normalizePurchase(p: Purchase): Purchase {
@@ -134,8 +248,16 @@ function normalizePurchase(p: Purchase): Purchase {
 }
 
 export async function listPurchases(): Promise<Purchase[]> {
-  const db = await getDb()
-  const all = await db.getAll('purchases')
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    return Array.from(mem.purchases.values())
+      .map(normalizePurchase)
+      .sort((a, b) => {
+        if (a.date !== b.date) return b.date.localeCompare(a.date)
+        return b.createdAt.localeCompare(a.createdAt)
+      })
+  }
+  const all = await idb!.getAll('purchases')
   return all
     .map(normalizePurchase)
     .sort((a, b) => {
@@ -145,41 +267,64 @@ export async function listPurchases(): Promise<Purchase[]> {
 }
 
 export async function getPurchase(id: string): Promise<Purchase | undefined> {
-  const db = await getDb()
-  const p = await db.get('purchases', id)
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    const p = mem.purchases.get(id)
+    return p ? normalizePurchase(p) : undefined
+  }
+  const p = await idb!.get('purchases', id)
   return p ? normalizePurchase(p) : undefined
 }
 
 export async function savePurchase(purchase: Purchase): Promise<void> {
-  const db = await getDb()
-  await db.put('purchases', normalizePurchase(purchase))
+  await ensureStorage()
+  const row = normalizePurchase(purchase)
+  if (mode === 'memory' && mem) {
+    mem.purchases.set(row.id, row)
+    return
+  }
+  await idb!.put('purchases', row)
 }
 
 export async function deletePurchase(id: string): Promise<void> {
-  const db = await getDb()
-  const purchase = await db.get('purchases', id)
-  await db.delete('purchases', id)
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    const purchase = mem.purchases.get(id)
+    mem.purchases.delete(id)
+    if (purchase?.receiptImageId) mem.images.delete(purchase.receiptImageId)
+    return
+  }
+  const purchase = await idb!.get('purchases', id)
+  await idb!.delete('purchases', id)
   if (purchase?.receiptImageId) {
-    await db.delete('images', purchase.receiptImageId)
+    await idb!.delete('images', purchase.receiptImageId)
   }
 }
 
 export async function saveImage(blob: Blob): Promise<string> {
-  const db = await getDb()
+  await ensureStorage()
   const id = newId()
-  await db.put('images', { id, blob, createdAt: new Date().toISOString() })
+  const row: ImageRow = { id, blob, createdAt: new Date().toISOString() }
+  if (mode === 'memory' && mem) {
+    mem.images.set(id, row)
+    return id
+  }
+  await idb!.put('images', row)
   return id
 }
 
 export async function getImage(id: string): Promise<Blob | undefined> {
-  const db = await getDb()
-  const row = await db.get('images', id)
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    return mem.images.get(id)?.blob
+  }
+  const row = await idb!.get('images', id)
   return row?.blob
 }
 
-export async function getSettings(): Promise<AppSettings> {
-  const db = await getDb()
-  const row = await db.get('settings', SETTINGS_KEY)
+function parseSettingsRow(
+  row: (AppSettings & { id: string }) | null | undefined,
+): AppSettings {
   const rawCustom = (row as { customCategories?: unknown } | undefined)?.customCategories
   const customCategories = Array.isArray(rawCustom)
     ? rawCustom
@@ -207,47 +352,75 @@ export async function getSettings(): Promise<AppSettings> {
   }
 }
 
+export async function getSettings(): Promise<AppSettings> {
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    return parseSettingsRow(mem.settings)
+  }
+  const row = await idb!.get('settings', SETTINGS_KEY)
+  return parseSettingsRow(row)
+}
+
 export async function saveSettings(settings: AppSettings): Promise<void> {
-  const db = await getDb()
-  await db.put('settings', { id: SETTINGS_KEY, ...settings })
+  await ensureStorage()
+  const row = { id: SETTINGS_KEY, ...settings }
+  if (mode === 'memory' && mem) {
+    mem.settings = row
+    return
+  }
+  await idb!.put('settings', row)
 }
 
 export async function getLeaderboard(): Promise<LeaderboardMap | null> {
-  const db = await getDb()
-  const row = await db.get('meta', META_KEY)
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    return mem.meta.get(META_KEY)?.leaderboard ?? null
+  }
+  const row = await idb!.get('meta', META_KEY)
   return row?.leaderboard ?? null
 }
 
 export async function saveLeaderboard(leaderboard: LeaderboardMap): Promise<void> {
-  const db = await getDb()
-  const existing = await db.get('meta', META_KEY)
-  await db.put('meta', { ...existing, id: META_KEY, leaderboard })
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    const existing = mem.meta.get(META_KEY) ?? { id: META_KEY }
+    mem.meta.set(META_KEY, { ...existing, id: META_KEY, leaderboard })
+    return
+  }
+  const existing = await idb!.get('meta', META_KEY)
+  await idb!.put('meta', { ...existing, id: META_KEY, leaderboard })
 }
 
 export async function getReceiptMemory(): Promise<ReceiptMemory> {
   try {
-    const db = await getDb()
-    const row = await db.get('meta', MEMORY_KEY)
-    if (row?.receiptMemory && row.receiptMemory.version === 1) {
-      return row.receiptMemory
+    await ensureStorage()
+    if (mode === 'memory' && mem) {
+      const row = mem.meta.get(MEMORY_KEY) ?? mem.meta.get(META_KEY)
+      if (row?.receiptMemory?.version === 1) return row.receiptMemory
+      return emptyReceiptMemory()
     }
-    const main = await db.get('meta', META_KEY)
-    if (main?.receiptMemory && main.receiptMemory.version === 1) {
-      return main.receiptMemory
-    }
+    const row = await idb!.get('meta', MEMORY_KEY)
+    if (row?.receiptMemory?.version === 1) return row.receiptMemory
+    const main = await idb!.get('meta', META_KEY)
+    if (main?.receiptMemory?.version === 1) return main.receiptMemory
   } catch {
-    /* memory is optional — never block the app */
+    /* optional */
   }
   return emptyReceiptMemory()
 }
 
 export async function saveReceiptMemory(memory: ReceiptMemory): Promise<void> {
   try {
-    const db = await getDb()
-    await db.put('meta', {
+    await ensureStorage()
+    const payload: MetaRow = {
       id: MEMORY_KEY,
       receiptMemory: { ...memory, updatedAt: new Date().toISOString() },
-    })
+    }
+    if (mode === 'memory' && mem) {
+      mem.meta.set(MEMORY_KEY, payload)
+      return
+    }
+    await idb!.put('meta', payload)
   } catch (e) {
     console.warn('[schoolie] could not save receipt memory', e)
   }
@@ -258,24 +431,42 @@ export async function clearReceiptMemory(): Promise<void> {
 }
 
 export async function clearAllData(): Promise<void> {
-  const db = await getDb()
-  await db.clear('purchases')
-  await db.clear('images')
+  await ensureStorage()
+  if (mode === 'memory' && mem) {
+    mem.purchases.clear()
+    mem.images.clear()
+    mem.meta.clear()
+    return
+  }
+  await idb!.clear('purchases')
+  await idb!.clear('images')
   await clearReceiptMemory()
 }
 
 /**
- * If IndexedDB is stuck (blocked upgrade), delete the whole DB and start fresh.
- * Call only with user consent — wipes local purchases/images.
+ * Force-delete IndexedDB and reopen (or memory). Safe to call from UI.
  */
 export async function resetDatabase(): Promise<void> {
-  dbPromise = null
-  await new Promise<void>((resolve, reject) => {
-    const req = indexedDB.deleteDatabase(DB_NAME)
-    req.onsuccess = () => resolve()
-    req.onerror = () => reject(req.error ?? new Error('deleteDatabase failed'))
-    req.onblocked = () => {
-      console.warn('[schoolie] deleteDatabase blocked — close other tabs')
-    }
-  })
+  initPromise = null
+  mode = null
+  try {
+    idb?.close()
+  } catch {
+    /* ignore */
+  }
+  idb = null
+  mem = null
+  try {
+    await withTimeout(deleteIdb(), 3000, 'reset deleteDatabase')
+  } catch {
+    /* ignore */
+  }
+  // Prefer a clean IDB; fall back to memory automatically
+  await ensureStorage()
+  if (mode === 'idb') {
+    storageNotice = 'Local database was reset. You can scan again.'
+  }
 }
+
+// silence unused defaultSettings if tree-shaken — used for docs/default
+void defaultSettings
