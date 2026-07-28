@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Install Schoolie into the system app menu (and Desktop).
-# Also ensures the bus logo is registered so it shows in the app tray/launcher.
+# Install Schoolie so it shows in the app menu / launcher for every user.
 # Usage: npm run app:icon
+#        sudo bash scripts/install-desktop-launcher.sh
 
 set -euo pipefail
 
@@ -12,125 +12,156 @@ START="$ROOT/scripts/start-schoolie-app.sh"
 ICON_SRC="$ROOT/public/pwa-512.png"
 ICON_NAME="schoolie-tracker"
 APP_ID="schoolie-tracker"
+ICON_FILE="/usr/share/pixmaps/${ICON_NAME}.png"
+# Absolute icon path so the logo always shows (theme cache is flaky)
+ICON_ABS="$ICON_FILE"
 
-chmod +x "$START" \
+chmod +x \
+  "$START" \
   "$ROOT/scripts/run-desktop.sh" \
-  "$ROOT/scripts/install-desktop-launcher.sh" 2>/dev/null || true
+  "$ROOT/scripts/install-desktop-launcher.sh" \
+  2>/dev/null || true
 
 if [[ ! -f "$ICON_SRC" ]]; then
   echo "Missing icon: $ICON_SRC" >&2
   exit 1
 fi
 
-# Ensure a build exists so first click works offline
 if [[ ! -f dist/index.html ]]; then
-  echo "Building Schoolie once so the launcher can start immediately…"
+  echo "Building Schoolie…"
   npm run build
 fi
 
-# --- Icons for app tray / launcher ---
-DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+# Stable launch command on PATH
+mkdir -p /usr/local/bin 2>/dev/null || true
+cat > /usr/local/bin/schoolie <<EOF
+#!/usr/bin/env bash
+exec "$START" "\$@"
+EOF
+chmod +x /usr/local/bin/schoolie
+echo "Command: /usr/local/bin/schoolie"
+
+# System icon (absolute path — always works)
+mkdir -p /usr/share/pixmaps 2>/dev/null || true
+cp -f "$ICON_SRC" "$ICON_ABS"
 for size in 48 64 128 192 256 512; do
-  d="$DATA_HOME/icons/hicolor/${size}x${size}/apps"
-  mkdir -p "$d"
-  cp -f "$ICON_SRC" "$d/${ICON_NAME}.png"
+  d="/usr/share/icons/hicolor/${size}x${size}/apps"
+  mkdir -p "$d" 2>/dev/null || true
+  cp -f "$ICON_SRC" "$d/${ICON_NAME}.png" 2>/dev/null || true
 done
-mkdir -p "$DATA_HOME/pixmaps"
-cp -f "$ICON_SRC" "$DATA_HOME/pixmaps/${ICON_NAME}.png"
 
-# System-wide icons when we can (makes it appear for all users)
-if [[ "$(id -u)" -eq 0 ]] || command -v sudo >/dev/null 2>&1; then
-  for size in 48 128 256 512; do
-    d="/usr/share/icons/hicolor/${size}x${size}/apps"
-    if mkdir -p "$d" 2>/dev/null; then
-      cp -f "$ICON_SRC" "$d/${ICON_NAME}.png" 2>/dev/null || true
-    elif command -v sudo >/dev/null 2>&1; then
-      sudo mkdir -p "$d" 2>/dev/null || true
-      sudo cp -f "$ICON_SRC" "$d/${ICON_NAME}.png" 2>/dev/null || true
-    fi
-  done
-  if mkdir -p /usr/share/pixmaps 2>/dev/null; then
-    cp -f "$ICON_SRC" "/usr/share/pixmaps/${ICON_NAME}.png" 2>/dev/null || true
-  fi
-fi
-
-DESKTOP_CONTENT="[Desktop Entry]
+write_desktop() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")" 2>/dev/null || true
+  cat >"$dest" <<EOF
+[Desktop Entry]
 Version=1.0
 Type=Application
 Name=Schoolie Cost Tracker
 GenericName=Schoolie
 Comment=Track schoolie conversion costs — free on-device receipt scans
-Exec=${START}
-TryExec=${START}
-Icon=${ICON_NAME}
+Exec=/usr/local/bin/schoolie
+TryExec=/usr/local/bin/schoolie
+Icon=${ICON_ABS}
 Path=${ROOT}
 Terminal=false
-Categories=Office;Finance;Utility;
-Keywords=schoolie;bus;receipt;budget;cost;
+Categories=Office;Finance;Utility;Education;
+Keywords=schoolie;bus;receipt;budget;cost;tracker;
 StartupNotify=true
 StartupWMClass=schoolie-tracker
 X-GNOME-UsesNotifications=true
-"
+EOF
+  chmod +x "$dest" 2>/dev/null || true
+  echo "Installed: $dest"
+}
 
-# --- User app menu (always) ---
-APPS_DIR="$DATA_HOME/applications"
-mkdir -p "$APPS_DIR"
-USER_DESKTOP_FILE="$APPS_DIR/${APP_ID}.desktop"
-printf '%s\n' "$DESKTOP_CONTENT" >"$USER_DESKTOP_FILE"
-chmod +x "$USER_DESKTOP_FILE"
+# System-wide applications menu
+write_desktop "/usr/share/applications/${APP_ID}.desktop"
 
-# --- System app menu when possible ---
-SYSTEM_APPS="/usr/share/applications"
-if [[ -d "$SYSTEM_APPS" ]]; then
-  if [[ -w "$SYSTEM_APPS" ]]; then
-    printf '%s\n' "$DESKTOP_CONTENT" >"$SYSTEM_APPS/${APP_ID}.desktop"
-    chmod +x "$SYSTEM_APPS/${APP_ID}.desktop"
-    echo "System app menu: $SYSTEM_APPS/${APP_ID}.desktop"
-  elif command -v sudo >/dev/null 2>&1; then
-    TMP="$(mktemp)"
-    printf '%s\n' "$DESKTOP_CONTENT" >"$TMP"
-    sudo cp "$TMP" "$SYSTEM_APPS/${APP_ID}.desktop" 2>/dev/null && \
-      sudo chmod +x "$SYSTEM_APPS/${APP_ID}.desktop" 2>/dev/null && \
-      echo "System app menu: $SYSTEM_APPS/${APP_ID}.desktop" || true
-    rm -f "$TMP"
-  fi
-fi
+# Flatpak-style / local for root
+write_desktop "/root/.local/share/applications/${APP_ID}.desktop"
 
-# xdg-desktop-menu install (registers with the desktop environment)
-if command -v xdg-desktop-menu >/dev/null 2>&1; then
-  xdg-desktop-menu install --novendor "$USER_DESKTOP_FILE" 2>/dev/null || true
-fi
+# Every user home we can find (e.g. ubuntu)
+for home in /root /home/*; do
+  [[ -d "$home" ]] || continue
+  user="$(basename "$home")"
+  [[ "$user" == "*" ]] && continue
 
-# --- Desktop shortcut ---
-for DESK in "$HOME/Desktop" "$HOME/desktop" "/root/Desktop"; do
-  if mkdir -p "$DESK" 2>/dev/null; then
-    DEST="$DESK/Schoolie Cost Tracker.desktop"
-    printf '%s\n' "$DESKTOP_CONTENT" >"$DEST"
-    chmod +x "$DEST"
-    if command -v gio >/dev/null 2>&1; then
-      gio set "$DEST" metadata::trusted true 2>/dev/null || true
+  write_desktop "$home/.local/share/applications/${APP_ID}.desktop"
+
+  # Per-user icons
+  for size in 48 128 256 512; do
+    d="$home/.local/share/icons/hicolor/${size}x${size}/apps"
+    mkdir -p "$d" 2>/dev/null || true
+    cp -f "$ICON_SRC" "$d/${ICON_NAME}.png" 2>/dev/null || true
+  done
+  mkdir -p "$home/.local/share/pixmaps" 2>/dev/null || true
+  cp -f "$ICON_SRC" "$home/.local/share/pixmaps/${ICON_NAME}.png" 2>/dev/null || true
+
+  # Desktop shortcut
+  for DESK in "$home/Desktop" "$home/desktop"; do
+    mkdir -p "$DESK" 2>/dev/null || true
+    if [[ -d "$DESK" ]]; then
+      dest="$DESK/Schoolie Cost Tracker.desktop"
+      write_desktop "$dest"
+      # Trust for GNOME
+      if command -v gio >/dev/null 2>&1; then
+        sudo -u "$user" gio set "$dest" metadata::trusted true 2>/dev/null || \
+          gio set "$dest" metadata::trusted true 2>/dev/null || true
+      fi
+      # KDE / some DEs
+      chmod a+x "$dest" 2>/dev/null || true
     fi
-    echo "Desktop icon: $DEST"
-    break
+  done
+
+  # Fix ownership for non-root homes
+  if [[ "$home" != /root && -d "$home" ]]; then
+    uid="$(stat -c %u "$home" 2>/dev/null || echo 0)"
+    gid="$(stat -c %g "$home" 2>/dev/null || echo 0)"
+    chown -R "$uid:$gid" \
+      "$home/.local/share/applications/${APP_ID}.desktop" \
+      "$home/.local/share/icons" \
+      "$home/.local/share/pixmaps" \
+      "$home/Desktop/Schoolie Cost Tracker.desktop" \
+      "$home/desktop/Schoolie Cost Tracker.desktop" \
+      2>/dev/null || true
   fi
 done
 
-# Refresh caches so the logo appears immediately
-if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-  gtk-update-icon-cache -f -t "$DATA_HOME/icons/hicolor" 2>/dev/null || true
-  gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+# Register with desktop environments
+if command -v xdg-desktop-menu >/dev/null 2>&1; then
+  xdg-desktop-menu forceupdate 2>/dev/null || true
+  xdg-desktop-menu install --novendor \
+    "/usr/share/applications/${APP_ID}.desktop" 2>/dev/null || true
 fi
 if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$APPS_DIR" 2>/dev/null || true
   update-desktop-database /usr/share/applications 2>/dev/null || true
+  update-desktop-database /root/.local/share/applications 2>/dev/null || true
+  for home in /home/*; do
+    [[ -d "$home/.local/share/applications" ]] || continue
+    update-desktop-database "$home/.local/share/applications" 2>/dev/null || true
+  done
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 fi
 
+# Copy logo next to desktop files as Schoolie.png (some file managers show this)
+for DESK in /root/Desktop /home/*/Desktop; do
+  [[ -d "$DESK" ]] || continue
+  cp -f "$ICON_SRC" "$DESK/Schoolie.png" 2>/dev/null || true
+done
+
 echo ""
-echo "✓ Schoolie is installed in the app menu / launcher"
-echo "  Menu entry: $USER_DESKTOP_FILE"
-echo "  Logo:       $DATA_HOME/icons/hicolor/512x512/apps/${ICON_NAME}.png"
-echo "  Start:      $START"
+echo "========================================"
+echo "  Schoolie Cost Tracker is installed"
+echo "========================================"
 echo ""
-echo "Open your applications tray/menu and click “Schoolie Cost Tracker”."
-echo "When the app is running, the bus icon also stays in the system tray"
-echo "(notification area) — click it to show or hide Schoolie."
+echo "  App menu name:  Schoolie Cost Tracker"
+echo "  Terminal:       schoolie"
+echo "  Desktop:        Schoolie Cost Tracker.desktop"
+echo "  Icon file:      $ICON_ABS"
+echo ""
+echo "Open your applications menu and search for “Schoolie”."
+echo "Or run:  schoolie"
+echo ""
