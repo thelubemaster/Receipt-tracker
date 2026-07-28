@@ -42,7 +42,6 @@ import {
   resetDatabase,
   getStorageNotice,
   clearStorageNotice,
-  isUsingMemoryStorage,
 } from './db'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
 import { downloadCsv, downloadPdfSummary } from './exportData'
@@ -209,11 +208,8 @@ export default function App() {
         if (notice) {
           setInfo(notice)
           clearStorageNotice()
-        } else if (isUsingMemoryStorage()) {
-          setInfo(
-            'Temporary memory storage is active — close other Schoolie tabs and refresh for permanent saves.',
-          )
         }
+        // localStorage path is permanent on this device — no scary "tabs" message
         if (s.lastSeenVersion !== APP_VERSION) {
           const entries = getUpdatesSince(s.lastSeenVersion || null)
           if (entries.length) {
