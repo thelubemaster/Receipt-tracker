@@ -8,6 +8,13 @@ import { runLineItemsAgent } from './lineItemsAgent'
 import { runMerchantAgent } from './merchantAgent'
 import { runCouncilAgent } from './councilAgent'
 import { runQuorumAgent } from './quorumAgent'
+import {
+  diversifyImageForRetry,
+  formatRejectionBrief,
+  pickDiversifiedParse,
+  similarityToRejected,
+  type RejectedScanSnapshot,
+} from './retryFeedback'
 import { applySeekerToDraft, runSeekerAgent } from './seekerAgent'
 import { runSieveAgent } from './sieveAgent'
 import { runTotalsAgent } from './totalsAgent'
@@ -72,35 +79,74 @@ function parseFromText(
 export type PipelineOptions = {
   /** Default true — run Hammer swarm + Titan neural (heavy phone load) */
   maxPower?: boolean
+  /**
+   * User pressed Try again — previous answer was wrong.
+   * Pipeline diversifies OCR + picks a different parse.
+   */
+  rejected?: RejectedScanSnapshot
+}
+
+function scoreParseCandidate(c: LocalAgentResult): number {
+  let s = (c.confidence ?? 0) * 40
+  s += Math.min(12, (c.lineItems?.length ?? 0) * 2)
+  if (c.amount != null) s += 15
+  if (c.vendor) s += 8
+  if (c.date) s += 6
+  if (c.lineItems?.length && c.amount != null) {
+    const sum = c.lineItems.reduce((a, i) => a + i.amount, 0)
+    if (Math.abs(sum - c.amount) < 1 || Math.abs(sum - (c.subtotal ?? -1)) < 1) s += 12
+  }
+  s += Math.min(10, (c.description?.length ?? 0) / 20)
+  return s
 }
 
 /**
  * Free keyless multi-agent pipeline with optional max-power engines.
  * Forge + Lens always; Hammer (parallel OCR) + Titan (neural) when maxPower.
  * Quorum votes across all successful OCR paths.
+ * On retry, rejected snapshot steers AIs away from the same wrong answer.
  */
 export async function runMultiAgentReceiptPipeline(
   imageBlob: Blob,
   onProgress?: (p: AgentProgress) => void,
   options: PipelineOptions = {},
 ): Promise<LocalAgentResult> {
-  const maxPower = options.maxPower !== false
+  const rejected = options.rejected
+  // Retries always push hard — user already said the first answer was wrong
+  const maxPower = rejected ? true : options.maxPower !== false
+  const attempt = rejected?.attempt ?? 0
 
-  onProgress?.({
-    stage: 'prepare',
-    progress: 0.02,
-    message: maxPower
-      ? 'Starting MAX-POWER free AI team (Hammer + Titan)…'
-      : 'Starting free AI team…',
-    aiId: 'hammer',
-    aiName: 'Hammer',
-  })
+  let workBlob = imageBlob
+  if (rejected && attempt >= 1) {
+    onProgress?.({
+      stage: 'prepare',
+      progress: 0.02,
+      message: `Try again #${attempt}: AIs know the last answer was wrong — re-reading differently…`,
+      aiId: 'arbiter',
+      aiName: 'Arbiter',
+    })
+    try {
+      workBlob = await diversifyImageForRetry(imageBlob, attempt)
+    } catch {
+      workBlob = imageBlob
+    }
+  } else {
+    onProgress?.({
+      stage: 'prepare',
+      progress: 0.02,
+      message: maxPower
+        ? 'Starting MAX-POWER free AI team (Hammer + Titan)…'
+        : 'Starting free AI team…',
+      aiId: 'hammer',
+      aiName: 'Hammer',
+    })
+  }
 
   const ocrTexts: { label: string; text: string; note: string; ais: AiId[] }[] = []
 
   // --- Forge ---
   try {
-    const forge = await runForgeOcr(imageBlob, onProgress)
+    const forge = await runForgeOcr(workBlob, onProgress)
     if (forge.text.trim()) {
       ocrTexts.push({
         label: 'Forge path',
@@ -120,7 +166,7 @@ export async function runMultiAgentReceiptPipeline(
 
   // --- Lens ---
   try {
-    const lens = await runLensOcr(imageBlob, onProgress)
+    const lens = await runLensOcr(workBlob, onProgress)
     if (lens.text.trim()) {
       ocrTexts.push({
         label: 'Lens path',
@@ -136,7 +182,7 @@ export async function runMultiAgentReceiptPipeline(
   // --- Ruler (layout-aware document rows: names + prices on the same line) ---
   try {
     const { runRulerOcr } = await import('./rulerOcr')
-    const ruler = await runRulerOcr(imageBlob, onProgress)
+    const ruler = await runRulerOcr(workBlob, onProgress)
     if (ruler.text.trim()) {
       ocrTexts.push({
         label: 'Ruler layout path',
@@ -159,7 +205,7 @@ export async function runMultiAgentReceiptPipeline(
   // --- Hammer (max power parallel swarm) ---
   if (maxPower) {
     try {
-      const hammer = await runHammerOcr(imageBlob, onProgress)
+      const hammer = await runHammerOcr(workBlob, onProgress)
       if (hammer.text.trim()) {
         ocrTexts.push({
           label: 'Hammer path',
@@ -183,7 +229,7 @@ export async function runMultiAgentReceiptPipeline(
   if (maxPower) {
     try {
       const { runTitanNeural } = await import('./titanNeural')
-      const titan = await runTitanNeural(imageBlob, onProgress)
+      const titan = await runTitanNeural(workBlob, onProgress)
       if (titan.text.trim()) {
         ocrTexts.push({
           label: 'Titan neural path',
@@ -216,7 +262,7 @@ export async function runMultiAgentReceiptPipeline(
         aiName: 'Scout',
       })
       const worker = await Tesseract.createWorker('eng')
-      const r = await worker.recognize(imageBlob)
+      const r = await worker.recognize(workBlob)
       await worker.terminate()
       usable.push({
         label: 'Scout fallback',
@@ -269,21 +315,41 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'arbitrate',
     progress: 0.88,
-    message: `Quorum is voting across ${parses.length} full parses…`,
+    message: rejected
+      ? `Quorum is voting — avoiding the answer you rejected…`
+      : `Quorum is voting across ${parses.length} full parses…`,
     aiId: 'quorum',
     aiName: 'Quorum',
   })
-
-  let final = parses[0]
-  for (let i = 1; i < parses.length; i++) {
-    final = runQuorumAgent(final, parses[i])
-  }
 
   // Use richest OCR text for council hunting
   let councilText = usable[0].text
   for (let i = 1; i < usable.length; i++) {
     councilText = mergeOcrTexts(councilText, usable[i].text)
   }
+
+  // When user rejected a prior answer, diversify across full parse candidates
+  // instead of pairwise-merging (merge often recreated the same wrong items).
+  let final: LocalAgentResult
+  let diversifyReport = ''
+  if (rejected && parses.length) {
+    const picked = pickDiversifiedParse(parses, rejected, scoreParseCandidate)
+    final = picked.winner
+    diversifyReport = picked.report
+    // Still merge items from other candidates that don't match the rejected set
+    for (const p of parses) {
+      if (p === final) continue
+      if (similarityToRejected(p, rejected) < 0.7) {
+        final = runQuorumAgent(final, p)
+      }
+    }
+  } else {
+    final = parses[0]
+    for (let i = 1; i < parses.length; i++) {
+      final = runQuorumAgent(final, parses[i])
+    }
+  }
+
   if (!final.rawText || councilText.length > final.rawText.length) {
     final = { ...final, rawText: councilText }
   }
@@ -291,20 +357,62 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'arbitrate',
     progress: 0.93,
-    message: 'Council is debating — agents challenging gaps…',
+    message: rejected
+      ? 'Council knows the last scan was wrong — debating a different reading…'
+      : 'Council is debating — agents challenging gaps…',
     aiId: 'council',
     aiName: 'Council',
   })
 
-  final = runCouncilAgent(final, councilText || final.rawText || '', (msg, aiId) => {
+  final = runCouncilAgent(
+    final,
+    councilText || final.rawText || '',
+    (msg, aiId) => {
+      onProgress?.({
+        stage: 'arbitrate',
+        progress: 0.94,
+        message: msg.slice(0, 120),
+        aiId: aiId ?? 'council',
+        aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+      })
+    },
+    rejected,
+  )
+
+  // If still nearly identical to rejected, force another council pass from alternate OCR
+  if (rejected && similarityToRejected(final, rejected) >= 0.82) {
     onProgress?.({
       stage: 'arbitrate',
-      progress: 0.94,
-      message: msg.slice(0, 120),
-      aiId: aiId ?? 'council',
-      aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+      progress: 0.95,
+      message: 'Still too similar to the rejected answer — forcing alternate parse…',
+      aiId: 'arbiter',
+      aiName: 'Arbiter',
     })
-  })
+    // Prefer the lowest-similarity parse as a fresh draft
+    const alt = pickDiversifiedParse(parses, rejected, (c) => scoreParseCandidate(c) * 0.5)
+    final = runCouncilAgent(
+      {
+        ...alt.winner,
+        rawText: councilText || alt.winner.rawText,
+      },
+      councilText || final.rawText || '',
+      (msg, aiId) => {
+        onProgress?.({
+          stage: 'arbitrate',
+          progress: 0.955,
+          message: msg.slice(0, 120),
+          aiId: aiId ?? 'council',
+          aiName: 'Council',
+        })
+      },
+      {
+        ...rejected,
+        attempt: rejected.attempt + 1,
+        userNote: (rejected.userNote || '') + ' Still too similar — push harder for a different split.',
+      },
+    )
+    diversifyReport += `\nForced alternate draft (sim was high). ${alt.report}`
+  }
 
   // Seeker — free internet enrichment (DuckDuckGo + Wikipedia via host proxy)
   if (typeof navigator === 'undefined' || navigator.onLine !== false) {
@@ -328,15 +436,20 @@ export async function runMultiAgentReceiptPipeline(
       })
       final = applySeekerToDraft(final, seek)
       // Re-run a light council pass so agents react to web facts
-      final = runCouncilAgent(final, councilText || final.rawText || '', (msg, aiId) => {
-        onProgress?.({
-          stage: 'arbitrate',
-          progress: 0.98,
-          message: msg.slice(0, 120),
-          aiId: aiId ?? 'council',
-          aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
-        })
-      })
+      final = runCouncilAgent(
+        final,
+        councilText || final.rawText || '',
+        (msg, aiId) => {
+          onProgress?.({
+            stage: 'arbitrate',
+            progress: 0.98,
+            message: msg.slice(0, 120),
+            aiId: aiId ?? 'council',
+            aiName: aiId ? aiId.charAt(0).toUpperCase() + aiId.slice(1) : 'Council',
+          })
+        },
+        rejected,
+      )
     } catch (e) {
       final.agentReport = [
         final.agentReport,
@@ -364,16 +477,22 @@ export async function runMultiAgentReceiptPipeline(
       'seeker',
     ]),
   )
-  final.activeAiLabel = maxPower
-    ? 'Max-power free team + Ruler layout + Council + Seeker'
-    : 'Free team + Ruler layout + Council + Seeker'
+  final.activeAiLabel = rejected
+    ? `Retry #${attempt} · free team (avoided rejected answer)`
+    : maxPower
+      ? 'Max-power free team + Ruler layout + Council + Seeker'
+      : 'Free team + Ruler layout + Council + Seeker'
   final.agentReport = [
+    rejected ? formatRejectionBrief(rejected) : null,
+    diversifyReport || null,
     maxPower
       ? 'MAX POWER free AIs: Forge, Lens, Ruler, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker'
       : 'Free AIs: Forge, Lens, Ruler, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker',
     ...usable.map((u) => u.note),
     final.agentReport,
-  ].join('\n')
+  ]
+    .filter(Boolean)
+    .join('\n')
   final.source = 'on-device'
 
   onProgress?.({

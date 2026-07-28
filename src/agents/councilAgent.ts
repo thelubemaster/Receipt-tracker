@@ -13,10 +13,17 @@ import {
   isShippingLineItem,
   makeShippingLineItem,
   primaryCategoryFromItems,
+  runLineItemsAgent,
 } from './lineItemsAgent'
 import { extractVendor } from './merchantAgent'
 import { parseMoneyTokens, roundMoney } from './moneyParse'
 import type { LocalAgentResult } from './pipeline'
+import {
+  formatRejectionBrief,
+  similarityToRejected,
+  type RejectedScanSnapshot,
+} from './retryFeedback'
+import { runTotalsAgent } from './totalsAgent'
 
 function nearlyEqual(a: number, b: number, tol = 0.08): boolean {
   return Math.abs(a - b) <= Math.max(tol, Math.abs(b) * 0.02)
@@ -141,11 +148,13 @@ export type CouncilResult = LocalAgentResult & {
 
 /**
  * Multi-round council over a draft parse + raw OCR.
+ * When `rejected` is set (user pressed Try again), agents know that answer was wrong.
  */
 export function runCouncilAgent(
   draft: LocalAgentResult,
   rawText: string,
   onTalk?: (msg: string, aiId?: AiId) => void,
+  rejected?: RejectedScanSnapshot,
 ): CouncilResult {
   const board = new Blackboard()
   const talk = (from: AiId | 'system', kind: 'finding' | 'question' | 'answer' | 'challenge' | 'decision', text: string) => {
@@ -159,6 +168,99 @@ export function runCouncilAgent(
   let subtotal = draft.subtotal ?? null
   let tax = draft.tax ?? null
   let shipping = extractShipping(rawText)
+
+  // --- Round 0: user rejection (Try again) ---
+  if (rejected) {
+    talk('system', 'challenge', formatRejectionBrief(rejected))
+    talk(
+      'arbiter',
+      'challenge',
+      `User pressed Try again (#${rejected.attempt}). Treat the previous total/items as untrusted — re-check OCR for a different split.`,
+    )
+    // Drop line items that exactly match the rejected set (same amounts) so hunt can rebuild
+    const rejectedAmounts = new Set(
+      rejected.lineItems.map((i) => roundMoney(i.amount).toFixed(2)),
+    )
+    if (
+      rejected.lineItems.length > 0 &&
+      items.length > 0 &&
+      similarityToRejected(
+        { amount, vendor, description: draft.description, lineItems: items },
+        rejected,
+      ) >= 0.75
+    ) {
+      const before = items.length
+      // Keep shipping; clear product clones of the rejected answer
+      const kept = items.filter((i) => {
+        if (isShippingLineItem(i.description)) return true
+        // drop if this amount+desc pair was in the rejected answer
+        const hit = rejected.lineItems.some(
+          (r) =>
+            nearlyEqual(r.amount, i.amount) &&
+            r.description.toLowerCase().slice(0, 20) === i.description.toLowerCase().slice(0, 20),
+        )
+        return !hit
+      })
+      // If we wiped almost everything, clear products and re-hunt
+      if (kept.filter((i) => !isShippingLineItem(i.description)).length === 0) {
+        items = items.filter((i) => isShippingLineItem(i.description))
+        talk(
+          'ledger',
+          'decision',
+          `Cleared ${before - items.length} rejected product line(s) — hunting OCR fresh.`,
+        )
+      } else if (kept.length < before) {
+        items = kept
+        talk('ledger', 'decision', `Removed ${before - kept.length} line(s) that matched the rejected answer.`)
+      }
+      // If total matched rejected total, distrust it and re-read from totals agent via OCR later
+      if (rejected.amount != null && amount != null && nearlyEqual(amount, rejected.amount)) {
+        talk('cashier', 'challenge', `Rejected total $${rejected.amount.toFixed(2)} — re-evaluating grand total from OCR.`)
+      }
+    }
+    void rejectedAmounts
+
+    // Re-read totals + line items fresh from OCR (ignore draft clones of rejected)
+    const freshTotals = runTotalsAgent(rawText)
+    const freshLines = runLineItemsAgent(rawText)
+    if (freshTotals.total != null) {
+      if (rejected.amount == null || !nearlyEqual(freshTotals.total, rejected.amount) || amount == null) {
+        if (amount == null || (rejected.amount != null && nearlyEqual(amount, rejected.amount))) {
+          amount = freshTotals.total
+          talk('cashier', 'answer', `Fresh total from OCR: $${amount.toFixed(2)}`)
+        }
+      }
+      if (freshTotals.subtotal != null) subtotal = freshTotals.subtotal
+      if (freshTotals.tax != null) tax = freshTotals.tax
+    }
+    // If products were cleared or still look like the rejected set, adopt fresh OCR lines
+    const productCount = items.filter((i) => !isShippingLineItem(i.description)).length
+    if (productCount === 0 && freshLines.items.length > 0) {
+      items = [...freshLines.items]
+      talk('ledger', 'answer', `Loaded ${items.length} line(s) from a fresh OCR pass.`)
+    } else if (
+      freshLines.items.length > 0 &&
+      similarityToRejected(
+        { amount, vendor, description: draft.description, lineItems: items },
+        rejected,
+      ) >= 0.8
+    ) {
+      // Prefer fresh if it differs from rejected more than current draft
+      const freshSim = similarityToRejected(
+        {
+          amount: freshTotals.total,
+          vendor,
+          description: freshLines.items.map((i) => i.description).join('; '),
+          lineItems: freshLines.items,
+        },
+        rejected,
+      )
+      if (freshSim < 0.8) {
+        items = [...freshLines.items]
+        talk('ledger', 'answer', `Swapped in alternate OCR lines (less like the rejected answer).`)
+      }
+    }
+  }
 
   // --- Round 1: open statements ---
   talk('cashier', 'finding', amount != null ? `Grand total I read: $${amount.toFixed(2)}` : 'No grand total found')

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AiId } from './aiRoster'
 import { AI_ROSTER, getAi } from './aiRoster'
 import { runAiStabilitySuite, type StabilitySuiteResult } from './aiStability'
@@ -27,6 +27,10 @@ import {
   type LeaderboardMap,
 } from './leaderboard'
 import { isShippingLineItem, partitionLineItems } from './agents/lineItemsAgent'
+import {
+  snapshotFromSuggestion,
+  type RejectedScanSnapshot,
+} from './agents/retryFeedback'
 import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
@@ -325,6 +329,7 @@ export default function App() {
           maxPowerMode={settings.maxPowerMode}
           retryBlob={screen.retryBlob}
           retryPreviewUrl={screen.retryPreviewUrl}
+          rejected={screen.rejected}
           onBack={() => setScreen({ name: 'home' })}
           onNeedSettings={() => setScreen({ name: 'settings' })}
           onParsed={(suggestion, blob, previewUrl) => {
@@ -374,13 +379,35 @@ export default function App() {
           onBack={() => setScreen({ name: 'home' })}
           onTryAgain={
             screen.receiptBlob
-              ? () => {
+              ? (formSnapshot) => {
                   setError(null)
                   setInfo(null)
+                  const prev =
+                    typeof formSnapshot.confidence === 'number' &&
+                    /Retry #(\d+)/i.test(formSnapshot.activeAiLabel || '')
+                      ? Number(RegExp.$1)
+                      : 0
+                  const fromLabel = /Retry #(\d+)/i.exec(formSnapshot.activeAiLabel || '')
+                  const attempt = (fromLabel ? Number(fromLabel[1]) : prev) + 1 || 1
+                  const amountNum = parseMoneyInput(formSnapshot.amount)
+                  const rejected = snapshotFromSuggestion({
+                    amount: amountNum,
+                    vendor: formSnapshot.vendor,
+                    description: formSnapshot.description,
+                    categoryId: formSnapshot.categoryId,
+                    lineItems: formSnapshot.lineItems,
+                    subtotal: formSnapshot.subtotal,
+                    tax: formSnapshot.tax,
+                    confidence: formSnapshot.confidence,
+                    rawText: formSnapshot.rawText,
+                    attempt: Math.max(1, attempt),
+                    userNote: formSnapshot.reportNote || undefined,
+                  })
                   setScreen({
                     name: 'scan',
                     retryBlob: screen.receiptBlob,
                     retryPreviewUrl: screen.receiptPreviewUrl,
+                    rejected,
                   })
                 }
               : undefined
@@ -683,46 +710,60 @@ function ScanScreen(props: {
   maxPowerMode: boolean
   retryBlob?: Blob
   retryPreviewUrl?: string
+  rejected?: RejectedScanSnapshot
   onBack: () => void
   onNeedSettings: () => void
   onParsed: (suggestion: ScanResult, blob: Blob, previewUrl: string) => void
   onManualWithPhoto: (blob: Blob, previewUrl: string) => void
   onError: (msg: string) => void
 }) {
-  const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<string | null>(null)
+  const [busy, setBusy] = useState(Boolean(props.retryBlob && props.rejected))
+  const [status, setStatus] = useState<string | null>(
+    props.rejected
+      ? `Try again #${props.rejected.attempt}: telling the AIs the last answer was wrong…`
+      : null,
+  )
   const [progress, setProgress] = useState(0)
   const [activeAi, setActiveAi] = useState<{ name: string; id?: AiId } | null>(null)
   const [scanError, setScanError] = useState<string | null>(null)
   const [heldBlob, setHeldBlob] = useState<Blob | null>(props.retryBlob ?? null)
   const [heldPreview, setHeldPreview] = useState<string | null>(props.retryPreviewUrl ?? null)
+  const autoStarted = useRef(false)
 
   const whoWillScan = useMemo(() => {
     const base = AI_ROSTER.map((a) => a.name)
-    if (!props.maxPowerMode) {
+    if (!props.maxPowerMode && !props.rejected) {
       return base.filter((n) => n !== 'Hammer' && n !== 'Titan')
     }
     return base
-  }, [props.maxPowerMode])
+  }, [props.maxPowerMode, props.rejected])
 
-  async function runScan(blob: Blob, previewUrl: string) {
+  async function runScan(
+    blob: Blob,
+    previewUrl: string,
+    rejected?: RejectedScanSnapshot,
+  ) {
     setScanError(null)
     setHeldBlob(blob)
     setHeldPreview(previewUrl)
     setBusy(true)
     setProgress(0.02)
+    const isRetry = Boolean(rejected)
     setActiveAi({
-      name: props.maxPowerMode ? 'Hammer' : 'Forge',
-      id: props.maxPowerMode ? 'hammer' : 'forge',
+      name: isRetry ? 'Arbiter' : props.maxPowerMode ? 'Hammer' : 'Forge',
+      id: isRetry ? 'arbiter' : props.maxPowerMode ? 'hammer' : 'forge',
     })
     setStatus(
-      props.maxPowerMode
-        ? 'Hammer is spinning up parallel OCR workers…'
-        : 'Forge is deep-scanning the photo…',
+      isRetry
+        ? `Try again #${rejected!.attempt}: telling the AIs the last answer was wrong…`
+        : props.maxPowerMode
+          ? 'Hammer is spinning up parallel OCR workers…'
+          : 'Forge is deep-scanning the photo…',
     )
     try {
       const suggestion = await scanReceipt(blob, {
-        maxPower: props.maxPowerMode,
+        maxPower: isRetry ? true : props.maxPowerMode,
+        rejected,
         onProgress: (p) => {
           setProgress(p.progress)
           setStatus(p.message)
@@ -741,6 +782,17 @@ function ScanScreen(props: {
       setActiveAi(null)
     }
   }
+
+  // Auto-start when arriving from the form's Try again (with rejected snapshot)
+  useEffect(() => {
+    if (autoStarted.current) return
+    if (props.retryBlob && props.rejected) {
+      autoStarted.current = true
+      const url = props.retryPreviewUrl ?? URL.createObjectURL(props.retryBlob)
+      void runScan(props.retryBlob, url, props.rejected)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on mount for this retry session
+  }, [])
 
   async function handleFile(file: File | null) {
     if (!file) return
@@ -770,10 +822,23 @@ function ScanScreen(props: {
       </header>
 
       <div className="banner banner-info">
-        <strong>Free · no keys · max power {props.maxPowerMode ? 'ON' : 'OFF'}.</strong>{' '}
-        {props.maxPowerMode
-          ? 'Hammer + Titan push the phone hard. After OCR, Seeker looks up SKUs on the free public web (DuckDuckGo/Wikipedia via this app host). No API keys.'
-          : 'Lighter free team. Seeker still can web-lookup products. Turn on Max power in Settings for Hammer + Titan.'}
+        {props.rejected ? (
+          <>
+            <strong>Retry #{props.rejected.attempt} — AIs know the last answer was wrong.</strong>{' '}
+            They re-read the photo differently and avoid cloning total{' '}
+            {props.rejected.amount != null
+              ? `$${props.rejected.amount.toFixed(2)}`
+              : 'and those line items'}
+            .
+          </>
+        ) : (
+          <>
+            <strong>Free · no keys · max power {props.maxPowerMode ? 'ON' : 'OFF'}.</strong>{' '}
+            {props.maxPowerMode
+              ? 'Hammer + Titan push the phone hard. After OCR, Seeker looks up SKUs on the free public web (DuckDuckGo/Wikipedia via this app host). No API keys.'
+              : 'Lighter free team. Seeker still can web-lookup products. Turn on Max power in Settings for Hammer + Titan.'}
+          </>
+        )}
       </div>
 
       {busy ? (
@@ -815,7 +880,15 @@ function ScanScreen(props: {
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => void runScan(heldBlob, heldPreview ?? URL.createObjectURL(heldBlob))}
+              onClick={() =>
+                void runScan(
+                  heldBlob,
+                  heldPreview ?? URL.createObjectURL(heldBlob),
+                  props.rejected
+                    ? { ...props.rejected, attempt: props.rejected.attempt + 1 }
+                    : undefined,
+                )
+              }
             >
               Try again
             </button>
@@ -844,7 +917,7 @@ function ScanScreen(props: {
             </button>
           </div>
         </div>
-      ) : heldBlob && heldPreview ? (
+      ) : heldBlob && heldPreview && !props.rejected ? (
         <div className="card scan-retry-card">
           <img className="receipt-preview" src={heldPreview} alt="Receipt preview" />
           <strong className="scan-retry-title">Ready to scan again</strong>
@@ -931,8 +1004,8 @@ function PurchaseFormScreen(props: {
   receiptBlob?: Blob
   existingReceiptImageId?: string | null
   onBack: () => void
-  /** Re-run scan on the same receipt photo when the AI read was wrong */
-  onTryAgain?: () => void
+  /** Re-run scan on the same receipt photo; passes current fields so AIs know it was wrong */
+  onTryAgain?: (snapshot: FormState & { reportNote?: string }) => void
   onSave: (form: FormState, receiptBlob?: Blob | null) => Promise<void>
   onDebugMessage?: (msg: string) => void
 }) {
@@ -941,6 +1014,10 @@ function PurchaseFormScreen(props: {
   const [showAgentReport, setShowAgentReport] = useState(Boolean(props.initial.agentReport))
   const [reporting, setReporting] = useState(false)
   const [reportNote, setReportNote] = useState('')
+
+  function requestTryAgain() {
+    props.onTryAgain?.({ ...form, reportNote: reportNote.trim() || undefined })
+  }
 
   const fromScan = Boolean(props.receiptBlob || props.receiptPreviewUrl)
   const lowConfidence =
@@ -1136,8 +1213,8 @@ function PurchaseFormScreen(props: {
           </strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
             {lowConfidence || looksThin
-              ? 'The free AIs weren’t sure. Try again on the same photo, or fix the fields below.'
-              : 'Re-run the AIs on this photo, or edit the fields below before saving.'}
+              ? 'The free AIs weren’t sure. Try again and they’ll treat this answer as wrong.'
+              : 'Try again tells the AIs this result was wrong so they re-read differently — not the same answer.'}
             {typeof form.confidence === 'number' ? (
               <>
                 {' '}
@@ -1146,7 +1223,7 @@ function PurchaseFormScreen(props: {
             ) : null}
           </p>
           <div className="row-actions" style={{ marginTop: 12 }}>
-            <button type="button" className="btn btn-primary" onClick={props.onTryAgain}>
+            <button type="button" className="btn btn-primary" onClick={requestTryAgain}>
               Try again
             </button>
             <button
@@ -1395,13 +1472,13 @@ function PurchaseFormScreen(props: {
                 type="button"
                 className="btn btn-primary"
                 style={{ width: '100%', marginBottom: 12 }}
-                onClick={props.onTryAgain}
+                onClick={requestTryAgain}
               >
-                Try again
+                Try again (AIs will avoid this answer)
               </button>
             )}
             <div className="field">
-              <label htmlFor="debugNote">What went wrong?</label>
+              <label htmlFor="debugNote">What went wrong? (helps retry + debug)</label>
               <textarea
                 id="debugNote"
                 value={reportNote}

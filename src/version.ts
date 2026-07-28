@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.10.1'
+export const APP_VERSION = '1.10.2'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.10.2',
+    date: '2026-07-28',
+    title: 'Try again tells AIs the last answer was wrong',
+    changes: [
+      'Pressing Try again passes the rejected total/items to the free AI team',
+      'Retry re-reads the photo differently and avoids cloning the same answer',
+      'Council + Quorum diversify; optional note about what looked wrong helps',
+    ],
+  },
   {
     version: '1.10.1',
     date: '2026-07-28',

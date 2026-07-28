@@ -88,5 +88,7 @@ export type Screen =
       /** Re-run AI on this photo (e.g. after a bad first read) */
       retryBlob?: Blob
       retryPreviewUrl?: string
+      /** Snapshot of the answer the user rejected — AIs diversify away from it */
+      rejected?: import('./agents/retryFeedback').RejectedScanSnapshot
     }
   | { name: 'settings' }
