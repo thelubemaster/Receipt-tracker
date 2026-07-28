@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.19.3'
+export const APP_VERSION = '1.20.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.20.0',
+    date: '2026-07-28',
+    title: 'Android installer page + HTTPS install server',
+    changes: [
+      'On Android Chrome the site opens as an Install Schoolie page first',
+      'npm run start:android serves HTTPS so Chrome can install correctly',
+      'Step-by-step Chrome menu install when automatic install is blocked',
+    ],
+  },
   {
     version: '1.19.3',
     date: '2026-07-28',

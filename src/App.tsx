@@ -80,6 +80,11 @@ import {
   promptInstall,
   subscribeInstallPrompt,
 } from './installApp'
+import {
+  AndroidInstaller,
+  rememberSkipInstaller,
+  shouldShowAndroidInstaller,
+} from './AndroidInstaller'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -198,6 +203,8 @@ export default function App() {
   const [whatsNew, setWhatsNew] = useState<ChangelogEntry[] | null>(null)
   const [whatsNewMode, setWhatsNewMode] = useState<'update' | 'history'>('update')
   const [pendingSwUpdate, setPendingSwUpdate] = useState<(() => void) | null>(null)
+  /** Android: website is an installer first; skip once user chooses browser */
+  const [showInstaller, setShowInstaller] = useState(() => shouldShowAndroidInstaller())
 
   const refresh = useCallback(async () => {
     const [p, s] = await Promise.all([listPurchases(), getSettings()])
@@ -426,6 +433,17 @@ export default function App() {
     return true
   }
 
+  if (showInstaller) {
+    return (
+      <AndroidInstaller
+        onContinueInBrowser={() => {
+          rememberSkipInstaller()
+          setShowInstaller(false)
+        }}
+      />
+    )
+  }
+
   if (loading) {
     return (
       <div className="app-shell">
@@ -433,7 +451,7 @@ export default function App() {
           <div className="spinner" />
           Loading your schoolie log…
           <p className="muted" style={{ marginTop: 12, fontSize: '0.85rem' }}>
-            If this never finishes, close other Schoolie tabs and hard-refresh.
+            If this never finishes, hard-refresh the page.
           </p>
         </div>
       </div>
