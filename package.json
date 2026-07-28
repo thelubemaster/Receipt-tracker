@@ -4,6 +4,14 @@
   "version": "1.22.0",
   "description": "Schoolie Cost Tracker — free on-device receipt scans for bus conversions",
   "author": "Schoolie",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thelubemaster/Receipt-tracker.git"
+  },
+  "homepage": "https://thelubemaster.github.io/Receipt-tracker/",
+  "bugs": {
+    "url": "https://github.com/thelubemaster/Receipt-tracker/issues"
+  },
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {

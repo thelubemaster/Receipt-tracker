@@ -2860,20 +2860,28 @@ function SettingsScreen(props: {
           <div className="card settings-card">
             <strong>App updates (no re-download APK)</strong>
             <p className="muted" style={{ margin: '6px 0 12px' }}>
-              While your computer runs <code style={{ fontSize: '0.85em' }}>npm run start:android</code>,
-              this phone can pull new features over Wi‑Fi. You only reinstall the APK for big native
-              changes.
+              Updates come from GitHub by default (
+              <a
+                href="https://github.com/thelubemaster/Receipt-tracker"
+                target="_blank"
+                rel="noreferrer"
+              >
+                thelubemaster/Receipt-tracker
+              </a>
+              ). Optional: while your computer runs{' '}
+              <code style={{ fontSize: '0.85em' }}>npm run start:android</code>, you can also pull
+              over Wi‑Fi. You only reinstall the APK for big native changes.
             </p>
             <label className="field" style={{ display: 'block', marginBottom: 10 }}>
               <span className="muted" style={{ fontSize: '0.8rem' }}>
-                Update server (from the computer terminal)
+                Update server (leave blank for GitHub, or paste PC LAN address)
               </span>
               <input
                 type="url"
                 inputMode="url"
                 autoCapitalize="off"
                 autoCorrect="off"
-                placeholder="https://192.168.x.x:4190"
+                placeholder="https://thelubemaster.github.io/Receipt-tracker"
                 value={otaServer}
                 onChange={(e) => setOtaServer(e.target.value)}
                 style={{ width: '100%', marginTop: 4 }}
