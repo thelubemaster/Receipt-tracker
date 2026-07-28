@@ -766,13 +766,102 @@ a {
 .line-section-head {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-muted, #9aa3b5);
   margin: 4px 2px 8px;
+  gap: 8px;
+}
+
+.line-section-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.field-label-row label {
+  margin: 0;
+}
+
+.mark-pair {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mark-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted, #9aa3b5);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.mark-btn.mark-right.mark-active {
+  background: rgba(76, 175, 80, 0.22);
+  border-color: rgba(76, 175, 80, 0.55);
+  color: #a5d6a7;
+}
+
+.mark-btn.mark-wrong.mark-active {
+  background: rgba(239, 83, 80, 0.22);
+  border-color: rgba(239, 83, 80, 0.55);
+  color: #ef9a9a;
+}
+
+.mark-hint {
+  font-size: 0.78rem;
+  margin: 0 0 10px;
+}
+
+.field-marked-wrong {
+  border-radius: 12px;
+  padding: 8px;
+  margin-left: -8px;
+  margin-right: -8px;
+  background: rgba(239, 83, 80, 0.06);
+  border: 1px solid rgba(239, 83, 80, 0.2);
+}
+
+.field-marked-right {
+  border-radius: 12px;
+  padding: 8px;
+  margin-left: -8px;
+  margin-right: -8px;
+  background: rgba(76, 175, 80, 0.06);
+  border: 1px solid rgba(76, 175, 80, 0.18);
+}
+
+.line-item-marks {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.line-item-marked-wrong {
+  border-color: rgba(239, 83, 80, 0.45) !important;
+  box-shadow: 0 0 0 1px rgba(239, 83, 80, 0.12);
+}
+
+.line-item-marked-right {
+  border-color: rgba(76, 175, 80, 0.4) !important;
 }
 
 .line-section-shipping .line-section-head {

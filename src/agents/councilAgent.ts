@@ -19,7 +19,9 @@ import { extractVendor } from './merchantAgent'
 import { parseMoneyTokens, roundMoney } from './moneyParse'
 import type { LocalAgentResult } from './pipeline'
 import {
+  applyUserMarksToResult,
   formatRejectionBrief,
+  hasAnyWrongMark,
   similarityToRejected,
   type RejectedScanSnapshot,
 } from './retryFeedback'
@@ -169,19 +171,60 @@ export function runCouncilAgent(
   let tax = draft.tax ?? null
   let shipping = extractShipping(rawText)
 
-  // --- Round 0: user rejection (Try again) ---
+  // --- Round 0: user rejection (Try again) / per-field marks ---
   if (rejected) {
     talk('system', 'challenge', formatRejectionBrief(rejected))
+    const marks = rejected.marks
+    const partial = hasAnyWrongMark(marks)
+
     talk(
       'arbiter',
       'challenge',
-      `User pressed Try again (#${rejected.attempt}). Treat the previous total/items as untrusted — re-check OCR for a different split.`,
+      partial
+        ? `User marked specific parts wrong on attempt #${rejected.attempt}. Fix only those — keep ✓ fields.`
+        : `User pressed Try again (#${rejected.attempt}). Treat the previous answer as untrusted — re-check OCR.`,
     )
-    // Drop line items that exactly match the rejected set (same amounts) so hunt can rebuild
-    const rejectedAmounts = new Set(
-      rejected.lineItems.map((i) => roundMoney(i.amount).toFixed(2)),
-    )
-    if (
+
+    // Drop only lines the user marked ✗ wrong
+    if (marks) {
+      const wrongLines = rejected.lineItems.filter((li) => {
+        const m = li.mark ?? (li.id ? marks.lines[li.id] : 'unset')
+        return m === 'wrong'
+      })
+      if (wrongLines.length) {
+        const before = items.length
+        items = items.filter((i) => {
+          return !wrongLines.some(
+            (w) =>
+              nearlyEqual(w.amount, i.amount) &&
+              w.description.toLowerCase().slice(0, 24) === i.description.toLowerCase().slice(0, 24),
+          )
+        })
+        if (items.length < before) {
+          talk('ledger', 'decision', `Removed ${before - items.length} line(s) you marked wrong.`)
+        }
+      }
+      if (marks.shipping === 'wrong') {
+        const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
+        items = items.filter((i) => {
+          if (!isShippingLineItem(i.description)) return true
+          if (prevShip && nearlyEqual(i.amount, prevShip.amount)) return false
+          return true
+        })
+        talk('clerk', 'challenge', 'Shipping marked wrong — re-read shipping from OCR.')
+        shipping = extractShipping(rawText)
+      }
+      if (marks.total === 'wrong') {
+        talk('cashier', 'challenge', 'Total marked wrong — re-evaluating grand total from OCR.')
+      }
+      if (marks.missingItems === 'wrong') {
+        talk('sieve', 'challenge', 'Product list marked incomplete — hunt harder for missing items.')
+      }
+      if (marks.vendor === 'wrong') {
+        talk('clerk', 'challenge', 'Vendor marked wrong — re-read store name from OCR.')
+        vendor = ''
+      }
+    } else if (
       rejected.lineItems.length > 0 &&
       items.length > 0 &&
       similarityToRejected(
@@ -190,10 +233,8 @@ export function runCouncilAgent(
       ) >= 0.75
     ) {
       const before = items.length
-      // Keep shipping; clear product clones of the rejected answer
       const kept = items.filter((i) => {
         if (isShippingLineItem(i.description)) return true
-        // drop if this amount+desc pair was in the rejected answer
         const hit = rejected.lineItems.some(
           (r) =>
             nearlyEqual(r.amount, i.amount) &&
@@ -201,7 +242,6 @@ export function runCouncilAgent(
         )
         return !hit
       })
-      // If we wiped almost everything, clear products and re-hunt
       if (kept.filter((i) => !isShippingLineItem(i.description)).length === 0) {
         items = items.filter((i) => isShippingLineItem(i.description))
         talk(
@@ -213,12 +253,10 @@ export function runCouncilAgent(
         items = kept
         talk('ledger', 'decision', `Removed ${before - kept.length} line(s) that matched the rejected answer.`)
       }
-      // If total matched rejected total, distrust it and re-read from totals agent via OCR later
       if (rejected.amount != null && amount != null && nearlyEqual(amount, rejected.amount)) {
         talk('cashier', 'challenge', `Rejected total $${rejected.amount.toFixed(2)} — re-evaluating grand total from OCR.`)
       }
     }
-    void rejectedAmounts
 
     // Re-read totals + line items fresh from OCR (ignore draft clones of rejected)
     const freshTotals = runTotalsAgent(rawText)
@@ -478,7 +516,19 @@ export function runCouncilAgent(
           .slice(0, 180)
       : draft.description
 
-  const categoryId = items.length ? primaryCategoryFromItems(items) : draft.categoryId
+  let categoryId = items.length ? primaryCategoryFromItems(items) : draft.categoryId
+  // Respect category marked ✓ right
+  if (rejected?.marks?.category === 'right' && rejected.categoryId) {
+    categoryId = rejected.categoryId
+  }
+  // Respect total / vendor marked ✓ right
+  if (rejected?.marks?.total === 'right' && rejected.amount != null) {
+    amount = rejected.amount
+  }
+  if (rejected?.marks?.vendor === 'right' && rejected.vendor) {
+    vendor = rejected.vendor
+  }
+
   let confidence = draft.confidence ?? 0.5
   if (hunted.length) confidence = Math.min(0.96, confidence + 0.08)
   if (subtotal != null && nearlyEqual(finalProductSum, subtotal)) {
@@ -488,12 +538,13 @@ export function runCouncilAgent(
 
   talk('quorum', 'decision', `Final: ${items.length} items, total $${(amount ?? finalSum).toFixed(2)}, vendor ${vendor || '—'}`)
 
-  return {
+  let result: CouncilResult = {
     ...draft,
     vendor,
     amount,
     description,
     categoryId,
+    date: rejected?.marks?.date === 'right' && rejected.date ? rejected.date : draft.date,
     lineItems: items,
     subtotal,
     tax,
@@ -516,4 +567,12 @@ export function runCouncilAgent(
     activeAiLabel: 'Council (multi-agent debate)',
     councilLog: board.transcript(),
   }
+
+  if (rejected?.marks) {
+    result = {
+      ...applyUserMarksToResult(result, rejected),
+      councilLog: result.councilLog,
+    }
+  }
+  return result
 }

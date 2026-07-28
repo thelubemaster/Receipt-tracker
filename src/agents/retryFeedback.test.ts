@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyUserMarksToResult,
+  emptyPartMarks,
   formatRejectionBrief,
   pickDiversifiedParse,
   similarityToRejected,
@@ -106,5 +108,57 @@ describe('retry feedback — user rejected a scan', () => {
     expect(brief).toMatch(/#2/)
     expect(brief).toMatch(/76\.67/)
     expect(brief).toMatch(/Do NOT return the same answer/i)
+  })
+
+  it('formatRejectionBrief lists marked wrong/right parts', () => {
+    const marks = emptyPartMarks()
+    marks.total = 'right'
+    marks.missingItems = 'wrong'
+    marks.lines = { a: 'wrong' }
+    const brief = formatRejectionBrief(
+      snapshotFromSuggestion({
+        amount: 76.67,
+        vendor: 'Swag',
+        attempt: 1,
+        marks,
+        lineItems: [
+          { id: 'a', description: 'Bad filter', amount: 39.97, categoryId: 'fuel' },
+        ],
+      }),
+    )
+    expect(brief).toMatch(/FIX THESE/i)
+    expect(brief).toMatch(/KEEP THESE|TOTAL correct/i)
+    expect(brief).toMatch(/LINE WRONG|Bad filter/i)
+  })
+
+  it('applyUserMarksToResult keeps right total and drops wrong line clones', () => {
+    const marks = emptyPartMarks()
+    marks.total = 'right'
+    marks.vendor = 'right'
+    marks.lines = { bad: 'wrong', good: 'right' }
+    const rejected = snapshotFromSuggestion({
+      amount: 50,
+      vendor: 'KeepMe',
+      marks,
+      lineItems: [
+        { id: 'bad', description: 'Wrong part', amount: 10, categoryId: 'misc' },
+        { id: 'good', description: 'Good part', amount: 40, categoryId: 'tools' },
+      ],
+    })
+    const result = applyUserMarksToResult(
+      fake({
+        amount: 99,
+        vendor: 'Other',
+        lineItems: [
+          { id: '1', description: 'Wrong part', amount: 10, categoryId: 'misc' },
+          { id: '2', description: 'New item', amount: 20, categoryId: 'misc' },
+        ],
+      }),
+      rejected,
+    )
+    expect(result.amount).toBe(50)
+    expect(result.vendor).toBe('KeepMe')
+    expect(result.lineItems.some((i) => i.description === 'Wrong part')).toBe(false)
+    expect(result.lineItems.some((i) => i.description === 'Good part')).toBe(true)
   })
 })

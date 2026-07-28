@@ -35,8 +35,12 @@ import {
 } from './leaderboard'
 import { isShippingLineItem, partitionLineItems } from './agents/lineItemsAgent'
 import {
+  emptyPartMarks,
+  hasAnyWrongMark,
   snapshotFromSuggestion,
+  type FieldMark,
   type RejectedScanSnapshot,
+  type ScanPartMarks,
 } from './agents/retryFeedback'
 import { BrandLockup, LogoMark } from './Logo'
 import { formatMoney, parseMoneyInput } from './money'
@@ -404,6 +408,7 @@ export default function App() {
                     vendor: formSnapshot.vendor,
                     description: formSnapshot.description,
                     categoryId: formSnapshot.categoryId,
+                    date: formSnapshot.date,
                     lineItems: formSnapshot.lineItems,
                     subtotal: formSnapshot.subtotal,
                     tax: formSnapshot.tax,
@@ -411,6 +416,7 @@ export default function App() {
                     rawText: formSnapshot.rawText,
                     attempt: Math.max(1, attempt),
                     userNote: formSnapshot.reportNote || undefined,
+                    marks: formSnapshot.partMarks,
                   })
                   setScreen({
                     name: 'scan',
@@ -1009,6 +1015,36 @@ function ScanScreen(props: {
 
 type FormState = ReturnType<typeof emptyForm>
 
+/** ✓ / ✗ mark control for a field or line */
+function MarkPair(props: {
+  value: FieldMark
+  onChange: (m: FieldMark) => void
+  label?: string
+}) {
+  return (
+    <div className="mark-pair" role="group" aria-label={props.label || 'Mark right or wrong'}>
+      <button
+        type="button"
+        className={`mark-btn mark-right${props.value === 'right' ? ' mark-active' : ''}`}
+        aria-pressed={props.value === 'right'}
+        title="Looks right"
+        onClick={() => props.onChange(props.value === 'right' ? 'unset' : 'right')}
+      >
+        ✓
+      </button>
+      <button
+        type="button"
+        className={`mark-btn mark-wrong${props.value === 'wrong' ? ' mark-active' : ''}`}
+        aria-pressed={props.value === 'wrong'}
+        title="Looks wrong"
+        onClick={() => props.onChange(props.value === 'wrong' ? 'unset' : 'wrong')}
+      >
+        ✗
+      </button>
+    </div>
+  )
+}
+
 function PurchaseFormScreen(props: {
   title: string
   initial: FormState
@@ -1016,8 +1052,10 @@ function PurchaseFormScreen(props: {
   receiptBlob?: Blob
   existingReceiptImageId?: string | null
   onBack: () => void
-  /** Re-run scan on the same receipt photo; passes current fields so AIs know it was wrong */
-  onTryAgain?: (snapshot: FormState & { reportNote?: string }) => void
+  /** Re-run scan; passes form + ✓/✗ marks so AIs fix only wrong parts */
+  onTryAgain?: (
+    snapshot: FormState & { reportNote?: string; partMarks?: ScanPartMarks },
+  ) => void
   onSave: (form: FormState, receiptBlob?: Blob | null) => Promise<void>
   onDebugMessage?: (msg: string) => void
 }) {
@@ -1026,10 +1064,35 @@ function PurchaseFormScreen(props: {
   const [showAgentReport, setShowAgentReport] = useState(Boolean(props.initial.agentReport))
   const [reporting, setReporting] = useState(false)
   const [reportNote, setReportNote] = useState('')
+  const [partMarks, setPartMarks] = useState<ScanPartMarks>(() => emptyPartMarks())
+
+  function setMark(key: keyof Omit<ScanPartMarks, 'lines'>, m: FieldMark) {
+    setPartMarks((prev) => ({ ...prev, [key]: m }))
+  }
+
+  function setLineMark(id: string, m: FieldMark) {
+    setPartMarks((prev) => ({
+      ...prev,
+      lines: { ...prev.lines, [id]: m },
+    }))
+  }
 
   function requestTryAgain() {
-    props.onTryAgain?.({ ...form, reportNote: reportNote.trim() || undefined })
+    props.onTryAgain?.({
+      ...form,
+      reportNote: reportNote.trim() || undefined,
+      partMarks,
+    })
   }
+
+  const wrongCount =
+    (partMarks.total === 'wrong' ? 1 : 0) +
+    (partMarks.vendor === 'wrong' ? 1 : 0) +
+    (partMarks.category === 'wrong' ? 1 : 0) +
+    (partMarks.date === 'wrong' ? 1 : 0) +
+    (partMarks.missingItems === 'wrong' ? 1 : 0) +
+    (partMarks.shipping === 'wrong' ? 1 : 0) +
+    Object.values(partMarks.lines).filter((m) => m === 'wrong').length
 
   const fromScan = Boolean(props.receiptBlob || props.receiptPreviewUrl)
   const lowConfidence =
@@ -1157,11 +1220,21 @@ function PurchaseFormScreen(props: {
   const shippingSum = shippingLines.reduce((s, li) => s + (Number(li.amount) || 0), 0)
 
   function renderLineRow(li: (typeof form.lineItems)[0], tone?: 'shipping' | 'fee') {
+    const mark = partMarks.lines[li.id] ?? 'unset'
     return (
       <div
         key={li.id}
-        className={`line-item-row${tone === 'shipping' ? ' line-item-row-shipping' : ''}${tone === 'fee' ? ' line-item-row-fee' : ''}`}
+        className={`line-item-row${tone === 'shipping' ? ' line-item-row-shipping' : ''}${tone === 'fee' ? ' line-item-row-fee' : ''}${mark === 'wrong' ? ' line-item-marked-wrong' : ''}${mark === 'right' ? ' line-item-marked-right' : ''}`}
       >
+        {props.onTryAgain && (
+          <div className="line-item-marks">
+            <MarkPair
+              label={`Mark ${li.description || 'line'}`}
+              value={mark}
+              onChange={(m) => setLineMark(li.id, m)}
+            />
+          </div>
+        )}
         <input
           className="line-item-desc"
           value={li.description}
@@ -1218,15 +1291,18 @@ function PurchaseFormScreen(props: {
 
       {props.onTryAgain && fromScan && (
         <div
-          className={`card scan-retry-card ${lowConfidence || looksThin ? 'scan-retry-card-warn' : ''}`}
+          className={`card scan-retry-card ${lowConfidence || looksThin || wrongCount > 0 ? 'scan-retry-card-warn' : ''}`}
         >
           <strong className="scan-retry-title">
-            {lowConfidence || looksThin ? 'Scan looks incomplete' : 'Scan look wrong?'}
+            {wrongCount > 0
+              ? `${wrongCount} part${wrongCount === 1 ? '' : 's'} marked wrong`
+              : lowConfidence || looksThin
+                ? 'Scan looks incomplete'
+                : 'Mark what’s right or wrong'}
           </strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
-            {lowConfidence || looksThin
-              ? 'The free AIs weren’t sure. Try again and they’ll treat this answer as wrong.'
-              : 'Try again tells the AIs this result was wrong so they re-read differently — not the same answer.'}
+            Tap <strong>✓</strong> if a field or line looks good, <strong>✗</strong> if it’s wrong.
+            Then <strong>Fix marked parts</strong> — free AIs re-read and keep the ✓ pieces.
             {typeof form.confidence === 'number' ? (
               <>
                 {' '}
@@ -1235,19 +1311,25 @@ function PurchaseFormScreen(props: {
             ) : null}
           </p>
           <div className="row-actions" style={{ marginTop: 12 }}>
-            <button type="button" className="btn btn-primary" onClick={requestTryAgain}>
-              Try again
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={requestTryAgain}
+              disabled={wrongCount === 0 && !hasAnyWrongMark(partMarks) && !reportNote.trim()}
+              title={
+                wrongCount === 0
+                  ? 'Mark at least one ✗ (or write a note) before re-scanning'
+                  : 'Re-scan focusing on marked-wrong parts'
+              }
+            >
+              {wrongCount > 0 ? 'Fix marked parts' : 'Mark ✗ then fix'}
             </button>
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => {
-                /* stay and edit */
-                const el = document.getElementById('amount')
-                el?.focus()
-              }}
+              onClick={requestTryAgain}
             >
-              Fix manually
+              Retry all
             </button>
           </div>
         </div>
@@ -1314,7 +1396,21 @@ function PurchaseFormScreen(props: {
 
         {form.lineItems.length > 0 && (
           <div className="field">
-            <label>Line items ({form.lineItems.length})</label>
+            <div className="field-label-row">
+              <label>Line items ({form.lineItems.length})</label>
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Missing products"
+                  value={partMarks.missingItems}
+                  onChange={(m) => setMark('missingItems', m)}
+                />
+              )}
+            </div>
+            {props.onTryAgain && (
+              <p className="muted mark-hint">
+                ✗ on “missing products” = list is incomplete. ✗ on a row = that line is wrong.
+              </p>
+            )}
 
             {productLines.length > 0 && (
               <div className="line-section">
@@ -1326,17 +1422,30 @@ function PurchaseFormScreen(props: {
               </div>
             )}
 
-            {shippingLines.length > 0 && (
-              <div className="line-section line-section-shipping">
-                <div className="line-section-head">
-                  <span>Shipping</span>
+            <div className="line-section line-section-shipping">
+              <div className="line-section-head">
+                <span>Shipping</span>
+                <div className="line-section-head-right">
                   <span className="muted">{formatMoney(shippingSum)}</span>
+                  {props.onTryAgain && (
+                    <MarkPair
+                      label="Shipping section"
+                      value={partMarks.shipping}
+                      onChange={(m) => setMark('shipping', m)}
+                    />
+                  )}
                 </div>
+              </div>
+              {shippingLines.length > 0 ? (
                 <div className="line-items-list">
                   {shippingLines.map((li) => renderLineRow(li, 'shipping'))}
                 </div>
-              </div>
-            )}
+              ) : props.onTryAgain ? (
+                <p className="muted mark-hint">
+                  No shipping line yet — mark ✗ if shipping should be on the receipt.
+                </p>
+              ) : null}
+            </div>
 
             {otherFeeLines.length > 0 && (
               <div className="line-section">
@@ -1396,13 +1505,36 @@ function PurchaseFormScreen(props: {
         )}
 
         {form.lineItems.length === 0 && (
-          <button type="button" className="btn btn-secondary" onClick={addLine}>
-            + Add line items
-          </button>
+          <div className="field">
+            <div className="field-label-row">
+              <button type="button" className="btn btn-secondary" onClick={addLine}>
+                + Add line items
+              </button>
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Missing products"
+                  value={partMarks.missingItems}
+                  onChange={(m) => setMark('missingItems', m)}
+                />
+              )}
+            </div>
+            {props.onTryAgain && partMarks.missingItems === 'wrong' && (
+              <p className="muted mark-hint">Marked missing — Fix marked parts will hunt for items.</p>
+            )}
+          </div>
         )}
 
-        <div className="field">
-          <label htmlFor="amount">Amount (total paid)</label>
+        <div className={`field${partMarks.total === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.total === 'right' ? ' field-marked-right' : ''}`}>
+          <div className="field-label-row">
+            <label htmlFor="amount">Amount (total paid)</label>
+            {props.onTryAgain && (
+              <MarkPair
+                label="Total"
+                value={partMarks.total}
+                onChange={(m) => setMark('total', m)}
+              />
+            )}
+          </div>
           <input
             id="amount"
             inputMode="decimal"
@@ -1421,8 +1553,17 @@ function PurchaseFormScreen(props: {
             placeholder="e.g. Rigid foam insulation"
           />
         </div>
-        <div className="field">
-          <label htmlFor="category">Category</label>
+        <div className={`field${partMarks.category === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.category === 'right' ? ' field-marked-right' : ''}`}>
+          <div className="field-label-row">
+            <label htmlFor="category">Category</label>
+            {props.onTryAgain && (
+              <MarkPair
+                label="Category"
+                value={partMarks.category}
+                onChange={(m) => setMark('category', m)}
+              />
+            )}
+          </div>
           <select
             id="category"
             value={form.categoryId}
@@ -1435,8 +1576,17 @@ function PurchaseFormScreen(props: {
             ))}
           </select>
         </div>
-        <div className="field">
-          <label htmlFor="vendor">Store / vendor</label>
+        <div className={`field${partMarks.vendor === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.vendor === 'right' ? ' field-marked-right' : ''}`}>
+          <div className="field-label-row">
+            <label htmlFor="vendor">Store / vendor</label>
+            {props.onTryAgain && (
+              <MarkPair
+                label="Vendor"
+                value={partMarks.vendor}
+                onChange={(m) => setMark('vendor', m)}
+              />
+            )}
+          </div>
           <input
             id="vendor"
             value={form.vendor}
@@ -1444,8 +1594,17 @@ function PurchaseFormScreen(props: {
             placeholder="Home Depot, Amazon…"
           />
         </div>
-        <div className="field">
-          <label htmlFor="date">Date</label>
+        <div className={`field${partMarks.date === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.date === 'right' ? ' field-marked-right' : ''}`}>
+          <div className="field-label-row">
+            <label htmlFor="date">Date</label>
+            {props.onTryAgain && (
+              <MarkPair
+                label="Date"
+                value={partMarks.date}
+                onChange={(m) => setMark('date', m)}
+              />
+            )}
+          </div>
           <input
             id="date"
             type="date"
@@ -1486,16 +1645,18 @@ function PurchaseFormScreen(props: {
                 style={{ width: '100%', marginBottom: 12 }}
                 onClick={requestTryAgain}
               >
-                Try again (AIs will avoid this answer)
+                {wrongCount > 0
+                  ? `Fix ${wrongCount} marked part${wrongCount === 1 ? '' : 's'}`
+                  : 'Retry scan (or mark ✗ above first)'}
               </button>
             )}
             <div className="field">
-              <label htmlFor="debugNote">What went wrong? (helps retry + debug)</label>
+              <label htmlFor="debugNote">What went wrong? (optional note)</label>
               <textarea
                 id="debugNote"
                 value={reportNote}
                 onChange={(e) => setReportNote(e.target.value)}
-                placeholder="e.g. Missed 3 items, total should be $84.12, foam listed as misc…"
+                placeholder="e.g. Missed the $26.75 filter, shipping should be $9.95…"
               />
             </div>
             <button

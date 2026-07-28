@@ -1,17 +1,83 @@
 /**
  * User rejected a scan (pressed Try again).
  * Free AIs use this so a retry does not blindly return the same answer.
+ * Optional per-field marks (✓ right / ✗ wrong) focus the re-scan.
  */
 import type { CategoryId, ReceiptLineItem } from '../types'
 import type { LocalAgentResult } from './pipeline'
+import { isShippingLineItem } from './lineItemsAgent'
 import { roundMoney } from './moneyParse'
+
+/** User mark on a field or line item */
+export type FieldMark = 'right' | 'wrong' | 'unset'
+
+export type ScanPartMarks = {
+  total: FieldMark
+  vendor: FieldMark
+  category: FieldMark
+  date: FieldMark
+  /** Product list incomplete / missing items */
+  missingItems: FieldMark
+  /** Shipping section overall */
+  shipping: FieldMark
+  /** Per line-item id */
+  lines: Record<string, FieldMark>
+}
+
+export function emptyPartMarks(): ScanPartMarks {
+  return {
+    total: 'unset',
+    vendor: 'unset',
+    category: 'unset',
+    date: 'unset',
+    missingItems: 'unset',
+    shipping: 'unset',
+    lines: {},
+  }
+}
+
+export function hasAnyWrongMark(marks?: ScanPartMarks | null): boolean {
+  if (!marks) return false
+  if (
+    marks.total === 'wrong' ||
+    marks.vendor === 'wrong' ||
+    marks.category === 'wrong' ||
+    marks.date === 'wrong' ||
+    marks.missingItems === 'wrong' ||
+    marks.shipping === 'wrong'
+  ) {
+    return true
+  }
+  return Object.values(marks.lines).some((m) => m === 'wrong')
+}
+
+export function hasAnyRightMark(marks?: ScanPartMarks | null): boolean {
+  if (!marks) return false
+  if (
+    marks.total === 'right' ||
+    marks.vendor === 'right' ||
+    marks.category === 'right' ||
+    marks.date === 'right' ||
+    marks.shipping === 'right'
+  ) {
+    return true
+  }
+  return Object.values(marks.lines).some((m) => m === 'right')
+}
 
 export type RejectedScanSnapshot = {
   amount: number | null
   vendor: string
   description: string
   categoryId?: CategoryId
-  lineItems: Array<{ description: string; amount: number; categoryId?: CategoryId }>
+  date?: string
+  lineItems: Array<{
+    id?: string
+    description: string
+    amount: number
+    categoryId?: CategoryId
+    mark?: FieldMark
+  }>
   subtotal?: number | null
   tax?: number | null
   confidence?: number
@@ -20,6 +86,8 @@ export type RejectedScanSnapshot = {
   attempt: number
   /** Optional free-text from the form (what looked wrong) */
   userNote?: string
+  /** Per-section / per-line marks from the review form */
+  marks?: ScanPartMarks
 }
 
 export function snapshotFromSuggestion(input: {
@@ -27,6 +95,7 @@ export function snapshotFromSuggestion(input: {
   vendor?: string
   description?: string
   categoryId?: CategoryId
+  date?: string
   lineItems?: ReceiptLineItem[]
   subtotal?: number | null
   tax?: number | null
@@ -34,16 +103,21 @@ export function snapshotFromSuggestion(input: {
   rawText?: string
   attempt?: number
   userNote?: string
+  marks?: ScanPartMarks
 }): RejectedScanSnapshot {
+  const marks = input.marks
   return {
     amount: input.amount ?? null,
     vendor: input.vendor ?? '',
     description: input.description ?? '',
     categoryId: input.categoryId,
+    date: input.date,
     lineItems: (input.lineItems ?? []).map((li) => ({
+      id: li.id,
       description: li.description,
       amount: li.amount,
       categoryId: li.categoryId,
+      mark: marks?.lines[li.id] ?? 'unset',
     })),
     subtotal: input.subtotal ?? null,
     tax: input.tax ?? null,
@@ -51,6 +125,7 @@ export function snapshotFromSuggestion(input: {
     rawText: input.rawText,
     attempt: input.attempt ?? 1,
     userNote: input.userNote,
+    marks,
   }
 }
 
@@ -133,6 +208,65 @@ export function similarityToRejected(
 
 /** Human-readable brief for agent reports */
 export function formatRejectionBrief(rejected: RejectedScanSnapshot): string {
+  const marks = rejected.marks
+  const wrongBits: string[] = []
+  const rightBits: string[] = []
+
+  if (marks) {
+    if (marks.total === 'wrong') {
+      wrongBits.push(
+        `TOTAL wrong (was ${rejected.amount != null ? `$${rejected.amount.toFixed(2)}` : 'empty'})`,
+      )
+    } else if (marks.total === 'right' && rejected.amount != null) {
+      rightBits.push(`TOTAL correct at $${rejected.amount.toFixed(2)} — keep it`)
+    }
+    if (marks.vendor === 'wrong') {
+      wrongBits.push(`VENDOR wrong (was “${rejected.vendor || '—'}”)`)
+    } else if (marks.vendor === 'right' && rejected.vendor) {
+      rightBits.push(`VENDOR correct “${rejected.vendor}” — keep it`)
+    }
+    if (marks.category === 'wrong') {
+      wrongBits.push(`CATEGORY wrong (was ${rejected.categoryId || '—'})`)
+    } else if (marks.category === 'right' && rejected.categoryId) {
+      rightBits.push(`CATEGORY correct ${rejected.categoryId} — keep it`)
+    }
+    if (marks.date === 'wrong') wrongBits.push('DATE wrong')
+    else if (marks.date === 'right' && rejected.date) {
+      rightBits.push(`DATE correct ${rejected.date} — keep it`)
+    }
+    if (marks.missingItems === 'wrong') {
+      wrongBits.push('PRODUCT LIST incomplete — hunt for MISSING line items')
+    }
+    if (marks.shipping === 'wrong') {
+      const ship = rejected.lineItems.find((i) => isShippingLineItem(i.description))
+      wrongBits.push(
+        `SHIPPING wrong${ship ? ` (was $${ship.amount.toFixed(2)})` : ' or missing'}`,
+      )
+    } else if (marks.shipping === 'right') {
+      const ship = rejected.lineItems.find((i) => isShippingLineItem(i.description))
+      if (ship) rightBits.push(`SHIPPING correct $${ship.amount.toFixed(2)} — keep it`)
+    }
+    for (const li of rejected.lineItems) {
+      const m = li.mark ?? (li.id ? marks.lines[li.id] : undefined) ?? 'unset'
+      const label = `${li.description.slice(0, 36)} $${li.amount.toFixed(2)}`
+      if (m === 'wrong') wrongBits.push(`LINE WRONG: ${label}`)
+      if (m === 'right') rightBits.push(`LINE OK: ${label}`)
+    }
+  }
+
+  if (wrongBits.length || rightBits.length) {
+    const note = rejected.userNote ? ` Note: ${rejected.userNote}` : ''
+    return [
+      `USER MARKED parts on attempt #${rejected.attempt}.`,
+      wrongBits.length ? `FIX THESE: ${wrongBits.join(' · ')}` : null,
+      rightBits.length ? `KEEP THESE: ${rightBits.join(' · ')}` : null,
+      'Do not change marked-right fields. Re-read OCR to fix only marked-wrong parts.',
+      note.trim() || null,
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
+
   const items =
     rejected.lineItems.length > 0
       ? rejected.lineItems
@@ -143,6 +277,125 @@ export function formatRejectionBrief(rejected: RejectedScanSnapshot): string {
     rejected.amount != null ? `$${rejected.amount.toFixed(2)}` : 'unknown total'
   const note = rejected.userNote ? ` User note: ${rejected.userNote}` : ''
   return `USER REJECTED attempt #${rejected.attempt}: total ${total}, vendor “${rejected.vendor || '—'}”, lines: ${items}.${note} Do NOT return the same answer — find a better reading.`
+}
+
+/**
+ * After a diversified re-parse, re-apply fields the user marked ✓ right
+ * and drop line items they marked ✗ wrong when possible.
+ */
+export function applyUserMarksToResult(
+  result: LocalAgentResult,
+  rejected: RejectedScanSnapshot,
+): LocalAgentResult {
+  const marks = rejected.marks
+  if (!marks) return result
+
+  let amount = result.amount
+  let vendor = result.vendor
+  let categoryId = result.categoryId
+  let date = result.date
+  let items = [...(result.lineItems ?? [])]
+
+  if (marks.total === 'right' && rejected.amount != null) {
+    amount = rejected.amount
+  }
+  if (marks.vendor === 'right' && rejected.vendor) {
+    vendor = rejected.vendor
+  }
+  if (marks.category === 'right' && rejected.categoryId) {
+    categoryId = rejected.categoryId
+  }
+  if (marks.date === 'right' && rejected.date) {
+    date = rejected.date
+  }
+
+  // Keep line items marked right from the previous answer
+  const keepRight = rejected.lineItems.filter((li) => {
+    const m = li.mark ?? (li.id ? marks.lines[li.id!] : 'unset')
+    return m === 'right'
+  })
+  const wrongKeys = new Set(
+    rejected.lineItems
+      .filter((li) => {
+        const m = li.mark ?? (li.id ? marks.lines[li.id!] : 'unset')
+        return m === 'wrong'
+      })
+      .map((li) => `${descKey(li.description)}|${roundMoney(li.amount).toFixed(2)}`),
+  )
+
+  // Drop new items that clone wrong lines
+  items = items.filter((li) => {
+    const k = `${descKey(li.description)}|${roundMoney(li.amount).toFixed(2)}`
+    return !wrongKeys.has(k)
+  })
+
+  // Ensure right lines are present
+  for (const li of keepRight) {
+    const k = `${descKey(li.description)}|${roundMoney(li.amount).toFixed(2)}`
+    const exists = items.some(
+      (x) => `${descKey(x.description)}|${roundMoney(x.amount).toFixed(2)}` === k,
+    )
+    if (!exists) {
+      items.push({
+        id: li.id || `kept-${Math.random().toString(36).slice(2, 10)}`,
+        description: li.description,
+        amount: li.amount,
+        categoryId: (li.categoryId ?? categoryId ?? 'misc') as CategoryId,
+      })
+    }
+  }
+
+  // Shipping marked right
+  if (marks.shipping === 'right') {
+    const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
+    if (prevShip) {
+      items = items.filter((i) => !isShippingLineItem(i.description))
+      items.push({
+        id: prevShip.id || 'ship-kept',
+        description: 'Shipping',
+        amount: prevShip.amount,
+        categoryId: 'misc',
+      })
+    }
+  }
+  // Shipping marked wrong — drop same shipping amount
+  if (marks.shipping === 'wrong') {
+    const prevShip = rejected.lineItems.find((i) => isShippingLineItem(i.description))
+    if (prevShip) {
+      items = items.filter(
+        (i) =>
+          !(
+            isShippingLineItem(i.description) &&
+            Math.abs(i.amount - prevShip.amount) < 0.02
+          ),
+      )
+    }
+  }
+
+  const description =
+    items.length > 0
+      ? items
+          .map((i) => i.description)
+          .slice(0, 8)
+          .join('; ')
+          .slice(0, 160)
+      : result.description
+
+  return {
+    ...result,
+    amount,
+    vendor,
+    categoryId,
+    date,
+    lineItems: items,
+    description,
+    agentReport: [
+      result.agentReport,
+      'Applied user ✓/✗ marks (kept right fields, dropped wrong line clones).',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  }
 }
 
 /**

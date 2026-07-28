@@ -10,6 +10,7 @@ import { runMerchantAgent } from './merchantAgent'
 import { runCouncilAgent } from './councilAgent'
 import { runQuorumAgent } from './quorumAgent'
 import {
+  applyUserMarksToResult,
   diversifyImageForRetry,
   formatRejectionBrief,
   pickDiversifiedParse,
@@ -511,12 +512,18 @@ export async function runMultiAgentReceiptPipeline(
   ]
     .filter(Boolean)
     .join('\n')
+  if (rejected?.marks) {
+    final = applyUserMarksToResult(final, rejected)
+  }
+
   final.source = 'on-device'
 
   onProgress?.({
     stage: 'done',
     progress: 1,
-    message: 'Ruler + Seeker + Council finished — free AI team done',
+    message: rejected?.marks
+      ? 'Retry finished using your ✓/✗ marks…'
+      : 'Ruler + Seeker + Council finished — free AI team done',
     aiId: 'ruler',
     aiName: 'Ruler',
   })
