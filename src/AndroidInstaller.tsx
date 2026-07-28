@@ -2,10 +2,16 @@
  * Full-page Android installer — downloads a real APK so Android installs
  * Schoolie like any normal app (not a browser bookmark).
  *
- * Uses resumable Range chunks (with retries) so a 60MB APK does not sit
- * forever in Chrome’s flaky background downloader.
+ * Primary source: GitHub Releases (no PC required).
+ * LAN source: same-origin /downloads/schoolie.apk when served from the PC.
  */
 import { useState } from 'react'
+import {
+  GITHUB_APK_LATEST,
+  GITHUB_PAGES_BASE,
+  GITHUB_RELEASES_PAGE,
+  GITHUB_REPO_URL,
+} from './githubConfig'
 import { isAndroid, isNativeCapacitorApp, isStandaloneApp } from './installApp'
 import { formatVersionLabel } from './version'
 
@@ -13,37 +19,66 @@ type Props = {
   onContinueInBrowser: () => void
 }
 
-const CHUNK_SIZE = 1024 * 1024 // 1 MB — small enough to survive Wi‑Fi blips
+const CHUNK_SIZE = 1024 * 1024 // 1 MB
 const CHUNK_RETRIES = 6
 const CHUNK_TIMEOUT_MS = 45_000
 
-/** Prefer plain HTTP for APK (self-signed HTTPS often stalls Android downloads). */
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const h = hostname.toLowerCase()
+  if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local')) {
+    return true
+  }
+  // RFC1918
+  if (/^10\.\d+\.\d+\.\d+$/.test(h)) return true
+  if (/^192\.168\.\d+\.\d+$/.test(h)) return true
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(h)) return true
+  // Tailscale / CGNAT common ranges used in this project
+  if (/^100\.\d+\.\d+\.\d+$/.test(h)) return true
+  return false
+}
+
+function isLanInstallerHost(): boolean {
+  try {
+    const { hostname, port } = window.location
+    if (port === '4190' || port === '4193') return true
+    return isPrivateOrLocalHost(hostname)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Where to get the APK:
+ * - On your PC install server → local /downloads/schoolie.apk (HTTP preferred)
+ * - Everywhere else (GitHub Pages, etc.) → GitHub Releases latest
+ */
 function apkDownloadUrl(): string {
   try {
     const { protocol, hostname, port } = window.location
-    // If user is on HTTPS :4193, point download at HTTP :4190
-    if (protocol === 'https:' || port === '4193') {
-      const host = hostname || '127.0.0.1'
-      return `http://${host}:4190/downloads/schoolie.apk`
-    }
-    // Absolute URL avoids service-worker / relative-path quirks on some phones
-    if (hostname) {
+    if (isLanInstallerHost()) {
+      if (protocol === 'https:' || port === '4193') {
+        return `http://${hostname || '127.0.0.1'}:4190/downloads/schoolie.apk`
+      }
       const p = port ? `:${port}` : ''
       return `${protocol}//${hostname}${p}/downloads/schoolie.apk`
     }
   } catch {
     /* ignore */
   }
-  return './downloads/schoolie.apk'
+  return GITHUB_APK_LATEST
 }
 
 function updateServerBase(): string {
+  // Prefer GitHub Pages for OTA once installed from GitHub
   try {
-    const { hostname } = window.location
-    return `http://${hostname || '127.0.0.1'}:4190`
+    if (isLanInstallerHost()) {
+      const { hostname } = window.location
+      return `http://${hostname || '127.0.0.1'}:4190`
+    }
   } catch {
-    return ''
+    /* ignore */
   }
+  return GITHUB_PAGES_BASE
 }
 
 function sleep(ms: number) {
@@ -54,15 +89,30 @@ function formatMb(n: number) {
   return (n / 1024 / 1024).toFixed(1)
 }
 
+function isGitHubApkUrl(url: string): boolean {
+  return /github\.com|githubusercontent\.com/i.test(url)
+}
+
+/** Start a normal browser download (best for GitHub Releases — no CORS issues). */
+function startBrowserDownload(url: string) {
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'schoolie.apk'
+  a.rel = 'noopener'
+  a.target = '_blank'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 /**
  * Download APK in 1MB Range chunks with per-chunk timeout + retry.
- * Survives the pauses that kill a single long Chrome download.
+ * Same-origin / LAN only — GitHub assets often block CORS fetch.
  */
 async function downloadApkResumable(
   url: string,
   onProgress: (msg: string) => void,
 ): Promise<Blob> {
-  // Size probe
   let total = 0
   try {
     const head = await fetch(url, {
@@ -75,7 +125,6 @@ async function downloadApkResumable(
     /* continue without size */
   }
 
-  // If HEAD failed or no length, try a single ranged probe
   if (!total) {
     try {
       const probe = await fetch(url, {
@@ -83,17 +132,15 @@ async function downloadApkResumable(
         cache: 'no-store',
         mode: 'cors',
       })
-      const cr = probe.headers.get('Content-Range') // bytes 0-0/SIZE
+      const cr = probe.headers.get('Content-Range')
       const m = cr?.match(/\/(\d+)$/)
       if (m) total = Number(m[1])
-      // drain body
       await probe.arrayBuffer()
     } catch {
-      /* fall through to single-stream */
+      /* fall through */
     }
   }
 
-  // No size → one stream with timeout watchdog (still better than browser DL mgr)
   if (!total || total < CHUNK_SIZE) {
     onProgress('Downloading… (single stream)')
     return downloadApkSingleStream(url, onProgress)
@@ -119,14 +166,12 @@ async function downloadApkResumable(
         })
         window.clearTimeout(timer)
 
-        // Server sent whole file (ignored Range) — accept and finish
         if (res.status === 200) {
           const full = await res.arrayBuffer()
           if (full.byteLength >= total * 0.9) {
             onProgress(`Downloading… 100% (${formatMb(full.byteLength)} MB)`)
             return new Blob([full], { type: 'application/vnd.android.package-archive' })
           }
-          // Partial 200 is weird — treat as this chunk if size matches
           if (full.byteLength === end - offset + 1) {
             parts.push(full)
             offset += full.byteLength
@@ -179,7 +224,6 @@ async function downloadApkSingleStream(
   onProgress: (msg: string) => void,
 ): Promise<Blob> {
   const controller = new AbortController()
-  // 5 min hard cap for whole file
   const timer = window.setTimeout(() => controller.abort(), 5 * 60_000)
   try {
     const res = await fetch(url, { cache: 'no-store', mode: 'cors', signal: controller.signal })
@@ -187,8 +231,7 @@ async function downloadApkSingleStream(
     const total = Number(res.headers.get('Content-Length') || 0)
     const reader = res.body?.getReader()
     if (!reader) {
-      const blob = await res.blob()
-      return blob
+      return await res.blob()
     }
     const chunks: Uint8Array[] = []
     let received = 0
@@ -223,7 +266,6 @@ function saveBlobAsApk(blob: Blob) {
   document.body.appendChild(a)
   a.click()
   a.remove()
-  // Keep URL alive long enough for the system download to start
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000)
 }
 
@@ -231,20 +273,44 @@ export function AndroidInstaller(props: Props) {
   const [downloading, setDownloading] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const fromGitHub = !isLanInstallerHost()
 
   async function downloadApk() {
     setDownloading(true)
     setError(null)
-    setProgress('Starting reliable download…')
-    // Remember this server so the installed app can OTA-update later
+    setProgress(fromGitHub ? 'Opening GitHub download…' : 'Starting reliable download…')
+
+    // Remember update source so the installed app can OTA later
     try {
-      const base = updateServerBase() || `${window.location.protocol}//${window.location.host}`
-      localStorage.setItem('schoolie-update-server', base)
+      localStorage.setItem('schoolie-update-server', updateServerBase())
     } catch {
       /* ignore */
     }
 
     const url = apkDownloadUrl()
+
+    // GitHub Releases: use browser download (fetch is often CORS-blocked)
+    if (isGitHubApkUrl(url) || fromGitHub) {
+      try {
+        startBrowserDownload(url)
+        setProgress(
+          'Download started from GitHub. Open schoolie.apk when it finishes, then tap Install.',
+        )
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Download failed'
+        setError(msg)
+        try {
+          window.location.href = url
+        } catch {
+          /* ignore */
+        }
+      } finally {
+        setDownloading(false)
+      }
+      return
+    }
+
+    // LAN: resumable same-origin fetch
     try {
       const blob = await downloadApkResumable(url, setProgress)
       if (blob.size < 1_000_000) {
@@ -256,14 +322,9 @@ export function AndroidInstaller(props: Props) {
       )
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Download failed'
-      setError(`${msg}. Opening direct link as fallback…`)
-      setProgress('If the bar still stalls, use the direct APK link below, or try again on Wi‑Fi.')
-      // Top-level navigation often works when fetch is blocked (mixed content / SW)
-      try {
-        window.location.href = url
-      } catch {
-        /* ignore */
-      }
+      setError(`${msg}. Trying GitHub…`)
+      setProgress('Falling back to GitHub Releases download…')
+      startBrowserDownload(GITHUB_APK_LATEST)
     } finally {
       setDownloading(false)
     }
@@ -282,8 +343,8 @@ export function AndroidInstaller(props: Props) {
         <p className="installer-kicker">Android app · {formatVersionLabel()}</p>
         <h1 className="installer-title">Install Schoolie</h1>
         <p className="installer-lead">
-          Download the real Android app (APK). Your phone will open the normal Android installer —
-          same as installing any other app. No Play Store required.
+          Download the real Android app (APK) from GitHub. Your phone opens the normal Android
+          installer — same as any other app. No Play Store required.
         </p>
 
         <button
@@ -292,10 +353,17 @@ export function AndroidInstaller(props: Props) {
           disabled={downloading}
           onClick={() => void downloadApk()}
         >
-          {downloading ? 'Downloading…' : 'Download & install app'}
+          {downloading ? 'Downloading…' : 'Download app from GitHub'}
         </button>
         {progress && <p className="installer-status">{progress}</p>}
         {error && <p className="installer-status">{error}</p>}
+
+        <p className="muted" style={{ marginTop: 12, fontSize: '0.9rem', wordBreak: 'break-all' }}>
+          Direct link:{' '}
+          <a href={GITHUB_APK_LATEST} download="schoolie.apk" rel="noopener">
+            schoolie.apk
+          </a>
+        </p>
 
         <div className="installer-steps-block" style={{ marginTop: 20 }}>
           <h2>After the download</h2>
@@ -316,29 +384,38 @@ export function AndroidInstaller(props: Props) {
         </div>
 
         <div className="installer-checks">
-          <h3>Tips if download pauses</h3>
+          <h3>Tips</h3>
           <ul>
             <li>
-              Use <strong>http://</strong>
-              {typeof window !== 'undefined' ? window.location.hostname : 'YOUR-PC-IP'}
-              :4190/ — not https
+              Easiest: download from{' '}
+              <a href={GITHUB_RELEASES_PAGE} target="_blank" rel="noreferrer">
+                GitHub Releases
+              </a>
             </li>
-            <li>
-              Tap the blue button (resumable chunks). Do not rely on a stuck Chrome download
-              notification — cancel it and retry here
-            </li>
-            <li>Keep the phone awake and on Wi‑Fi until you see “Download complete”</li>
+            <li>Stay on Wi‑Fi until the APK finishes (about 60 MB)</li>
             <li>If install is blocked: Settings → Apps → Special access → Install unknown apps</li>
             <li>
-              Later updates: PC runs <code>npm run start:android</code>, then app Settings → Check for
-              updates
+              Later updates come from GitHub automatically (Settings → Check for updates). Source:{' '}
+              <a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
+                {GITHUB_REPO_URL.replace('https://', '')}
+              </a>
             </li>
           </ul>
         </div>
 
-        <a className="installer-apk-link" href={apkDownloadUrl()} download="schoolie.apk">
-          Direct APK link (browser download manager)
+        <a className="installer-apk-link" href={GITHUB_APK_LATEST} download="schoolie.apk">
+          Download schoolie.apk (GitHub)
         </a>
+        {isLanInstallerHost() && (
+          <a
+            className="installer-apk-link"
+            href={apkDownloadUrl()}
+            download="schoolie.apk"
+            style={{ display: 'block', marginTop: 8 }}
+          >
+            Local PC APK (LAN server)
+          </a>
+        )}
 
         <button type="button" className="installer-skip" onClick={props.onContinueInBrowser}>
           Continue in browser without installing
@@ -351,19 +428,14 @@ export function AndroidInstaller(props: Props) {
 /** Show installer page instead of the full app? */
 export function shouldShowAndroidInstaller(): boolean {
   if (typeof window === 'undefined') return false
-  // Already the installed APK / PWA / desktop app → open Schoolie, not the store page
   if (isNativeCapacitorApp() || isStandaloneApp()) return false
-  // Query override for testing: ?app=1 skips installer
   if (new URLSearchParams(window.location.search).get('app') === '1') return false
-  // Force installer: ?install=1
   if (new URLSearchParams(window.location.search).get('install') === '1') return true
-  // Remember user chose browser
   try {
     if (localStorage.getItem('schoolie-skip-installer') === '1') return false
   } catch {
     /* ignore */
   }
-  // Only the mobile browser download page (not the installed app)
   return isAndroid()
 }
 

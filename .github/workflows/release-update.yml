@@ -1,9 +1,10 @@
-# Build Schoolie web bundle and publish OTA assets to GitHub.
-# - GitHub Pages: site + app-update.json + downloads/web-update.zip
-# - GitHub Release: tag vX.Y.Z with web-update.zip
+# Build web app + Android APK, publish to GitHub Releases & Pages.
+#
+# Download the app:
+#   https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk
 #
 # One-time: Settings → Pages → Source: GitHub Actions
-name: Release web update
+name: Release app
 
 on:
   push:
@@ -20,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  web:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
@@ -39,12 +40,13 @@ jobs:
 
       - run: npm run build
 
-      - name: Pack OTA zip + manifests
+      - name: Pack OTA zip + install/update manifests
         env:
           V: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist/downloads
+          # Never ship multi-MB APK on Pages — Releases host schoolie.apk
           rm -f dist/downloads/schoolie.apk
           (
             cd dist
@@ -53,20 +55,31 @@ jobs:
               -x 'downloads/schoolie.apk' \
               -x 'downloads/web-update.zip'
           )
-          BASE="https://thelubemaster.github.io/Receipt-tracker"
+          REPO="https://github.com/thelubemaster/Receipt-tracker"
+          PAGES="https://thelubemaster.github.io/Receipt-tracker"
+          APK="${REPO}/releases/latest/download/schoolie.apk"
           printf '%s\n' "{
             \"version\": \"${V}\",
-            \"url\": \"${BASE}/downloads/web-update.zip\",
+            \"url\": \"${PAGES}/downloads/web-update.zip\",
             \"notes\": \"Schoolie v${V} from GitHub\"
           }" > dist/app-update.json
           printf '%s\n' "{
-            \"baseUrl\": \"${BASE}\",
+            \"baseUrl\": \"${PAGES}\",
             \"version\": \"${V}\",
             \"source\": \"github-pages\",
             \"updatedAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
           }" > dist/update-server.json
+          printf '%s\n' "{
+            \"version\": \"${V}\",
+            \"name\": \"Schoolie Cost Tracker\",
+            \"apkUrl\": \"${APK}\",
+            \"apkFileName\": \"schoolie.apk\",
+            \"releasesUrl\": \"${REPO}/releases/latest\",
+            \"repoUrl\": \"${REPO}\",
+            \"notes\": \"Download schoolie.apk, open it, tap Install.\"
+          }" > dist/install.json
           node -e "const fs=require('fs');const p='dist/version.json';let j={version:process.env.V,name:'schoolie-tracker',builtAt:new Date().toISOString()};try{Object.assign(j,JSON.parse(fs.readFileSync(p,'utf8')))}catch{};j.version=process.env.V;fs.writeFileSync(p,JSON.stringify(j,null,2))"
-          ls -lh dist/downloads/web-update.zip dist/app-update.json
+          ls -lh dist/downloads/web-update.zip dist/app-update.json dist/install.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,8 +87,61 @@ jobs:
           path: dist
           retention-days: 7
 
+  apk:
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "platform-tools"
+
+      - run: npm ci
+
+      - name: Build web + sync Capacitor
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Stage schoolie.apk
+        run: |
+          mkdir -p artifacts
+          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/schoolie.apk
+          ls -lh artifacts/schoolie.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: schoolie-apk
+          path: artifacts/schoolie.apk
+          retention-days: 14
+          if-no-files-found: error
+
   pages:
-    needs: build
+    needs: web
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -96,7 +162,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
   release:
-    needs: build
+    needs: [web, apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -104,15 +170,35 @@ jobs:
           name: schoolie-dist
           path: dist
 
-      - name: Publish GitHub Release
+      - uses: actions/download-artifact@v4
+        with:
+          name: schoolie-apk
+          path: artifacts
+
+      - name: Publish GitHub Release (APK + OTA zip)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.build.outputs.version }}
-          name: Schoolie v${{ needs.build.outputs.version }}
-          generate_release_notes: true
+          tag_name: v${{ needs.web.outputs.version }}
+          name: Schoolie v${{ needs.web.outputs.version }}
+          body: |
+            ## Download the Android app
+
+            **[⬇ Download schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
+
+            1. Open the file on your phone  
+            2. Allow **Install unknown apps** if asked  
+            3. Tap **Install** → **Open**
+
+            After install, later updates can arrive as a small web bundle (no full re-download) when you open the app on Wi‑Fi / mobile data.
+
+            ---
+            Also included: `web-update.zip` (OTA for already-installed APKs).
           files: |
+            artifacts/schoolie.apk
             dist/downloads/web-update.zip
             dist/app-update.json
-          fail_on_unmatched_files: false
+            dist/install.json
+          fail_on_unmatched_files: true
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

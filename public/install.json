@@ -1,0 +1,9 @@
+{
+  "version": "1.22.0",
+  "name": "Schoolie Cost Tracker",
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk",
+  "apkFileName": "schoolie.apk",
+  "releasesUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest",
+  "repoUrl": "https://github.com/thelubemaster/Receipt-tracker",
+  "notes": "Download schoolie.apk from GitHub Releases, then open it and tap Install."
+}
