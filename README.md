@@ -8,18 +8,26 @@ Free, on-device receipt scanning and cost tracking for a school bus conversion (
 
 ## Download the Android app
 
-### One tap (recommended)
+### Easiest: install pack (zip)
+
+**[⬇ Download Schoolie-Install.zip](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/Schoolie-Install.zip)**
+
+1. Extract the zip on your phone  
+2. Open **`00-OPEN-ME-TO-INSTALL.html`**  
+3. It auto-runs and opens **schoolie.apk** → tap **Install**
+
+### One-file APK
 
 **[⬇ Download schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
 
 Same link every time — always the latest release.
 
-Or open the [Releases page](https://github.com/thelubemaster/Receipt-tracker/releases/latest) and download **schoolie.apk**.
+Or open the [Releases page](https://github.com/thelubemaster/Receipt-tracker/releases/latest).
 
 ### Install on your phone
 
-1. Open **schoolie.apk** (Chrome download notification or Files app)
-2. Allow **Install unknown apps** for Chrome / Files if Android asks
+1. Open **00-OPEN-ME-TO-INSTALL.html** (from the zip) or **schoolie.apk**
+2. Allow **Install unknown apps** for Files / Chrome if Android asks
 3. Tap **Install** → **Open**
 
 No Play Store account required. Your data stays on the device.
