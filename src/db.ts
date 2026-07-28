@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import { sanitizeDisabledAis } from './aiRoster'
 import type { LeaderboardMap } from './leaderboard'
 import {
   emptyReceiptMemory,
@@ -32,31 +33,89 @@ interface SchoolieDB extends DBSchema {
 }
 
 const DB_NAME = 'schoolie-tracker'
-const DB_VERSION = 3
+/**
+ * Schema version. Receipt memory uses the existing `meta` store (no new stores).
+ * We open at 2; if a device already has a higher version (partial v3 bump), open that.
+ */
+const DB_VERSION = 2
 const SETTINGS_KEY = 'app'
 const META_KEY = 'meta'
 const MEMORY_KEY = 'receipt-memory'
 
+/** Max time to wait for IndexedDB open (blocked upgrades used to hang forever). */
+const DB_OPEN_MS = 6000
+
 let dbPromise: Promise<IDBPDatabase<SchoolieDB>> | null = null
 
-function getDb() {
+function upgradeSchoolie(db: IDBPDatabase<SchoolieDB>, oldVersion: number) {
+  if (oldVersion < 1) {
+    const purchases = db.createObjectStore('purchases', { keyPath: 'id' })
+    purchases.createIndex('by-date', 'date')
+    purchases.createIndex('by-created', 'createdAt')
+    db.createObjectStore('images', { keyPath: 'id' })
+    db.createObjectStore('settings', { keyPath: 'id' })
+  }
+  if (oldVersion < 2) {
+    if (!db.objectStoreNames.contains('meta')) {
+      db.createObjectStore('meta', { keyPath: 'id' })
+    }
+  }
+}
+
+function openSchoolieDb(version: number): Promise<IDBPDatabase<SchoolieDB>> {
+  return openDB<SchoolieDB>(DB_NAME, version, {
+    upgrade(db, oldVersion) {
+      upgradeSchoolie(db as IDBPDatabase<SchoolieDB>, oldVersion)
+    },
+    blocked() {
+      console.warn(
+        '[schoolie] IndexedDB open blocked — close other Schoolie tabs and refresh.',
+      )
+    },
+    blocking() {
+      console.warn('[schoolie] IndexedDB connection is blocking; closing for upgrade.')
+    },
+    terminated() {
+      dbPromise = null
+    },
+  })
+}
+
+async function openSchoolieDbResilient(): Promise<IDBPDatabase<SchoolieDB>> {
+  try {
+    return await openSchoolieDb(DB_VERSION)
+  } catch (e) {
+    // Existing DB is a higher version (e.g. brief v3 experiment) — open without downgrade
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/version|less than/i.test(msg)) {
+      return await openSchoolieDb(3)
+    }
+    throw e
+  }
+}
+
+function getDb(): Promise<IDBPDatabase<SchoolieDB>> {
   if (!dbPromise) {
-    dbPromise = openDB<SchoolieDB>(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion) {
-        if (oldVersion < 1) {
-          const purchases = db.createObjectStore('purchases', { keyPath: 'id' })
-          purchases.createIndex('by-date', 'date')
-          purchases.createIndex('by-created', 'createdAt')
-          db.createObjectStore('images', { keyPath: 'id' })
-          db.createObjectStore('settings', { keyPath: 'id' })
-        }
-        if (oldVersion < 2) {
-          if (!db.objectStoreNames.contains('meta')) {
-            db.createObjectStore('meta', { keyPath: 'id' })
-          }
-        }
-        // v3: receiptMemory lives on meta rows (no new store required)
-      },
+    const open = openSchoolieDbResilient()
+    const timeout = new Promise<never>((_, reject) => {
+      const t =
+        typeof globalThis.setTimeout === 'function'
+          ? globalThis.setTimeout.bind(globalThis)
+          : (fn: () => void, ms: number) => {
+              /* node fallback */
+              return setTimeout(fn, ms)
+            }
+      t(() => {
+        reject(
+          new Error(
+            'Database is taking too long to open. Close other Schoolie tabs, then refresh. If it still hangs, use “Reset local data” or clear site data for this app.',
+          ),
+        )
+      }, DB_OPEN_MS)
+    })
+    dbPromise = Promise.race([open, timeout]).catch((err) => {
+      dbPromise = null
+      throw err
     })
   }
   return dbPromise
@@ -121,7 +180,6 @@ export async function getImage(id: string): Promise<Blob | undefined> {
 export async function getSettings(): Promise<AppSettings> {
   const db = await getDb()
   const row = await db.get('settings', SETTINGS_KEY)
-  const { sanitizeDisabledAis } = await import('./aiRoster')
   const rawCustom = (row as { customCategories?: unknown } | undefined)?.customCategories
   const customCategories = Array.isArray(rawCustom)
     ? rawCustom
@@ -167,25 +225,32 @@ export async function saveLeaderboard(leaderboard: LeaderboardMap): Promise<void
 }
 
 export async function getReceiptMemory(): Promise<ReceiptMemory> {
-  const db = await getDb()
-  const row = await db.get('meta', MEMORY_KEY)
-  if (row?.receiptMemory && row.receiptMemory.version === 1) {
-    return row.receiptMemory
-  }
-  // Also allow memory nested under main meta (older experiments)
-  const main = await db.get('meta', META_KEY)
-  if (main?.receiptMemory && main.receiptMemory.version === 1) {
-    return main.receiptMemory
+  try {
+    const db = await getDb()
+    const row = await db.get('meta', MEMORY_KEY)
+    if (row?.receiptMemory && row.receiptMemory.version === 1) {
+      return row.receiptMemory
+    }
+    const main = await db.get('meta', META_KEY)
+    if (main?.receiptMemory && main.receiptMemory.version === 1) {
+      return main.receiptMemory
+    }
+  } catch {
+    /* memory is optional — never block the app */
   }
   return emptyReceiptMemory()
 }
 
 export async function saveReceiptMemory(memory: ReceiptMemory): Promise<void> {
-  const db = await getDb()
-  await db.put('meta', {
-    id: MEMORY_KEY,
-    receiptMemory: { ...memory, updatedAt: new Date().toISOString() },
-  })
+  try {
+    const db = await getDb()
+    await db.put('meta', {
+      id: MEMORY_KEY,
+      receiptMemory: { ...memory, updatedAt: new Date().toISOString() },
+    })
+  } catch (e) {
+    console.warn('[schoolie] could not save receipt memory', e)
+  }
 }
 
 export async function clearReceiptMemory(): Promise<void> {
@@ -197,4 +262,20 @@ export async function clearAllData(): Promise<void> {
   await db.clear('purchases')
   await db.clear('images')
   await clearReceiptMemory()
+}
+
+/**
+ * If IndexedDB is stuck (blocked upgrade), delete the whole DB and start fresh.
+ * Call only with user consent — wipes local purchases/images.
+ */
+export async function resetDatabase(): Promise<void> {
+  dbPromise = null
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(DB_NAME)
+    req.onsuccess = () => resolve()
+    req.onerror = () => reject(req.error ?? new Error('deleteDatabase failed'))
+    req.onblocked = () => {
+      console.warn('[schoolie] deleteDatabase blocked — close other tabs')
+    }
+  })
 }

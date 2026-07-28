@@ -39,6 +39,7 @@ import {
   getReceiptMemory,
   saveReceiptMemory,
   clearReceiptMemory,
+  resetDatabase,
 } from './db'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
 import { downloadCsv, downloadPdfSummary } from './exportData'
@@ -196,8 +197,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    refresh()
-      .then((s) => {
+    let cancelled = false
+    const boot = async () => {
+      try {
+        const s = await refresh()
+        if (cancelled) return
         if (s.lastSeenVersion !== APP_VERSION) {
           const entries = getUpdatesSince(s.lastSeenVersion || null)
           if (entries.length) {
@@ -205,9 +209,22 @@ export default function App() {
             setWhatsNew(entries)
           }
         }
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load data'))
-      .finally(() => setLoading(false))
+      } catch (e) {
+        if (!cancelled) {
+          setError(
+            e instanceof Error
+              ? e.message
+              : 'Failed to load data. Try refresh, or reset local data in the message below.',
+          )
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void boot()
+    return () => {
+      cancelled = true
+    }
   }, [refresh])
 
   useEffect(() => {
@@ -383,6 +400,9 @@ export default function App() {
         <div className="empty">
           <div className="spinner" />
           Loading your schoolie log…
+          <p className="muted" style={{ marginTop: 12, fontSize: '0.85rem' }}>
+            If this never finishes, close other Schoolie tabs and hard-refresh.
+          </p>
         </div>
       </div>
     )
@@ -415,14 +435,65 @@ export default function App() {
       )}
       {error && (
         <div className="banner banner-error" role="alert">
-          {error}
-          <button
-            type="button"
-            style={{ float: 'right', color: 'inherit', textDecoration: 'underline' }}
-            onClick={() => setError(null)}
-          >
-            dismiss
-          </button>
+          <div style={{ marginBottom: 10 }}>{error}</div>
+          <div className="row-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setError(null)
+                setLoading(true)
+                void refresh()
+                  .then((s) => {
+                    if (s.lastSeenVersion !== APP_VERSION) {
+                      const entries = getUpdatesSince(s.lastSeenVersion || null)
+                      if (entries.length) setWhatsNew(entries)
+                    }
+                  })
+                  .catch((e) =>
+                    setError(e instanceof Error ? e.message : 'Still failed to load'),
+                  )
+                  .finally(() => setLoading(false))
+              }}
+            >
+              Retry load
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => {
+                if (
+                  !confirm(
+                    'Reset local Schoolie data on this device? Purchases and receipt photos stored here will be deleted. Nothing is in the cloud.',
+                  )
+                ) {
+                  return
+                }
+                setError(null)
+                setLoading(true)
+                void resetDatabase()
+                  .then(() => refresh())
+                  .then(() => setInfo('Local data reset — you can scan again.'))
+                  .catch((e) =>
+                    setError(
+                      e instanceof Error
+                        ? e.message
+                        : 'Reset failed — clear site data in the browser for this page.',
+                    ),
+                  )
+                  .finally(() => setLoading(false))
+              }}
+            >
+              Reset local data
+            </button>
+            <button
+              type="button"
+              style={{ color: 'inherit', textDecoration: 'underline', background: 'none', border: 0 }}
+              onClick={() => setError(null)}
+            >
+              dismiss
+            </button>
+          </div>
         </div>
       )}
       {info && (

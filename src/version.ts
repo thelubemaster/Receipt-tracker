@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.18.0'
+export const APP_VERSION = '1.18.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.18.1',
+    date: '2026-07-28',
+    title: 'Fix hang on “Loading your schoolie log…”',
+    changes: [
+      'IndexedDB open no longer waits forever when another tab blocks it',
+      'Retry load + Reset local data if startup fails',
+      'Avoided unnecessary DB version bump that could freeze boot',
+    ],
+  },
   {
     version: '1.18.0',
     date: '2026-07-28',
