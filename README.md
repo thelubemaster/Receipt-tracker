@@ -2,54 +2,71 @@
 
 Free, on-device receipt scanning and cost tracking for a school bus conversion (**schoolie**).
 
-**GitHub:** [thelubemaster/Receipt-tracker](https://github.com/thelubemaster/Receipt-tracker)
+**Repo:** [thelubemaster/Receipt-tracker](https://github.com/thelubemaster/Receipt-tracker)
+
+---
+
+## Download the Android app
+
+### One tap (recommended)
+
+**[⬇ Download schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
+
+Same link every time — always the latest release.
+
+Or open the [Releases page](https://github.com/thelubemaster/Receipt-tracker/releases/latest) and download **schoolie.apk**.
+
+### Install on your phone
+
+1. Open **schoolie.apk** (Chrome download notification or Files app)
+2. Allow **Install unknown apps** for Chrome / Files if Android asks
+3. Tap **Install** → **Open**
+
+No Play Store account required. Your data stays on the device.
+
+### Web installer
+
+After GitHub Pages is enabled, Android phones can also open:
+
+**https://thelubemaster.github.io/Receipt-tracker/**
+
+and tap **Download app from GitHub**.
+
+---
 
 ## Features
 
 - Photograph receipts → local OCR/AI suggests vendor, total, category
-- Purchases, categories, totals — stored on your device (IndexedDB)
-- Android APK install + **over-the-air web updates from GitHub** (no reinstall for most changes)
+- Purchases, categories, totals — stored on your device only
+- **Download APK from GitHub** + **OTA web updates** from the same repo (no reinstall for most changes)
 - Desktop (Electron) and browser/PWA modes
 
-## Updates from GitHub
+## How updates work
 
-After you push to `main`/`master`, GitHub Actions:
+On every push to `main`/`master`, GitHub Actions:
 
-1. Builds the web app
-2. Deploys to **GitHub Pages**:  
-   `https://thelubemaster.github.io/Receipt-tracker/`
-3. Publishes a **Release** with `web-update.zip` (tag `vX.Y.Z` from `package.json`)
+1. Builds the web app → **GitHub Pages**
+2. Builds the **Android APK**
+3. Publishes a **Release** `vX.Y.Z` with:
+   - `schoolie.apk` ← install / reinstall the app
+   - `web-update.zip` ← small OTA package for already-installed apps
 
-The installed Android app checks:
-
-1. Your PC update server (optional, `npm run start:android`)
-2. GitHub Pages `app-update.json`
-3. Latest GitHub Release assets
+Installed apps check GitHub for newer web bundles (Settings → Check for updates).
 
 ### One-time GitHub setup
 
-1. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**
-2. Push this project to `main` (or `master`)
-3. Wait for the **Release web update** workflow to finish
-4. On the phone: Settings → **Check for updates** (or auto-update on open)
+1. **Settings → Pages → Source: GitHub Actions**
+2. Push this project (`master` or `main`)
+3. Wait for the **Release app** workflow (builds APK + web)
+4. Share the download link above
 
-### Install Android APK (first time)
-
-```bash
-npm install
-npm run apk                 # builds APK
-npm run start:android       # serves installer on your LAN
-```
-
-Open the URL printed in the terminal on your phone (HTTP port **4190**), download **schoolie.apk**, install.
-
-Later updates: leave the app installed; it pulls the smaller web bundle from GitHub.
-
-## Develop
+## Develop locally
 
 ```bash
 npm install
-npm run dev
+npm run dev          # web UI
+npm run apk          # build APK on a machine with Android SDK
+npm run start:android  # optional LAN installer (HTTP :4190)
 ```
 
 ```bash
@@ -64,7 +81,7 @@ Bump both:
 - `package.json` → `version`
 - `src/version.ts` → `APP_VERSION` (+ changelog entry)
 
-Then push — Actions tags release `v…` and updates Pages.
+Then push — Actions publishes release `v…` with a fresh APK.
 
 ## Privacy
 
