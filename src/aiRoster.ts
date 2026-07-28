@@ -8,6 +8,7 @@ export type AiId =
   | 'lens'
   | 'hammer'
   | 'titan'
+  | 'ruler'
   | 'ledger'
   | 'sieve'
   | 'cashier'
@@ -99,6 +100,19 @@ export const AI_ROSTER: AiProfile[] = [
     emoji: '🦾',
     color: '#ab47bc',
     power: 10,
+  },
+  {
+    id: 'ruler',
+    name: 'Ruler',
+    fullName: 'Ruler · Document layout OCR',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Maps every word box on the photo into real receipt rows so item names stay glued to their prices.',
+    workingLine: 'Ruler is mapping every line on the photo…',
+    engine: 'Tesseract word boxes + layout reconstruct',
+    emoji: '📏',
+    color: '#42a5f5',
+    power: 7,
   },
   {
     id: 'ledger',

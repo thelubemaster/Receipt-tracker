@@ -133,6 +133,29 @@ export async function runMultiAgentReceiptPipeline(
     /* optional */
   }
 
+  // --- Ruler (layout-aware document rows: names + prices on the same line) ---
+  try {
+    const { runRulerOcr } = await import('./rulerOcr')
+    const ruler = await runRulerOcr(imageBlob, onProgress)
+    if (ruler.text.trim()) {
+      ocrTexts.push({
+        label: 'Ruler layout path',
+        text: ruler.text,
+        note: `Ruler: ${ruler.lineCount} document lines · ${ruler.wordCount} words · ${ruler.bestPass}`,
+        ais: ['ruler'],
+      })
+      // Prefer Ruler text for council hunting when it found more money-on-line rows
+    }
+  } catch (e) {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.48,
+      message: `Ruler skipped: ${e instanceof Error ? e.message : 'unavailable'}`,
+      aiId: 'ruler',
+      aiName: 'Ruler',
+    })
+  }
+
   // --- Hammer (max power parallel swarm) ---
   if (maxPower) {
     try {
@@ -208,27 +231,36 @@ export async function runMultiAgentReceiptPipeline(
     }
   }
 
+  // Prefer Ruler (layout) when it found more product+price rows
+  const layoutish = (t: string) =>
+    t.split(/\n/).filter((l) => /[A-Za-z]{3,}/.test(l) && /\d+[.,]\d{2}/.test(l)).length
+  usable.sort((a, b) => {
+    const la = (a.ais.includes('ruler') ? 4 : 0) + layoutish(a.text) * 2 + scoreOcrText(a.text) * 0.01
+    const lb = (b.ais.includes('ruler') ? 4 : 0) + layoutish(b.text) * 2 + scoreOcrText(b.text) * 0.01
+    return lb - la
+  })
+
   onProgress?.({
     stage: 'parse',
     progress: 0.7,
-    message: `Parsing ${usable.length} OCR paths with Ledger/Sieve…`,
+    message: `Parsing ${usable.length} OCR paths with Ledger/Sieve (layout-first)…`,
     aiId: 'sieve',
     aiName: 'Sieve',
   })
 
   const parses = usable.map((u) => parseFromText(u.text, u.label, u.note, u.ais))
 
-  // Merged OCR super-text
+  // Merged OCR super-text (layout-first when Ruler present)
   let merged = usable[0].text
   for (let i = 1; i < usable.length; i++) {
     merged = mergeOcrTexts(merged, usable[i].text)
   }
-  if (usable.length > 1 && scoreOcrText(merged) > scoreOcrText(usable[0].text)) {
+  if (usable.length > 1 && scoreOcrText(merged) > scoreOcrText(usable[0].text) * 0.85) {
     parses.push(
       parseFromText(
         merged,
         'Merged multi-OCR path',
-        `Merged ${usable.length} OCR engines`,
+        `Merged ${usable.length} OCR engines (layout-first)`,
         usable.flatMap((u) => u.ais),
       ),
     )
@@ -318,6 +350,7 @@ export async function runMultiAgentReceiptPipeline(
       ...(final.aisUsed ?? []),
       'forge',
       'lens',
+      'ruler',
       'hammer',
       'titan',
       'scout',
@@ -332,12 +365,12 @@ export async function runMultiAgentReceiptPipeline(
     ]),
   )
   final.activeAiLabel = maxPower
-    ? 'Max-power free team + Council + Seeker'
-    : 'Free team + Council + Seeker'
+    ? 'Max-power free team + Ruler layout + Council + Seeker'
+    : 'Free team + Ruler layout + Council + Seeker'
   final.agentReport = [
     maxPower
-      ? 'MAX POWER free AIs: Forge, Lens, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker'
-      : 'Free AIs: Forge, Lens, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker',
+      ? 'MAX POWER free AIs: Forge, Lens, Ruler, Hammer, Titan, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker'
+      : 'Free AIs: Forge, Lens, Ruler, Ledger, Sieve, Cashier, Clerk, Arbiter, Quorum, Council, Seeker',
     ...usable.map((u) => u.note),
     final.agentReport,
   ].join('\n')
@@ -346,9 +379,9 @@ export async function runMultiAgentReceiptPipeline(
   onProgress?.({
     stage: 'done',
     progress: 1,
-    message: 'Seeker + Council finished — free AI team done',
-    aiId: 'seeker',
-    aiName: 'Seeker',
+    message: 'Ruler + Seeker + Council finished — free AI team done',
+    aiId: 'ruler',
+    aiName: 'Ruler',
   })
 
   return final
@@ -358,6 +391,12 @@ export async function disposeOnDeviceAgent(): Promise<void> {
   try {
     const { disposeForgeWorker } = await import('./forgeOcr')
     await disposeForgeWorker()
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { disposeRulerWorker } = await import('./rulerOcr')
+    await disposeRulerWorker()
   } catch {
     /* ignore */
   }

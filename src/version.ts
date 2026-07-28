@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.9.1'
+export const APP_VERSION = '1.10.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.10.0',
+    date: '2026-07-28',
+    title: 'Ruler — reads receipt lines from the photo layout',
+    changes: [
+      'New free Ruler AI maps every word box on the receipt (not just a text dump)',
+      'Keeps product names on the same visual row as their prices',
+      'Folds multi-line item names into one product before splitting the list',
+      'Sieve + Ledger prefer layout-aware rows so items split more cleanly',
+    ],
+  },
   {
     version: '1.9.1',
     date: '2026-07-28',
