@@ -1,6 +1,15 @@
 /**
- * Re-apply free on-device categorization to saved receipts / line items,
- * then they cluster into the same home-screen groups the AI invents on scan.
+ * Regroup saved receipts on the home screen.
+ *
+ * Does NOT re-run AI invent / keyword reclassification on receipts that already
+ * have a category. That would overwrite what the scan AIs already marked.
+ *
+ * Instead:
+ * 1. Merge *alike* category labels so similar receipts land in one home group
+ *    (e.g. "engine" + "engine-parts" → same bucket).
+ * 2. Only invent a category for receipts still stuck on "misc" with no real
+ *    line-item categories — never rewrite an AI/user category.
+ * 3. Line-item categories are left untouched.
  */
 import { categorizeText } from './agents/keywords'
 import {
@@ -8,6 +17,7 @@ import {
   isShippingLineItem,
   primaryCategoryFromItems,
 } from './agents/lineItemsAgent'
+import { getCategory, humanizeCategoryId } from './categories'
 import type { CategoryId, Purchase, ReceiptLineItem } from './types'
 
 function productish(items: ReceiptLineItem[]): boolean {
@@ -16,16 +26,25 @@ function productish(items: ReceiptLineItem[]): boolean {
   )
 }
 
-/** Re-run the same keyword / invent logic used at scan time. */
-export function reclassifyPurchase(purchase: Purchase): Purchase {
-  const lineItems = (purchase.lineItems ?? []).map((li) => {
-    if (isShippingLineItem(li.description) || isFeeLineItem(li.description)) {
-      return { ...li, categoryId: 'misc' as CategoryId }
-    }
-    const { categoryId } = categorizeText(li.description)
-    return { ...li, categoryId }
+/** True when the receipt already has a real category (AI or user), not empty/misc. */
+export function hasAssignedCategory(purchase: Purchase): boolean {
+  const id = (purchase.categoryId || '').trim()
+  if (id && id !== 'misc') return true
+  return (purchase.lineItems ?? []).some((li) => {
+    if (isShippingLineItem(li.description) || isFeeLineItem(li.description)) return false
+    const c = (li.categoryId || '').trim()
+    return !!c && c !== 'misc'
   })
+}
 
+/**
+ * Only used for receipts still on misc with no useful line categories.
+ * Never call this to overwrite an existing AI category.
+ */
+export function classifyMiscOnly(purchase: Purchase): Purchase {
+  if (hasAssignedCategory(purchase)) return purchase
+
+  const lineItems = purchase.lineItems ?? []
   const textBlob = [
     purchase.description,
     purchase.vendor,
@@ -37,12 +56,18 @@ export function reclassifyPurchase(purchase: Purchase): Purchase {
 
   let categoryId: CategoryId
   if (productish(lineItems)) {
-    categoryId = primaryCategoryFromItems(lineItems)
+    // Prefer primary from existing line cats if any were set
+    const fromLines = primaryCategoryFromItems(lineItems)
+    if (fromLines && fromLines !== 'misc') {
+      categoryId = fromLines
+    } else {
+      // Invent from product text — receipt was never categorized
+      categoryId = categorizeText(textBlob).categoryId
+    }
   } else {
     categoryId = categorizeText(textBlob).categoryId
   }
 
-  // If lines were thin/misc, let overall receipt text invent a better group
   if (categoryId === 'misc') {
     const overall = categorizeText(textBlob)
     if (overall.score > 0 && overall.categoryId !== 'misc') {
@@ -50,51 +75,208 @@ export function reclassifyPurchase(purchase: Purchase): Purchase {
     }
   }
 
+  if (categoryId === purchase.categoryId) return purchase
   return {
     ...purchase,
+    // Keep every line item exactly as AI/user left it
     lineItems,
     categoryId,
   }
 }
 
-function sameLines(a: ReceiptLineItem[], b: ReceiptLineItem[]): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].id !== b[i].id) return false
-    if (a[i].categoryId !== b[i].categoryId) return false
-    if (a[i].description !== b[i].description) return false
-    if (Math.abs(a[i].amount - b[i].amount) > 0.001) return false
+/** Tokens for similarity (engine-powertrain → [engine, powertrain]). */
+function categoryTokens(id: string): Set<string> {
+  const raw = (id || 'misc')
+    .toLowerCase()
+    .replace(/&/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+  const stop = new Set([
+    'and',
+    'or',
+    'the',
+    'a',
+    'of',
+    'for',
+    'to',
+    'parts',
+    'part',
+    'system',
+    'systems',
+    'misc',
+    'other',
+    'general',
+  ])
+  const toks = raw.split(/\s+/).filter((t) => t.length > 1 && !stop.has(t))
+  return new Set(toks.length ? toks : raw ? [raw] : ['misc'])
+}
+
+/** How alike two category ids are (0–1). */
+export function categorySimilarity(a: string, b: string): number {
+  if (!a || !b) return 0
+  if (a === b) return 1
+  const la = a.toLowerCase()
+  const lb = b.toLowerCase()
+  if (la === lb) return 1
+  // prefix / contains (engine vs engine-parts)
+  if (la.startsWith(lb) || lb.startsWith(la) || la.includes(lb) || lb.includes(la)) {
+    const shorter = Math.min(la.length, lb.length)
+    const longer = Math.max(la.length, lb.length)
+    return Math.max(0.72, shorter / longer)
   }
-  return true
+  const ta = categoryTokens(a)
+  const tb = categoryTokens(b)
+  if (!ta.size || !tb.size) return 0
+  let inter = 0
+  for (const t of ta) if (tb.has(t)) inter++
+  const union = ta.size + tb.size - inter
+  return union > 0 ? inter / union : 0
+}
+
+const ALIKE_THRESHOLD = 0.55
+
+/**
+ * Build a map: each category id → canonical id to merge into.
+ * Prefers the id used by the most receipts; ties break toward shorter/builtin-ish.
+ */
+export function buildCategoryMergeMap(
+  purchases: Purchase[],
+  knownLabels: Map<string, string> = new Map(),
+): Map<string, string> {
+  const counts = new Map<string, number>()
+  for (const p of purchases) {
+    const id = p.categoryId || 'misc'
+    counts.set(id, (counts.get(id) || 0) + 1)
+  }
+  const ids = [...counts.keys()].filter((id) => id && id !== 'misc')
+  // Union-find style clustering of alike ids
+  const parent = new Map<string, string>()
+  for (const id of ids) parent.set(id, id)
+
+  function find(x: string): string {
+    let p = parent.get(x) || x
+    while (parent.get(p) && parent.get(p) !== p) p = parent.get(p)!
+    // path compress
+    let cur = x
+    while (cur !== p) {
+      const n = parent.get(cur) || cur
+      parent.set(cur, p)
+      cur = n
+    }
+    return p
+  }
+  function union(a: string, b: string) {
+    const ra = find(a)
+    const rb = find(b)
+    if (ra === rb) return
+    // Prefer higher count, then shorter id
+    const ca = counts.get(ra) || 0
+    const cb = counts.get(rb) || 0
+    if (cb > ca || (cb === ca && rb.length < ra.length)) parent.set(ra, rb)
+    else parent.set(rb, ra)
+  }
+
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      if (categorySimilarity(ids[i], ids[j]) >= ALIKE_THRESHOLD) {
+        union(ids[i], ids[j])
+      }
+    }
+  }
+
+  const map = new Map<string, string>()
+  map.set('misc', 'misc')
+  for (const id of ids) {
+    map.set(id, find(id))
+  }
+  // Attach human labels for debug/absorb (canonical keeps its id)
+  for (const [from, to] of map) {
+    if (!knownLabels.has(to)) {
+      knownLabels.set(to, humanizeCategoryId(to))
+    }
+    if (!knownLabels.has(from)) {
+      knownLabels.set(from, humanizeCategoryId(from))
+    }
+  }
+  return map
+}
+
+/**
+ * @deprecated Use classifyMiscOnly — kept name so older tests/imports still compile
+ * while behavior no longer overwrites AI categories.
+ */
+export function reclassifyPurchase(purchase: Purchase): Purchase {
+  return classifyMiscOnly(purchase)
 }
 
 export type RegroupResult = {
   purchases: Purchase[]
-  /** How many receipts had category or line-item categories change */
+  /** How many receipts had only their group (categoryId) adjusted for clustering */
   changed: number
   /** Category ids / labels to absorb into settings */
   labels: string[]
+  /** How many were left untouched because AI/user already categorized them */
+  preserved: number
+  /** How many misc receipts got a first category */
+  filledMisc: number
+  /** How many were moved only to merge with an alike group */
+  mergedAlike: number
 }
 
 /**
- * Regroup every saved receipt with the current free categorizer.
+ * Regroup for the home screen without overwriting AI category marks.
  * Does not write to IndexedDB — caller saves.
  */
 export function regroupAllPurchases(purchases: Purchase[]): RegroupResult {
   const now = new Date().toISOString()
-  let changed = 0
-  const labels: string[] = []
-  const next = purchases.map((p) => {
-    const r = reclassifyPurchase(p)
-    labels.push(r.categoryId)
-    for (const li of r.lineItems) labels.push(li.categoryId)
-    const didChange =
-      r.categoryId !== p.categoryId || !sameLines(r.lineItems, p.lineItems ?? [])
-    if (didChange) {
-      changed++
-      return { ...r, updatedAt: now }
+  let filledMisc = 0
+  let preserved = 0
+
+  // Pass 1: only fill misc; never rewrite assigned categories or line items
+  const afterFill = purchases.map((p) => {
+    if (hasAssignedCategory(p)) {
+      preserved++
+      return p
     }
-    return r
+    const next = classifyMiscOnly(p)
+    if (next.categoryId !== p.categoryId) {
+      filledMisc++
+      return { ...next, updatedAt: now }
+    }
+    return p
   })
-  return { purchases: next, changed, labels }
+
+  // Pass 2: merge alike category ids so similar receipts share one group
+  const mergeMap = buildCategoryMergeMap(afterFill)
+  let mergedAlike = 0
+  const next = afterFill.map((p) => {
+    const current = p.categoryId || 'misc'
+    const canonical = mergeMap.get(current) || current
+    if (canonical !== current) {
+      mergedAlike++
+      return { ...p, categoryId: canonical, updatedAt: now }
+    }
+    return p
+  })
+
+  const labels: string[] = []
+  for (const p of next) {
+    labels.push(p.categoryId || 'misc')
+    for (const li of p.lineItems ?? []) labels.push(li.categoryId)
+  }
+
+  const changed = filledMisc + mergedAlike
+  return {
+    purchases: next,
+    changed,
+    labels,
+    preserved,
+    filledMisc,
+    mergedAlike,
+  }
+}
+
+/** Helper for UI: label of a category id if known. */
+export function regroupCategoryLabel(id: string, custom: { id: string; label: string }[] = []): string {
+  return getCategory(id, custom).label
 }

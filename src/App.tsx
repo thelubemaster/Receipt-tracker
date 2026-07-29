@@ -340,11 +340,12 @@ export default function App() {
 
   async function handleRegroup() {
     if (!purchases.length) {
-      setInfo('Scan a receipt first — then Regroup can sort it into categories.')
+      setInfo('Scan a receipt first — then Regroup can put alike ones in the same group.')
       return
     }
     setError(null)
-    const { purchases: next, changed, labels } = regroupAllPurchases(purchases)
+    const { purchases: next, changed, labels, preserved, filledMisc, mergedAlike } =
+      regroupAllPurchases(purchases)
     const groupCount = new Set(next.map((p) => p.categoryId || 'misc')).size
     const nextCustom = absorbCategoryLabels(settings.customCategories ?? [], labels)
     if (
@@ -355,26 +356,39 @@ export default function App() {
       await saveSettings(nextSettings)
       setSettings(nextSettings)
     }
-    // Only rewrite receipts that actually moved
+    // Only update receipts whose *group* categoryId moved — never rewrite line items
     const byId = new Map(purchases.map((p) => [p.id, p]))
-    let saved = 0
     for (const p of next) {
       const prev = byId.get(p.id)
-      if (
-        !prev ||
-        prev.categoryId !== p.categoryId ||
-        JSON.stringify(prev.lineItems) !== JSON.stringify(p.lineItems)
-      ) {
-        await savePurchase(p)
-        saved++
+      if (!prev || prev.categoryId !== p.categoryId) {
+        // Preserve line items / AI marks from the original receipt
+        await savePurchase({
+          ...prev!,
+          categoryId: p.categoryId,
+          updatedAt: p.updatedAt,
+          lineItems: prev!.lineItems,
+        })
       }
     }
     await refresh()
-    setInfo(
-      changed === 0
-        ? `Groups already match the AI categories — ${groupCount} group${groupCount === 1 ? '' : 's'} on the home screen.`
-        : `Regrouped ${changed} receipt${changed === 1 ? '' : 's'} into ${groupCount} group${groupCount === 1 ? '' : 's'}.`,
-    )
+    if (changed === 0) {
+      setInfo(
+        `AI categories kept as-is — ${preserved} receipt${preserved === 1 ? '' : 's'} in ${groupCount} group${groupCount === 1 ? '' : 's'}.`,
+      )
+    } else {
+      const bits: string[] = []
+      if (mergedAlike > 0) {
+        bits.push(
+          `merged ${mergedAlike} alike receipt${mergedAlike === 1 ? '' : 's'} into shared groups`,
+        )
+      }
+      if (filledMisc > 0) {
+        bits.push(`placed ${filledMisc} uncategorized receipt${filledMisc === 1 ? '' : 's'}`)
+      }
+      setInfo(
+        `${bits.join('; ') || `Updated ${changed}`} — still ${groupCount} group${groupCount === 1 ? '' : 's'}. AI category marks on each receipt were not re-run.`,
+      )
+    }
   }
 
   async function handleSavePurchase(input: {
@@ -1370,7 +1384,7 @@ function HomeScreen(props: {
           className="regroup-btn"
           disabled={regroupBusy || props.purchases.length === 0}
           onClick={() => void runRegroup()}
-          title="Re-run free AI categories on saved receipts and rebuild groups"
+          title="Put alike receipts in the same group — does not re-run AI or change marked categories"
         >
           {regroupBusy ? 'Regrouping…' : 'Regroup'}
         </button>
@@ -1403,8 +1417,9 @@ function HomeScreen(props: {
             </div>
           ))}
           <p className="group-hint">
-            Groups use the categories the free AIs assign when you scan. Press{' '}
-            <strong>Regroup</strong> to re-apply that logic to everything already saved.
+            Groups use the category each free AI marked when you scanned. Press{' '}
+            <strong>Regroup</strong> only to put alike receipts in the same group — it does not
+            change what the AI already marked on each receipt.
           </p>
         </div>
       )}

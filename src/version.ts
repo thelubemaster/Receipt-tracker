@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.4'
+export const APP_VERSION = '1.24.5'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.5',
+    date: '2026-07-29',
+    title: 'Regroup keeps AI categories',
+    changes: [
+      'Regroup no longer re-runs AI invent or overwrites categories on saved receipts',
+      'Alike receipts (e.g. Engine + Engine parts) merge into one home-screen group',
+      'Only uncategorized (misc) receipts get a first category if needed',
+    ],
+  },
   {
     version: '1.24.4',
     date: '2026-07-29',
