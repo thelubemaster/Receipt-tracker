@@ -77,7 +77,12 @@ a {
   max-width: 440px;
   margin: 0 auto;
   min-height: 100dvh;
-  padding: 16px 16px calc(112px + env(safe-area-inset-bottom));
+  /* Keep clear of Android/iOS status bar + home indicator.
+     min 28px top covers typical Android status bar when safe-area reports 0. */
+  padding-top: max(28px, calc(env(safe-area-inset-top, 0px) + 10px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
   position: relative;
 }
 
@@ -158,6 +163,8 @@ a {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 20px;
+  /* Extra cushion if WebView under-reports safe-area on some Androids */
+  padding-top: 2px;
 }
 
 .topbar h1 {
@@ -417,9 +424,13 @@ a {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 28px 16px 48px;
+  padding:
+    max(28px, calc(env(safe-area-inset-top, 0px) + 16px))
+    max(16px, env(safe-area-inset-right, 0px))
+    max(48px, calc(env(safe-area-inset-bottom, 0px) + 24px))
+    max(16px, env(safe-area-inset-left, 0px));
   background:
-    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(232, 165, 75, 0.18), transparent),
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(45, 212, 191, 0.14), transparent),
     var(--bg);
 }
 

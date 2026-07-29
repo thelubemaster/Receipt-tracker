@@ -1,7 +1,7 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.24.0",
+  "version": "1.24.1",
   "description": "Project Cost Tracker — free on-device receipts by project",
   "author": "Schoolie",
   "repository": {
@@ -36,6 +36,7 @@
   "dependencies": {
     "@capacitor/app": "^7.1.2",
     "@capacitor/preferences": "^7.0.4",
+    "@capacitor/status-bar": "^7.0.6",
     "@capgo/capacitor-updater": "^7.50.2",
     "@huggingface/transformers": "^4.2.0",
     "idb": "^8.0.3",

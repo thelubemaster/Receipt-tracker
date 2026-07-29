@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.0'
+export const APP_VERSION = '1.24.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,15 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.1',
+    date: '2026-07-29',
+    title: 'Fix status bar covering the app',
+    changes: [
+      'Content sits below the Android notification bar',
+      'Safe-area padding on main layout and installer',
+    ],
+  },
   {
     version: '1.24.0',
     date: '2026-07-29',
