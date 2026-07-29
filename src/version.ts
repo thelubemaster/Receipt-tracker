@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.23.0'
+export const APP_VERSION = '1.23.1'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.23.1',
+    date: '2026-07-29',
+    title: 'Cleaner UI — less status fluff',
+    changes: [
+      'Hide “already installed” and install-how-to cards in the real app',
+      'Settings focused on real controls; developer tools under Advanced',
+      'Scan screen no longer shows long free/local lectures',
+    ],
+  },
   {
     version: '1.23.0',
     date: '2026-07-29',

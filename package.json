@@ -1,7 +1,7 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.23.0",
+  "version": "1.23.1",
   "description": "Schoolie Cost Tracker — free on-device receipt scans for bus conversions",
   "author": "Schoolie",
   "repository": {

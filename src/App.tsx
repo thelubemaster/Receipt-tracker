@@ -89,10 +89,8 @@ import {
   applyAppBundleUpdate,
   checkForAppBundleUpdate,
   setAutoUpdate,
-  setUpdateServer,
   useGitHubUpdates,
 } from './appUpdate'
-import { GITHUB_PAGES_BASE, GITHUB_REPO_URL } from './githubConfig'
 import { isNativeCapacitorApp } from './installApp'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
@@ -888,14 +886,14 @@ function WhatsNewModal(props: {
   )
 }
 
-/** Android/iOS: put Schoolie on the home screen / app tray with the bus logo */
+/** Browser only: offer PWA install. Hidden when already installed as APK/PWA. */
 function AndroidInstallCard() {
-  const [standalone, setStandalone] = useState(() => isStandaloneApp())
+  const [standalone, setStandalone] = useState(() => isStandaloneApp() || isNativeCapacitorApp())
   const [canPrompt, setCanPrompt] = useState(() => hasNativeInstallPrompt())
   const [busy, setBusy] = useState(false)
   const [dismissed, setDismissed] = useState(() => {
     try {
-      return sessionStorage.getItem('schoolie-install-dismissed') === '1'
+      return localStorage.getItem('schoolie-install-dismissed') === '1'
     } catch {
       return false
     }
@@ -905,7 +903,7 @@ function AndroidInstallCard() {
 
   useEffect(() => {
     const unsub = subscribeInstallPrompt(() => setCanPrompt(hasNativeInstallPrompt()))
-    const onChange = () => setStandalone(isStandaloneApp())
+    const onChange = () => setStandalone(isStandaloneApp() || isNativeCapacitorApp())
     window.matchMedia('(display-mode: standalone)').addEventListener?.('change', onChange)
     return () => {
       unsub()
@@ -913,31 +911,14 @@ function AndroidInstallCard() {
     }
   }, [])
 
-  if (standalone) {
-    return (
-      <div className="card install-card install-card-done">
-        <div className="install-card-row">
-          <img src="./pwa-192.png" alt="" className="install-logo" width={48} height={48} />
-          <div>
-            <strong>Schoolie is installed on this phone</strong>
-            <p className="muted" style={{ margin: '4px 0 0' }}>
-              You&apos;re in the full-screen app — open it from your home screen / app tray anytime.
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
+  // Already in the app — never show install status fluff
+  if (standalone || isNativeCapacitorApp()) return null
   if (dismissed) return null
 
   async function onInstall() {
     setBusy(true)
     try {
       const result = await promptInstall()
-      if (result === 'unavailable') {
-        // Fall through — steps below stay visible
-      }
       if (result === 'accepted') setStandalone(true)
     } finally {
       setBusy(false)
@@ -947,7 +928,7 @@ function AndroidInstallCard() {
   function dismiss() {
     setDismissed(true)
     try {
-      sessionStorage.setItem('schoolie-install-dismissed', '1')
+      localStorage.setItem('schoolie-install-dismissed', '1')
     } catch {
       /* ignore */
     }
@@ -956,48 +937,30 @@ function AndroidInstallCard() {
   return (
     <div className="card install-card">
       <div className="install-card-row">
-        <img src="./pwa-192.png" alt="Schoolie" className="install-logo" width={56} height={56} />
+        <img src="./pwa-192.png" alt="Schoolie" className="install-logo" width={48} height={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <strong>Install Schoolie on this phone</strong>
+          <strong>Add to home screen</strong>
           <p className="muted" style={{ margin: '4px 0 10px' }}>
-            {android
-              ? 'Add the school bus icon to your Android home screen / app tray. Opens full-screen like a normal app — free, offline-capable, no Play Store needed.'
-              : ios
-                ? 'Add Schoolie to your Home Screen for a full-screen app icon.'
-                : 'Install Schoolie as an app on this device for a home-screen icon.'}
+            Optional — open Schoolie like a normal app.
           </p>
           {canPrompt ? (
             <button
               type="button"
               className="btn btn-primary"
-              style={{ width: '100%', minHeight: 48 }}
+              style={{ width: '100%', minHeight: 44 }}
               disabled={busy}
               onClick={() => void onInstall()}
             >
-              {busy ? 'Installing…' : 'Install app · add icon'}
+              {busy ? '…' : 'Install'}
             </button>
           ) : (
-            <ol className="install-steps">
-              {android ? (
-                <>
-                  <li>Open this page in <strong>Chrome</strong> (not an in-app browser)</li>
-                  <li>Tap the <strong>⋮</strong> menu (top right)</li>
-                  <li>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong></li>
-                  <li>Confirm — the Schoolie bus logo appears in your app tray</li>
-                </>
-              ) : ios ? (
-                <>
-                  <li>Tap the <strong>Share</strong> button in Safari</li>
-                  <li>Scroll and tap <strong>Add to Home Screen</strong></li>
-                  <li>Tap <strong>Add</strong> — Schoolie appears on your home screen</li>
-                </>
-              ) : (
-                <>
-                  <li>Use your browser menu</li>
-                  <li>Choose <strong>Install app</strong> or <strong>Add to Home screen</strong></li>
-                </>
-              )}
-            </ol>
+            <p className="muted" style={{ fontSize: '0.85rem', margin: '0 0 8px' }}>
+              {android
+                ? 'Chrome ⋮ → Install app'
+                : ios
+                  ? 'Safari Share → Add to Home Screen'
+                  : 'Browser menu → Install app'}
+            </p>
           )}
           <button type="button" className="install-dismiss" onClick={dismiss}>
             Not now
@@ -1075,10 +1038,6 @@ function HomeScreen(props: {
               ? 'No purchases yet — scan a receipt to start'
               : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} · ${props.groups.length} group${props.groups.length === 1 ? '' : 's'}`}
           </div>
-          <div className="hero-pills">
-            <span className="pill pill-accent">Free · local only</span>
-            <span className="pill">Scan · remember · group</span>
-          </div>
         </div>
       </section>
 
@@ -1099,10 +1058,7 @@ function HomeScreen(props: {
       {props.breakdown.length === 0 ? (
         <div className="empty empty-soft">
           <div className="empty-icon">📊</div>
-          <p>
-            After you scan, receipts land in groups the AI invents (engine parts, electrical, etc.).
-            Tap <strong>Regroup</strong> anytime to re-sort.
-          </p>
+          <p>No purchases yet. Scan a receipt to start.</p>
         </div>
       ) : (
         <div className="card category-list">
@@ -1347,34 +1303,12 @@ function ScanScreen(props: {
         <LogoMark size={36} />
       </header>
 
-      <div className="banner banner-info">
-        {props.rejected ? (
-          <>
-            <strong>Retry #{props.rejected.attempt} — AIs know the last answer was wrong.</strong>{' '}
-            They re-read the photo differently and avoid cloning total{' '}
-            {props.rejected.amount != null
-              ? `$${props.rejected.amount.toFixed(2)}`
-              : 'and those line items'}
-            . Still 100% on your phone.
-          </>
-        ) : (
-          <>
-            <strong>Free · local only · max power {props.maxPowerMode ? 'ON' : 'OFF'}.</strong>{' '}
-            Layout-first OCR + on-device memory. No cloud keys. Photo never leaves this device for the
-            free team.
-          </>
-        )}
-      </div>
-
-      {!busy && !props.rejected && (
-        <div className="card capture-tips">
-          <strong>Better photo = better read</strong>
-          <ul className="tips-list">
-            <li>Fill the frame with the receipt; crop out the table/hand</li>
-            <li>Flatten the paper; avoid glare and shadows</li>
-            <li>Include the total and any fee lines at the bottom</li>
-            <li>After you save a fix, the phone remembers that store for next time</li>
-          </ul>
+      {props.rejected && (
+        <div className="banner banner-info">
+          <strong>Retry #{props.rejected.attempt}</strong>
+          {props.rejected.amount != null
+            ? ` — avoiding total $${props.rejected.amount.toFixed(2)}`
+            : ''}
         </div>
       )}
 
@@ -2696,24 +2630,20 @@ function OnDeviceMemoryCard() {
     }
   }
 
+  if (stats == null) return null
+  if (stats.vendors === 0 && stats.hints === 0) return null
+
   return (
     <div className="card settings-card">
       <strong>On-device memory</strong>
       <p className="muted" style={{ margin: '6px 0 12px' }}>
-        When you save a receipt (or fix fees / category), this phone remembers that store and
-        product words for the next scan. <strong>Nothing is uploaded</strong> — free and local only.
-      </p>
-      <p style={{ margin: '0 0 12px', fontSize: '0.9rem' }}>
-        {stats == null
-          ? 'Loading…'
-          : stats.vendors === 0 && stats.hints === 0
-            ? 'No memories yet — save a few receipts to teach the phone.'
-            : `${stats.vendors} store${stats.vendors === 1 ? '' : 's'} · ${stats.hints} category hint${stats.hints === 1 ? '' : 's'}`}
+        {stats.vendors} store{stats.vendors === 1 ? '' : 's'} · {stats.hints} category hint
+        {stats.hints === 1 ? '' : 's'} (local only)
       </p>
       <button
         type="button"
         className="btn btn-secondary"
-        disabled={busy || (stats != null && stats.vendors === 0 && stats.hints === 0)}
+        disabled={busy}
         onClick={() => void clearMem()}
       >
         {busy ? 'Clearing…' : 'Clear memory'}
@@ -2797,13 +2727,10 @@ function SettingsScreen(props: {
 
   const [otaStatus, setOtaStatus] = useState<string | null>(null)
   const [otaBusy, setOtaBusy] = useState(false)
-  const [showAdvancedOta, setShowAdvancedOta] = useState(false)
-  const [otaServer, setOtaServer] = useState('')
   const nativeApp = isNativeCapacitorApp()
 
   useEffect(() => {
-    // Always lock to GitHub for normal use
-    void useGitHubUpdates().then(setOtaServer)
+    void useGitHubUpdates()
     void setAutoUpdate(true)
   }, [])
 
@@ -2861,8 +2788,7 @@ function SettingsScreen(props: {
           <div className="card settings-card">
             <strong>Updates</strong>
             <p className="muted" style={{ margin: '6px 0 12px' }}>
-              Install the app <em>once</em>. After that, Schoolie updates itself from GitHub when
-              you open it — no PC, no zip, no reinstall for normal changes.
+              Auto-updates from GitHub when you open the app.
             </p>
             <button
               type="button"
@@ -2871,85 +2797,20 @@ function SettingsScreen(props: {
               disabled={otaBusy}
               onClick={() => void handleOtaCheck()}
             >
-              {otaBusy ? 'Checking…' : 'Check for updates'}
+              {otaBusy ? 'Checking…' : 'Check now'}
             </button>
             {otaStatus && (
               <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.88rem' }}>
                 {otaStatus}
               </p>
             )}
-            <p className="muted" style={{ margin: '12px 0 0', fontSize: '0.82rem' }}>
-              Need a full reinstall?{' '}
-              <a
-                href={`${GITHUB_REPO_URL}/releases/latest/download/schoolie.apk`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Download latest APK
-              </a>
-            </p>
-            <button
-              type="button"
-              className="installer-skip"
-              style={{ marginTop: 8 }}
-              onClick={() => setShowAdvancedOta((v) => !v)}
-            >
-              {showAdvancedOta ? 'Hide advanced' : 'Advanced (custom update server)'}
-            </button>
-            {showAdvancedOta && (
-              <label className="field" style={{ display: 'block', marginTop: 10 }}>
-                <span className="muted" style={{ fontSize: '0.8rem' }}>
-                  Custom server (optional LAN). Leave empty for GitHub.
-                </span>
-                <input
-                  type="url"
-                  inputMode="url"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  placeholder={GITHUB_PAGES_BASE}
-                  value={otaServer}
-                  onChange={(e) => {
-                    setOtaServer(e.target.value)
-                    if (e.target.value.trim()) void setUpdateServer(e.target.value.trim())
-                  }}
-                  style={{ width: '100%', marginTop: 4 }}
-                />
-              </label>
-            )}
           </div>
         )}
 
         <div className="card settings-card">
-          <strong>How you run Schoolie</strong>
-          <p className="muted" style={{ margin: '6px 0 12px' }}>
-            {typeof window !== 'undefined' && window.schoolieDesktop?.isDesktop ? (
-              <>
-                You&apos;re in the <strong>standalone desktop app</strong> (not a browser tab).
-                Receipt AI and data stay free and local on this machine.
-              </>
-            ) : isStandaloneApp() ? (
-              <>
-                You&apos;re in the <strong>installed Android/home-screen app</strong>. Open it from
-                your app tray anytime — free and on-device.
-              </>
-            ) : (
-              <>
-                <strong>Android:</strong> on the home screen, use the yellow{' '}
-                <em>Install Schoolie on this phone</em> card, or Chrome ⋮ →{' '}
-                <em>Install app</em> / <em>Add to Home screen</em>. That puts the bus logo in your
-                app tray.
-                <br />
-                <strong>Computer:</strong> <code style={{ fontSize: '0.85em' }}>npm run app:icon</code>
-              </>
-            )}
-          </p>
-        </div>
-
-        <div className="card settings-card">
           <strong>Max power mode</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Quick switch: when off, all <strong>heavy</strong> free AIs are skipped (Hammer, Titan,
-            Mosaic, Bloom, Prism, Council, …). Everything stays on this phone — no API keys.
+            Off = skip heavy free AIs (faster on older phones).
           </p>
           <label className="power-toggle">
             <input
@@ -2957,17 +2818,16 @@ function SettingsScreen(props: {
               checked={maxPowerMode}
               onChange={(e) => setMaxPowerMode(e.target.checked)}
             />
-            <span>{maxPowerMode ? 'ON — heavy free AIs allowed' : 'OFF — light free team only'}</span>
+            <span>{maxPowerMode ? 'ON' : 'OFF (light team only)'}</span>
           </label>
         </div>
 
         <OnDeviceMemoryCard />
 
         <div className="card settings-card">
-          <strong>Free AIs — enable / disable</strong>
+          <strong>AIs</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Every AI here is free and needs no API key. Heavy ones may not run well on older phones —
-            just turn them off. Core AIs (needed for a basic scan) stay on.
+            Free and on-device. Turn off any that are slow on this phone.
           </p>
           <div className="ai-toggle-list">
             {AI_ROSTER.map((ai) => {
@@ -3034,17 +2894,42 @@ function SettingsScreen(props: {
         </div>
 
         <div className="card settings-card">
-          <strong>Device AI scan</strong>
-          <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Checks whether this phone can run free on-device AIs (WASM, workers, storage, network…).
+          <strong>AI leaderboard</strong>
+          <div className="leaderboard-list">
+            {ranked.map((row) => (
+              <div key={row.profile.id} className="leaderboard-row">
+                <span className="lb-rank">#{row.rank}</span>
+                <span className="lb-emoji">{row.profile.emoji}</span>
+                <div className="lb-body">
+                  <strong>{row.profile.name}</strong>
+                  <div className="muted" style={{ fontSize: '0.78rem' }}>
+                    {row.stats.wins} win{row.stats.wins === 1 ? '' : 's'} · {row.stats.scans} scan
+                    {row.stats.scans === 1 ? '' : 's'}
+                    {row.avgRating != null ? ` · ★ ${row.avgRating}` : ''}
+                  </div>
+                </div>
+                <span className="lb-score">{Math.round(row.score)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <details className="card settings-card">
+          <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced / developer</summary>
+          <p className="muted" style={{ margin: '10px 0 12px', fontSize: '0.85rem' }}>
+            Device probe, AI tests, roster, debug tools.
           </p>
+
+        <div style={{ marginTop: 12 }}>
+          <strong>Device AI scan</strong>
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-secondary"
+            style={{ width: '100%', marginTop: 8 }}
             disabled={probing}
             onClick={() => void handleDeviceScan()}
           >
-            {probing ? 'Scanning device…' : 'Scan this device'}
+            {probing ? 'Scanning…' : 'Scan this device'}
           </button>
           {deviceProbe && (
             <div className="device-probe-results">
@@ -3072,21 +2957,16 @@ function SettingsScreen(props: {
           )}
         </div>
 
-        <div className="card settings-card">
-          <strong>Free AI stability test</strong>
-          <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Runs <strong>every</strong> free AI in the roster — OCR engines (Forge, Lens, Ruler, Wedge,
-            Prism, Bloom, Mosaic, Hammer, Titan, Scout), parsers (Ledger, Sieve, Cashier, Clerk,
-            Arbiter, Quorum, Council), and Seeker. Heavy ones can take a while; none are skipped on
-            purpose.
-          </p>
+        <div style={{ marginTop: 16 }}>
+          <strong>AI stability test</strong>
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-secondary"
+            style={{ width: '100%', marginTop: 8 }}
             disabled={stabilityRunning}
             onClick={() => void handleStabilityTest()}
           >
-            {stabilityRunning ? 'Testing free AIs…' : 'Test free AIs'}
+            {stabilityRunning ? 'Testing…' : 'Test free AIs'}
           </button>
           {stabilityStatus && (
             <p className="muted" style={{ marginTop: 10 }}>
@@ -3114,72 +2994,18 @@ function SettingsScreen(props: {
           )}
         </div>
 
-        <div className="card settings-card">
-          <strong>App version</strong>
-          <p className="muted" style={{ margin: '6px 0 12px' }}>
-            You are running <strong style={{ color: 'var(--text)' }}>{formatVersionLabel()}</strong>
-            {props.settings.lastSeenVersion
-              ? ` · last acknowledged ${formatVersionLabel(props.settings.lastSeenVersion)}`
-              : ' · release notes not acknowledged yet'}
-          </p>
-          <button type="button" className="btn btn-secondary" onClick={props.onShowWhatsNew}>
-            What&apos;s new / version history
-          </button>
-        </div>
-
-        <div className="card settings-card">
-          <strong>AI roster (all free · no keys)</strong>
-          <p className="muted" style={{ margin: '6px 0 12px' }}>
-            On-device free AIs plus <strong>Seeker</strong>, which searches the free public web for
-            product/SKU info (needs network + this app&apos;s preview/dev server). No paid APIs.
-          </p>
-          <div className="ai-roster-list">
-            {AI_ROSTER.map((ai) => (
-              <div key={ai.id} className="ai-roster-row">
-                <div className="ai-roster-icon" style={{ background: `${ai.color}22`, color: ai.color }}>
-                  {ai.emoji}
-                </div>
-                <div className="ai-roster-body">
-                  <div className="ai-roster-title">
-                    {ai.name}
-                    <span className="ai-cost-pill cost-free">free</span>
-                    <span className="ai-status-dot on">ready</span>
-                  </div>
-                  <div className="muted" style={{ fontSize: '0.82rem' }}>
-                    {ai.fullName} · power {ai.power}/5
-                  </div>
-                  <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
-                    {ai.role}
-                  </div>
-                  <div className="muted" style={{ fontSize: '0.75rem', marginTop: 2 }}>
-                    Engine: {ai.engine}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card settings-card">
-          <strong>Debug scans (for the coding agent)</strong>
-          <p className="muted" style={{ margin: '6px 0 12px' }}>
-            When a scan is wrong, use <strong>Report bad scan</strong> on the review screen. If
-            you&apos;re on this project&apos;s preview/dev server, reports land in{' '}
-            <code>debug-scans/</code> so the agent can open the photo and AI outputs.
-          </p>
+        <div style={{ marginTop: 16 }}>
+          <strong>Debug scans</strong>
           <button
             type="button"
             className="btn btn-secondary"
+            style={{ width: '100%', marginTop: 8 }}
             disabled={debugLoading}
             onClick={() => void refreshDebugReports()}
           >
             {debugLoading ? 'Refreshing…' : 'Refresh debug list'}
           </button>
-          {debugReports.length === 0 ? (
-            <p className="muted" style={{ marginTop: 12 }}>
-              No remote reports yet (or this host can&apos;t receive them — use download fallback).
-            </p>
-          ) : (
+          {debugReports.length > 0 && (
             <div className="debug-list" style={{ marginTop: 12 }}>
               {debugReports.map((r) => (
                 <div key={r.id} className="debug-list-row">
@@ -3188,110 +3014,56 @@ function SettingsScreen(props: {
                       {r.id}
                     </strong>
                     <div className="muted" style={{ fontSize: '0.8rem' }}>
-                      {r.vendor || '—'} · {r.amount != null ? `$${r.amount}` : 'no total'} ·{' '}
-                      {r.aisUsed?.join(', ') || 'AIs n/a'}
+                      {r.vendor || '—'} · {r.amount != null ? `$${r.amount}` : 'no total'}
                     </div>
-                    <div className="muted" style={{ fontSize: '0.78rem' }}>{r.userNote}</div>
                   </div>
                 </div>
               ))}
             </div>
           )}
         </div>
+        </details>
 
         <div className="card settings-card">
-          <strong>AI leaderboard</strong>
+          <strong>App version</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Ranked by best-scan wins, ✓/✗ field marks (weights future scans), and how often each
-            free AI runs.
+            <strong style={{ color: 'var(--text)' }}>{formatVersionLabel()}</strong>
           </p>
-          <div className="leaderboard-list">
-            {ranked.map((row) => (
-              <div key={row.profile.id} className="leaderboard-row">
-                <span className="lb-rank">#{row.rank}</span>
-                <span className="lb-emoji">{row.profile.emoji}</span>
-                <div className="lb-body">
-                  <strong>{row.profile.name}</strong>
-                  <div className="muted" style={{ fontSize: '0.78rem' }}>
-                    {row.stats.wins} win{row.stats.wins === 1 ? '' : 's'} · {row.stats.scans} scan
-                    {row.stats.scans === 1 ? '' : 's'}
-                    {row.avgRating != null ? ` · ★ ${row.avgRating}` : ''}
-                    {(row.stats.rights ?? 0) + (row.stats.wrongs ?? 0) > 0
-                      ? ` · ✓${row.stats.rights ?? 0} ✗${row.stats.wrongs ?? 0}`
-                      : ''}
-                  </div>
-                </div>
-                <span className="lb-score">{Math.round(row.score)}</span>
-              </div>
-            ))}
-          </div>
+          <button type="button" className="btn btn-secondary" onClick={props.onShowWhatsNew}>
+            What&apos;s new
+          </button>
         </div>
 
-        <div className="card settings-card update-scan-card">
-          <strong>Scan for updates</strong>
-          <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Checks the server for a newer Schoolie build and asks this device for a waiting install.
-            Use this when you want to confirm you&apos;re on the latest version.
-          </p>
-
-          {updateStatus.state === 'idle' && (
-            <p className="update-status update-status-idle">
-              Installed build: <strong>{formatVersionLabel()}</strong> · not checked yet this
-              session
-            </p>
-          )}
-          {updateStatus.state === 'checking' && (
-            <div className="update-status update-status-checking">
-              <div className="spinner spinner-inline" />
-              Scanning for a newer version…
-            </div>
-          )}
-          {updateStatus.state === 'current' && (
-            <div className="update-status update-status-ok" role="status">
-              <div className="update-status-title">✓ You&apos;re up to date</div>
-              <p>{updateStatus.message}</p>
-              <p className="muted update-checked-at">
-                Checked {new Date(updateStatus.checkedAt).toLocaleString()} · server v
-                {updateStatus.remoteVersion}
-              </p>
-            </div>
-          )}
-          {updateStatus.state === 'available' && (
-            <div className="update-status update-status-new" role="status">
-              <div className="update-status-title">↑ Update available</div>
-              <p>{updateStatus.message}</p>
-              <p className="muted update-checked-at">
-                You: v{updateStatus.localVersion} · Server: v{updateStatus.remoteVersion}
-              </p>
-            </div>
-          )}
-          {updateStatus.state === 'error' && (
-            <div className="update-status update-status-err" role="alert">
-              <div className="update-status-title">Couldn&apos;t check</div>
-              <p>{updateStatus.message}</p>
-            </div>
-          )}
-
-          <div className="row-actions stack" style={{ marginTop: 12 }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={updateStatus.state === 'checking'}
-              onClick={() => void handleCheckUpdates()}
-            >
-              {updateStatus.state === 'checking' ? 'Scanning…' : 'Scan for updates'}
-            </button>
+        {!nativeApp && (
+          <div className="card settings-card update-scan-card">
+            <strong>Browser updates</strong>
             {updateStatus.state === 'available' && (
+              <p className="muted" style={{ margin: '6px 0 10px' }}>
+                {updateStatus.message}
+              </p>
+            )}
+            <div className="row-actions stack" style={{ marginTop: 8 }}>
               <button
                 type="button"
                 className="btn btn-secondary"
-                onClick={() => applyWaitingUpdate()}
+                disabled={updateStatus.state === 'checking'}
+                onClick={() => void handleCheckUpdates()}
               >
-                Reload to update now
+                {updateStatus.state === 'checking' ? 'Checking…' : 'Check for updates'}
               </button>
-            )}
+              {updateStatus.state === 'available' && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => applyWaitingUpdate()}
+                >
+                  Reload to update
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
         <div className="field">
           <label htmlFor="projectName">Project name</label>
           <input
@@ -3300,18 +3072,6 @@ function SettingsScreen(props: {
             onChange={(e) => setProjectName(e.target.value)}
             placeholder="My Schoolie"
           />
-        </div>
-
-        <div className="card settings-card">
-          <strong>Install on your phone</strong>
-          <ul className="help-list">
-            <li>
-              <strong>iPhone:</strong> Safari → Share → Add to Home Screen
-            </li>
-            <li>
-              <strong>Android:</strong> Chrome → menu → Install app / Add to Home screen
-            </li>
-          </ul>
         </div>
 
         <button type="submit" className="btn btn-primary" disabled={saving}>
