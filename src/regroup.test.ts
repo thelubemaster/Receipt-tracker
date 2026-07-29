@@ -12,7 +12,6 @@ function base(partial: Partial<Purchase> = {}): Purchase {
     categoryId: 'misc',
     vendor: 'NAPA',
     notes: '',
-    projectId: 'p1',
     receiptImageId: null,
     lineItems: [],
     aisUsed: [],

@@ -4,11 +4,11 @@ import type { Purchase } from './types'
 
 function p(partial: Partial<Purchase> & Pick<Purchase, 'id' | 'amount' | 'categoryId'>): Purchase {
   return {
+    projectId: 'p1',
     date: '2026-07-01',
     description: 'Item',
     vendor: '',
     notes: '',
-    projectId: 'p1',
     receiptImageId: null,
     lineItems: [],
     aisUsed: [],

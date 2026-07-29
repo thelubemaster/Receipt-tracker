@@ -52,7 +52,6 @@ describe('localSmartPass', () => {
       categoryId: 'towing',
       vendor: 'Falzone Towing Service Inc',
       notes: '',
-      projectId: 'p1',
     receiptImageId: null,
       lineItems: [
         { id: '1', description: 'Towing', amount: 90, categoryId: 'towing' },

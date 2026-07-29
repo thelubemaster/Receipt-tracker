@@ -16,7 +16,6 @@ function purchase(partial: Partial<Purchase> & Pick<Purchase, 'vendor' | 'catego
     description: 'Tow',
     amount: 200,
     notes: '',
-    projectId: 'p1',
     receiptImageId: null,
     lineItems: [
       {
