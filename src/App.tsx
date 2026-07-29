@@ -2916,7 +2916,6 @@ function SettingsScreen(props: {
                 />
               </label>
             )}
-            )}
           </div>
         )}
 
