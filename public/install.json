@@ -1,5 +1,5 @@
 {
-  "version": "1.22.1",
+  "version": "1.23.0",
   "name": "Schoolie Cost Tracker",
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk",
   "installZipUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/Schoolie-Install.zip",
@@ -8,5 +8,5 @@
   "installerFile": "00-INSTALL-Schoolie.apk",
   "releasesUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest",
   "repoUrl": "https://github.com/thelubemaster/Receipt-tracker",
-  "notes": "Download Schoolie-Install.zip, extract, tap 00-INSTALL-Schoolie.apk (not the HTML). Android blocks HTML\u2192APK local links."
+  "notes": "Automatic updates from GitHub Releases"
 }

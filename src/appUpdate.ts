@@ -394,10 +394,20 @@ export async function notifyNativeAppReady(): Promise<void> {
   }
 }
 
+/**
+ * Silent update on app open:
+ * - force GitHub as source (forget old LAN PC addresses)
+ * - if a newer web-update.zip is on Releases, download & apply
+ */
 export async function autoUpdateIfAvailable(
   onStatus?: (msg: string) => void,
 ): Promise<void> {
   if (!isNativeCapacitorApp()) return
+  try {
+    await useGitHubUpdates()
+  } catch {
+    /* ignore */
+  }
   if (!(await getAutoUpdate())) return
   const check = await checkForAppBundleUpdate()
   if (check.status !== 'available') return

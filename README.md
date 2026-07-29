@@ -1,98 +1,41 @@
-# Schoolie Cost Tracker (Receipt Tracker)
+# Schoolie Cost Tracker
 
-Free, on-device receipt scanning and cost tracking for a school bus conversion (**schoolie**).
+Free on-device receipt scanning for a school bus conversion.
 
 **Repo:** [thelubemaster/Receipt-tracker](https://github.com/thelubemaster/Receipt-tracker)
 
 ---
 
-## Download the Android app
+## Install (one step)
 
-### Easiest: install pack (zip)
+### On your Android phone
 
-**[⬇ Download Schoolie-Install.zip](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/Schoolie-Install.zip)**
+1. Open this link and download the file:  
+   **[⬇ schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
+2. Open **schoolie.apk** → **Install** → **Open**
 
-1. Extract the zip on your phone  
-2. Tap **`00-INSTALL-Schoolie.apk`** (that file *is* the installer)  
-3. Tap **Install** → **Open**  
+That’s it. Allow “Install unknown apps” only if Android asks.
 
-Do **not** rely on the `.html` file for install — Android/Chrome cannot open a neighboring APK from a local HTML page (`ERR_FILE_NOT_FOUND`).
+### Updates (automatic)
 
-### One-file APK
+After install, open the app on Wi‑Fi or mobile data. It checks GitHub and installs a small update package by itself.  
+You only re-download the APK for rare native changes (or if something is badly broken).
 
-**[⬇ Download schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
-
-Same link every time — always the latest release.
-
-Or open the [Releases page](https://github.com/thelubemaster/Receipt-tracker/releases/latest).
-
-### Install on your phone
-
-1. Open **00-OPEN-ME-TO-INSTALL.html** (from the zip) or **schoolie.apk**
-2. Allow **Install unknown apps** for Files / Chrome if Android asks
-3. Tap **Install** → **Open**
-
-No Play Store account required. Your data stays on the device.
-
-### Web installer
-
-After GitHub Pages is enabled, Android phones can also open:
-
-**https://thelubemaster.github.io/Receipt-tracker/**
-
-and tap **Download app from GitHub**.
+Settings → **Check for updates** if you want to force a check.
 
 ---
 
-## Features
-
-- Photograph receipts → local OCR/AI suggests vendor, total, category
-- Purchases, categories, totals — stored on your device only
-- **Download APK from GitHub** + **OTA web updates** from the same repo (no reinstall for most changes)
-- Desktop (Electron) and browser/PWA modes
-
-## How updates work
-
-On every push to `main`/`master`, GitHub Actions:
-
-1. Builds the web app → **GitHub Pages**
-2. Builds the **Android APK**
-3. Publishes a **Release** `vX.Y.Z` with:
-   - `schoolie.apk` ← install / reinstall the app
-   - `web-update.zip` ← small OTA package for already-installed apps
-
-Installed apps check GitHub for newer web bundles (Settings → Check for updates).
-
-### One-time GitHub setup
-
-1. **Settings → Pages → Source: GitHub Actions**
-2. Push this project (`master` or `main`)
-3. Wait for the **Release app** workflow (builds APK + web)
-4. Share the download link above
-
-## Develop locally
+## Develop
 
 ```bash
 npm install
-npm run dev          # web UI
-npm run apk          # build APK on a machine with Android SDK
-npm run start:android  # optional LAN installer (HTTP :4190)
-```
-
-```bash
+npm run dev
 npm run build
-npm test
+npm run apk          # build APK (needs Android SDK)
 ```
 
-## Version
-
-Bump both:
-
-- `package.json` → `version`
-- `src/version.ts` → `APP_VERSION` (+ changelog entry)
-
-Then push — Actions publishes release `v…` with a fresh APK.
+Publish: push to `main`, attach `schoolie.apk` + `web-update.zip` to a GitHub Release tagged `vX.Y.Z` matching `package.json` version.
 
 ## Privacy
 
-All receipt photos and purchases stay on your device. No cloud account required.
+Receipts and purchases stay on your device. No account required.

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.22.1'
+export const APP_VERSION = '1.23.0'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.23.0',
+    date: '2026-07-29',
+    title: 'Simple install + automatic GitHub updates',
+    changes: [
+      'One APK download — no zip packs or PC server required',
+      'App auto-updates from GitHub when you open it',
+      'Settings: one “Check for updates” button (advanced options hidden)',
+    ],
+  },
   {
     version: '1.22.1',
     date: '2026-07-28',
