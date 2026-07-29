@@ -48,6 +48,7 @@ import {
   clearStorageNotice,
 } from './db'
 import { APP_NAME_SHORT } from './brand'
+import { normalizePickedImage, revokePreviewUrl } from './imagePick'
 import { ProjectsHome } from './ProjectsHome'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
 import { downloadCsv, downloadPdfSummary } from './exportData'
@@ -1115,11 +1116,16 @@ function ProjectEditScreen(props: {
   }, [coverPreview])
 
   async function onPickCover(file: File | null) {
-    if (!file || !file.type.startsWith('image/')) return
-    const id = await saveImage(file)
-    setCoverId(id)
-    if (coverPreview?.startsWith('blob:')) URL.revokeObjectURL(coverPreview)
-    setCoverPreview(URL.createObjectURL(file))
+    if (!file) return
+    try {
+      const normalized = await normalizePickedImage(file)
+      const id = await saveImage(normalized.blob)
+      setCoverId(id)
+      revokePreviewUrl(coverPreview)
+      setCoverPreview(normalized.previewUrl)
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Could not open that photo.')
+    }
   }
 
   async function save() {
@@ -1199,8 +1205,7 @@ function ProjectEditScreen(props: {
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
-          capture="environment"
+          accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
           hidden
           onChange={(e) => void onPickCover(e.target.files?.[0] ?? null)}
         />
@@ -1589,13 +1594,18 @@ function ScanScreen(props: {
 
   async function handleFile(file: File | null) {
     if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setScanError('Please choose a photo of the receipt.')
-      props.onError('Please choose a photo of the receipt.')
-      return
+    try {
+      // Android "Recent" often has empty MIME / HEIC / partial streams — normalize first
+      const normalized = await normalizePickedImage(file)
+      await runScan(normalized.blob, normalized.previewUrl)
+    } catch (e) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : 'Could not open that photo. Try another album or Take photo.'
+      setScanError(msg)
+      props.onError(msg)
     }
-    const previewUrl = URL.createObjectURL(file)
-    await runScan(file, previewUrl)
   }
 
   function clearHeldPhoto() {
@@ -1679,7 +1689,7 @@ function ScanScreen(props: {
               <input
                 className="hidden-input"
                 type="file"
-                accept="image/*"
+                accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 capture="environment"
                 onChange={(e) => {
                   clearHeldPhoto()
@@ -1719,7 +1729,7 @@ function ScanScreen(props: {
               <input
                 className="hidden-input"
                 type="file"
-                accept="image/*"
+                accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 capture="environment"
                 onChange={(e) => {
                   clearHeldPhoto()
@@ -1750,7 +1760,7 @@ function ScanScreen(props: {
               <input
                 className="hidden-input"
                 type="file"
-                accept="image/*"
+                accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 capture="environment"
                 onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
               />
@@ -1760,7 +1770,7 @@ function ScanScreen(props: {
               <input
                 className="hidden-input"
                 type="file"
-                accept="image/*"
+                accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
               />
             </label>
