@@ -882,20 +882,41 @@ a {
 
 .receipt-preview-sm {
   max-height: 140px;
+  min-height: 80px;
+  width: 100%;
   object-fit: cover;
   margin-bottom: 10px;
   border-radius: 12px;
+  background: #1a1e28;
+  display: block;
 }
 
 .receipt-preview {
   width: 100%;
-  max-height: 220px;
+  max-height: 280px;
+  min-height: 140px;
   object-fit: contain;
   border-radius: var(--radius);
-  background: #0a0c10;
+  background: #1a1e28;
   border: 1px solid var(--border);
   margin-bottom: 14px;
   box-shadow: var(--shadow-soft);
+  display: block;
+}
+
+.receipt-preview-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 140px;
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  border-radius: var(--radius);
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 14px;
 }
 
 .muted {

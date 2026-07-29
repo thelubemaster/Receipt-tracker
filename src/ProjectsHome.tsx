@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { APP_NAME, APP_TAGLINE } from './brand'
 import { getImageUrl, listProjects, listPurchases } from './db'
+import { SafeImage } from './SafeImage'
 import { formatMoney } from './money'
 import { BrandLockup, LogoMark } from './Logo'
 import type { Project } from './types'
@@ -106,7 +107,12 @@ export function ProjectsHome(props: {
             >
               <div className="project-card-media">
                 {p.coverUrl ? (
-                  <img src={p.coverUrl} alt="" />
+                  <SafeImage
+                    src={p.coverUrl}
+                    alt=""
+                    missingClassName="project-card-placeholder"
+                    missingText=""
+                  />
                 ) : (
                   <div className="project-card-placeholder">
                     <LogoMark size={40} />

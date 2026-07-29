@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.3'
+export const APP_VERSION = '1.24.4'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.4',
+    date: '2026-07-29',
+    title: 'Photos actually show (not blank boxes)',
+    changes: [
+      'Compress camera/gallery photos before display and storage',
+      'Stop using huge data-URLs that Android WebView paints as blank',
+      'Store images as base64 with magic-byte checks so blanks never load',
+      'Broken photos show a clear message instead of an empty frame',
+    ],
+  },
   {
     version: '1.24.3',
     date: '2026-07-29',

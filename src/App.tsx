@@ -50,6 +50,7 @@ import {
 import { APP_NAME_SHORT } from './brand'
 import { normalizePickedImage, revokePreviewUrl } from './imagePick'
 import { ProjectsHome } from './ProjectsHome'
+import { SafeImage } from './SafeImage'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
 import { downloadCsv, downloadPdfSummary } from './exportData'
 import {
@@ -1197,7 +1198,7 @@ function ProjectEditScreen(props: {
           onClick={() => fileRef.current?.click()}
         >
           {coverPreview ? (
-            <img src={coverPreview} alt="" className="project-cover-img" />
+            <SafeImage src={coverPreview} alt="Cover" className="project-cover-img" />
           ) : (
             <span className="muted">Tap to add a cover photo</span>
           )}
@@ -1343,7 +1344,7 @@ function HomeScreen(props: {
       <section className="hero-card project-hero">
         {coverUrl && (
           <div className="project-hero-cover">
-            <img src={coverUrl} alt="" />
+            <SafeImage src={coverUrl} alt="Project cover" />
           </div>
         )}
         <div className="hero-inner">
@@ -1636,7 +1637,11 @@ function ScanScreen(props: {
       {busy ? (
         <div className="card agent-status">
           {heldPreview && (
-            <img className="receipt-preview receipt-preview-sm" src={heldPreview} alt="Scanning" />
+            <SafeImage
+              className="receipt-preview receipt-preview-sm"
+              src={heldPreview}
+              alt="Scanning"
+            />
           )}
           <div className="spinner" />
           <div className="status-title">{status}</div>
@@ -1659,7 +1664,7 @@ function ScanScreen(props: {
       ) : scanError && heldBlob ? (
         <div className="card scan-retry-card">
           {heldPreview && (
-            <img className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+            <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
           )}
           <div className="banner banner-error" role="alert" style={{ margin: 0 }}>
             {scanError}
@@ -1711,7 +1716,7 @@ function ScanScreen(props: {
         </div>
       ) : heldBlob && heldPreview && !props.rejected ? (
         <div className="card scan-retry-card">
-          <img className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+          <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
           <strong className="scan-retry-title">Ready to scan again</strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
             Re-run the free AIs on this photo, or pick a better shot.
@@ -2193,7 +2198,11 @@ function PurchaseFormScreen(props: {
       </header>
 
       {props.receiptPreviewUrl && (
-        <img className="receipt-preview" src={props.receiptPreviewUrl} alt="Receipt preview" />
+        <SafeImage
+          className="receipt-preview"
+          src={props.receiptPreviewUrl}
+          alt="Receipt preview"
+        />
       )}
 
       {props.onTryAgain && fromScan && (
@@ -2836,7 +2845,9 @@ function DetailScreen(props: {
         <span style={{ width: 44 }} />
       </header>
 
-      {previewUrl && <img className="receipt-preview" src={previewUrl} alt="Receipt" />}
+      {previewUrl ? (
+        <SafeImage className="receipt-preview" src={previewUrl} alt="Receipt" />
+      ) : null}
 
       <div className="card detail-grid">
         <div className="detail-row">

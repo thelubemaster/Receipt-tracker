@@ -9,6 +9,12 @@
  */
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { sanitizeDisabledAis } from './aiRoster'
+import {
+  blobToDataUrl as imageBlobToDataUrl,
+  blobToDisplayUrl,
+  compressImageToJpeg,
+  SAFE_DATA_URL_CHARS,
+} from './imagePick'
 import type { LeaderboardMap } from './leaderboard'
 import {
   emptyReceiptMemory,
@@ -30,11 +36,12 @@ interface SchoolieDB extends DBSchema {
   images: {
     key: string
     /**
-     * Prefer `data` (ArrayBuffer) — raw Blobs in IndexedDB often come back empty
-     * or unreadable on Android WebView after restarts / OTA. `blob` is legacy.
+     * Prefer `b64` (base64 string) — most reliable on Android WebView.
+     * `data` ArrayBuffer is secondary; raw `blob` is legacy and often empty.
      */
     value: {
       id: string
+      b64?: string
       data?: ArrayBuffer
       type?: string
       blob?: Blob
@@ -72,9 +79,10 @@ const LS_MEMORY = 'schoolie.v1.memory'
 const LS_IMAGES = 'schoolie.v1.images'
 const LS_FORCE_LOCAL = 'schoolie.v1.force-local'
 
-/** Stored image row (ArrayBuffer preferred; Blob is legacy). */
+/** Stored image row — b64 is the reliable source of truth on Android. */
 type ImageRow = {
   id: string
+  b64?: string
   data?: ArrayBuffer
   type?: string
   blob?: Blob
@@ -83,9 +91,55 @@ type ImageRow = {
 type StorageMode = 'idb' | 'local'
 
 const DEFAULT_IMAGE_TYPE = 'image/jpeg'
-/** localStorage backup of recent photos (data URLs) — secondary to IndexedDB. */
-const LS_IMAGE_MAX_BYTES = 1_800_000
+/** localStorage backup of recent photos (compact data URLs). */
+const LS_IMAGE_MAX_CHARS = SAFE_DATA_URL_CHARS
 const LS_IMAGE_MAX_COUNT = 40
+
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  const chunk = 0x8000
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk)
+    // apply avoids spread-stack limits on large photos
+    binary += String.fromCharCode.apply(null, slice as unknown as number[])
+  }
+  return btoa(binary)
+}
+
+function base64ToBytes(b64: string): Uint8Array | undefined {
+  try {
+    const binary = atob(b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  } catch {
+    return undefined
+  }
+}
+
+/** Reject empty / non-image payloads that paint as blank. */
+function isValidImageBytes(bytes: Uint8Array): boolean {
+  if (!bytes || bytes.length < 24) return false
+  // JPEG
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return true
+  // PNG
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return true
+  // GIF
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return true
+  // WEBP
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45
+  ) {
+    return true
+  }
+  return false
+}
 
 let mode: StorageMode | null = null
 let idb: IDBPDatabase<SchoolieDB> | null = null
@@ -745,15 +799,6 @@ export async function deletePurchase(id: string): Promise<void> {
   }
 }
 
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader()
-    r.onload = () => resolve(String(r.result || ''))
-    r.onerror = () => reject(r.error ?? new Error('read failed'))
-    r.readAsDataURL(blob)
-  })
-}
-
 async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer()
   return new Promise((resolve, reject) => {
@@ -776,10 +821,12 @@ function dataUrlToBlob(dataUrl: string): Blob | undefined {
     const mime = (mimeMatch?.[1] || DEFAULT_IMAGE_TYPE).trim() || DEFAULT_IMAGE_TYPE
     const isBase64 = /;base64/i.test(header)
     if (isBase64) {
-      const binary = atob(body)
-      const bytes = new Uint8Array(binary.length)
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-      return new Blob([bytes], { type: mime })
+      const bytes = base64ToBytes(body)
+      if (!bytes || !isValidImageBytes(bytes)) return undefined
+      // Copy into a plain ArrayBuffer-backed view for Blob
+      const copy = new Uint8Array(bytes.byteLength)
+      copy.set(bytes)
+      return new Blob([copy], { type: mime })
     }
     return new Blob([decodeURIComponent(body)], { type: mime })
   } catch {
@@ -787,38 +834,55 @@ function dataUrlToBlob(dataUrl: string): Blob | undefined {
   }
 }
 
-function normalizeImageBlob(blob: Blob | undefined, typeHint?: string): Blob | undefined {
-  if (!blob) return undefined
-  // Empty blobs render as blank images in <img>
-  if (typeof blob.size === 'number' && blob.size <= 0) return undefined
-  const type = (blob.type && blob.type !== 'application/octet-stream'
-    ? blob.type
-    : typeHint || DEFAULT_IMAGE_TYPE
-  ).trim() || DEFAULT_IMAGE_TYPE
-  // Re-wrap so WebView always has a usable MIME type
-  if (blob.type === type) return blob
-  return new Blob([blob], { type })
+function bytesToBlob(bytes: Uint8Array, typeHint?: string): Blob | undefined {
+  if (!isValidImageBytes(bytes)) return undefined
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  const type = (typeHint || DEFAULT_IMAGE_TYPE).trim() || DEFAULT_IMAGE_TYPE
+  return new Blob([copy], { type })
 }
 
 function rowToBlob(row: ImageRow | undefined): Blob | undefined {
   if (!row) return undefined
+  const type = (row.type || DEFAULT_IMAGE_TYPE).trim() || DEFAULT_IMAGE_TYPE
+  // 1) base64 string — most reliable across Android WebView restarts
+  if (row.b64) {
+    const bytes = base64ToBytes(row.b64)
+    if (bytes) {
+      const blob = bytesToBlob(bytes, type)
+      if (blob) return blob
+    }
+  }
+  // 2) ArrayBuffer
   try {
     if (row.data && row.data.byteLength > 0) {
-      return new Blob([row.data], {
-        type: (row.type || DEFAULT_IMAGE_TYPE).trim() || DEFAULT_IMAGE_TYPE,
-      })
+      const bytes = new Uint8Array(row.data)
+      const blob = bytesToBlob(bytes, type)
+      if (blob) return blob
     }
   } catch {
     /* fall through */
   }
-  return normalizeImageBlob(row.blob, row.type)
+  // 3) legacy Blob — may be empty shell on Android; validate after re-read
+  return undefined
+}
+
+async function legacyBlobToValid(blob: Blob | undefined, typeHint?: string): Promise<Blob | undefined> {
+  if (!blob || blob.size <= 0) return undefined
+  try {
+    const buf = await blobToArrayBuffer(blob)
+    const bytes = new Uint8Array(buf)
+    return bytesToBlob(bytes, typeHint || blob.type || DEFAULT_IMAGE_TYPE)
+  } catch {
+    return undefined
+  }
 }
 
 async function saveImageLocal(id: string, blob: Blob): Promise<void> {
   try {
-    if (blob.size <= 0 || blob.size > LS_IMAGE_MAX_BYTES) return
-    const dataUrl = await blobToDataUrl(blob)
-    if (!dataUrl.startsWith('data:')) return
+    if (blob.size <= 0) return
+    const dataUrl = await imageBlobToDataUrl(blob)
+    if (!dataUrl.startsWith('data:image') || dataUrl.length > LS_IMAGE_MAX_CHARS) return
     const imgs = lsRead<Record<string, string>>(LS_IMAGES, {})
     imgs[id] = dataUrl
     const keys = Object.keys(imgs)
@@ -835,7 +899,9 @@ function getImageLocal(id: string): Blob | undefined {
   const imgs = lsRead<Record<string, string>>(LS_IMAGES, {})
   const dataUrl = imgs[id]
   if (!dataUrl) return undefined
-  return normalizeImageBlob(dataUrlToBlob(dataUrl))
+  // Skip oversized / corrupt cache entries that paint blank
+  if (dataUrl.length > LS_IMAGE_MAX_CHARS) return undefined
+  return dataUrlToBlob(dataUrl)
 }
 
 /** Open IDB just for image reads even if the app is in force-local mode. */
@@ -858,28 +924,39 @@ async function openIdbForImages(): Promise<IDBPDatabase<SchoolieDB> | null> {
   }
 }
 
+/** Always store compressed JPEG as base64 (+ ArrayBuffer backup). */
 async function buildImageRow(id: string, blob: Blob): Promise<ImageRow> {
+  const compressed = await compressImageToJpeg(blob)
+  const use = compressed?.blob || blob
   const type =
-    (blob.type && blob.type !== 'application/octet-stream'
-      ? blob.type
+    (use.type && use.type !== 'application/octet-stream'
+      ? use.type
       : DEFAULT_IMAGE_TYPE
     ).trim() || DEFAULT_IMAGE_TYPE
-  const data = await blobToArrayBuffer(blob)
+  const data = await blobToArrayBuffer(use)
+  const bytes = new Uint8Array(data)
+  if (!isValidImageBytes(bytes)) {
+    throw new Error('Image bytes invalid after encode')
+  }
+  const b64 = arrayBufferToBase64(data)
   return {
     id,
+    b64,
     data,
     type,
-    // Keep a Blob copy for older readers; ArrayBuffer is the source of truth
-    blob: new Blob([data], { type }),
     createdAt: new Date().toISOString(),
   }
 }
 
 export async function saveImage(blob: Blob): Promise<string> {
   const id = newId()
-  const typed = normalizeImageBlob(blob) || blob
-  // Always try a localStorage backup so force-local / OTA cannot orphan photos
-  void saveImageLocal(id, typed)
+  // Compress first so storage + later display stay WebView-safe
+  const compressed = await compressImageToJpeg(blob)
+  const typed = compressed?.blob || blob
+  if (!typed || typed.size <= 0) {
+    throw new Error('Could not save photo — image was empty or unreadable.')
+  }
+  await saveImageLocal(id, typed)
   try {
     await ensureStorage()
     if (mode === 'local' || !idb) {
@@ -896,26 +973,25 @@ export async function saveImage(blob: Blob): Promise<string> {
 }
 
 /**
- * Load a receipt / cover photo. Tries IndexedDB (ArrayBuffer or legacy Blob),
- * then localStorage data-URL backup. Never returns an empty blob.
+ * Load a receipt / cover photo.
+ * Validates JPEG/PNG magic bytes so we never return a "blank" shell blob.
  */
 export async function getImage(id: string): Promise<Blob | undefined> {
   if (!id) return undefined
 
-  // 1) localStorage first — fast and reliable for backups (and when force-local)
-  const fromLs = getImageLocal(id)
-  if (fromLs && fromLs.size > 0) return fromLs
-
-  // 2) IndexedDB — even if mode is local (images may still live here)
+  // 1) IndexedDB first (authoritative), then localStorage backup
   try {
     await ensureStorage()
     const db = idb || (await openIdbForImages())
     if (db) {
       const row = (await db.get('images', id)) as ImageRow | undefined
-      const blob = rowToBlob(row)
+      let blob = rowToBlob(row)
+      if (!blob && row?.blob) {
+        blob = await legacyBlobToValid(row.blob, row.type)
+      }
       if (blob && blob.size > 0) {
-        // Self-heal: rewrite legacy Blob-only rows as ArrayBuffer for next load
-        if (row && !row.data && row.blob) {
+        // Self-heal legacy rows → b64
+        if (row && !row.b64) {
           try {
             const healed = await buildImageRow(id, blob)
             await db.put('images', healed)
@@ -931,36 +1007,54 @@ export async function getImage(id: string): Promise<Blob | undefined> {
     console.warn('[schoolie] getImage idb failed', id, e)
   }
 
-  // 3) One more localStorage pass (in case ensureStorage wrote something)
+  // 2) localStorage backup
   return getImageLocal(id)
 }
 
 /**
- * URL safe for <img src>. Prefers data: URLs (more reliable than blob: on some WebViews).
- * Caller should not revoke data: URLs; only revoke if string starts with blob:.
+ * URL safe for <img src>.
+ * Compresses and prefers compact data: or blob: — never multi-MB data URLs
+ * (those paint as blank on Android System WebView).
+ * Caller should only revoke if the string starts with blob:.
  */
 export async function getImageUrl(id: string): Promise<string | undefined> {
   if (!id) return undefined
+
+  // Compact localStorage cache only if small enough to paint
   try {
     const imgs = lsRead<Record<string, string>>(LS_IMAGES, {})
     const cached = imgs[id]
-    if (cached && cached.startsWith('data:image')) return cached
+    if (
+      cached &&
+      cached.startsWith('data:image') &&
+      cached.length <= SAFE_DATA_URL_CHARS &&
+      dataUrlToBlob(cached)
+    ) {
+      return cached
+    }
   } catch {
     /* ignore */
   }
+
   const blob = await getImage(id)
   if (!blob || blob.size <= 0) return undefined
+
   try {
-    const dataUrl = await blobToDataUrl(blob)
-    if (dataUrl.startsWith('data:')) {
-      // Refresh backup for next open
-      void saveImageLocal(id, blob)
-      return dataUrl
+    const url = await blobToDisplayUrl(blob)
+    // Refresh compact localStorage backup when possible
+    if (url.startsWith('data:image') && url.length <= SAFE_DATA_URL_CHARS) {
+      try {
+        const imgs = lsRead<Record<string, string>>(LS_IMAGES, {})
+        imgs[id] = url
+        lsWrite(LS_IMAGES, imgs)
+      } catch {
+        /* ignore */
+      }
     }
+    return url
   } catch {
-    /* fall through */
+    return URL.createObjectURL(blob)
   }
-  return URL.createObjectURL(blob)
 }
 
 function parseSettingsRow(
