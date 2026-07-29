@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { APP_NAME, APP_TAGLINE } from './brand'
-import { getImage, listProjects, listPurchases } from './db'
+import { getImageUrl, listProjects, listPurchases } from './db'
 import { formatMoney } from './money'
 import { BrandLockup, LogoMark } from './Logo'
 import type { Project } from './types'
@@ -26,8 +26,7 @@ export function ProjectsHome(props: {
         const total = purchases.reduce((s, x) => s + (Number(x.amount) || 0), 0)
         let coverUrl: string | null = null
         if (p.coverImageId) {
-          const blob = await getImage(p.coverImageId)
-          if (blob) coverUrl = URL.createObjectURL(blob)
+          coverUrl = (await getImageUrl(p.coverImageId)) ?? null
         }
         enriched.push({ ...p, total, count: purchases.length, coverUrl })
       }
@@ -38,11 +37,11 @@ export function ProjectsHome(props: {
     }
   }, [])
 
-  // Revoke object URLs on unmount / refresh
+  // Revoke blob: URLs only (data: URLs must not be revoked)
   useEffect(() => {
     return () => {
       for (const r of rows || []) {
-        if (r.coverUrl) URL.revokeObjectURL(r.coverUrl)
+        if (r.coverUrl?.startsWith('blob:')) URL.revokeObjectURL(r.coverUrl)
       }
     }
   }, [rows])

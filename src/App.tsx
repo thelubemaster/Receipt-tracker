@@ -27,7 +27,7 @@ import { normalizeCategoryInput } from './agents/keywords'
 import {
   deletePurchase,
   deleteProject,
-  getImage,
+  getImageUrl,
   getProject,
   getPurchase,
   getSettings,
@@ -1099,8 +1099,8 @@ function ProjectEditScreen(props: {
       setDescription(p.description)
       setCoverId(p.coverImageId)
       if (p.coverImageId) {
-        const blob = await getImage(p.coverImageId)
-        if (blob && !cancelled) setCoverPreview(URL.createObjectURL(blob))
+        const url = await getImageUrl(p.coverImageId)
+        if (url && !cancelled) setCoverPreview(url)
       }
     })()
     return () => {
@@ -1110,7 +1110,7 @@ function ProjectEditScreen(props: {
 
   useEffect(() => {
     return () => {
-      if (coverPreview) URL.revokeObjectURL(coverPreview)
+      if (coverPreview?.startsWith('blob:')) URL.revokeObjectURL(coverPreview)
     }
   }, [coverPreview])
 
@@ -1118,7 +1118,7 @@ function ProjectEditScreen(props: {
     if (!file || !file.type.startsWith('image/')) return
     const id = await saveImage(file)
     setCoverId(id)
-    if (coverPreview) URL.revokeObjectURL(coverPreview)
+    if (coverPreview?.startsWith('blob:')) URL.revokeObjectURL(coverPreview)
     setCoverPreview(URL.createObjectURL(file))
   }
 
@@ -1284,10 +1284,9 @@ function HomeScreen(props: {
         setCoverUrl(null)
         return
       }
-      const blob = await getImage(props.project.coverImageId)
-      if (cancelled || !blob) return
-      const url = URL.createObjectURL(blob)
-      revoked = url
+      const url = await getImageUrl(props.project.coverImageId)
+      if (cancelled || !url) return
+      revoked = url.startsWith('blob:') ? url : null
       setCoverUrl(url)
     })()
     return () => {
@@ -2751,8 +2750,8 @@ function EditPurchaseScreen(props: {
       setForm(emptyForm(p))
       setReceiptId(p.receiptImageId)
       if (p.receiptImageId) {
-        const blob = await getImage(p.receiptImageId)
-        if (blob) setPreviewUrl(URL.createObjectURL(blob))
+        const url = await getImageUrl(p.receiptImageId)
+        if (url) setPreviewUrl(url)
       }
     })()
   }, [props.purchaseId])
@@ -2801,8 +2800,8 @@ function DetailScreen(props: {
       }
       setPurchase(p)
       if (p.receiptImageId) {
-        const blob = await getImage(p.receiptImageId)
-        if (blob) setPreviewUrl(URL.createObjectURL(blob))
+        const url = await getImageUrl(p.receiptImageId)
+        if (url) setPreviewUrl(url)
       }
     })()
   }, [props.purchaseId])

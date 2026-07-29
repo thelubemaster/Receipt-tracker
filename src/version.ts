@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.1'
+export const APP_VERSION = '1.24.2'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.2',
+    date: '2026-07-29',
+    title: 'Fix blank receipt photos',
+    changes: [
+      'Photos load correctly after app restarts (ArrayBuffer storage)',
+      'localStorage backup so images survive storage mode changes',
+      'More reliable image display on Android WebView (no full APK rebuild needed)',
+    ],
+  },
   {
     version: '1.24.1',
     date: '2026-07-29',
