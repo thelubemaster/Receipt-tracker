@@ -45,13 +45,15 @@ describe('localSmartPass', () => {
     let mem = emptyReceiptMemory()
     const p: Purchase = {
       id: '1',
+      projectId: 'p1',
       date: '2026-07-01',
       description: 'Tow',
       amount: 100,
       categoryId: 'towing',
       vendor: 'Falzone Towing Service Inc',
       notes: '',
-      receiptImageId: null,
+      projectId: 'p1',
+    receiptImageId: null,
       lineItems: [
         { id: '1', description: 'Towing', amount: 90, categoryId: 'towing' },
         { id: '2', description: 'Convenience fee', amount: 10, categoryId: 'misc' },

@@ -1,29 +1,22 @@
-# Schoolie Cost Tracker
+# Project Cost Tracker
 
-Free on-device receipt scanning for a school bus conversion.
+Free, on-device receipt scanning and cost tracking **by project**.
 
 **Repo:** [thelubemaster/Receipt-tracker](https://github.com/thelubemaster/Receipt-tracker)
 
----
+## Install (Android)
 
-## Install (one step)
+**[⬇ Download schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
 
-### On your Android phone
+Open the file → Install → Open.
 
-1. Open this link and download the file:  
-   **[⬇ schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
-2. Open **schoolie.apk** → **Install** → **Open**
+## How it works
 
-That’s it. Allow “Install unknown apps” only if Android asks.
+1. **Home** — your projects (kitchen remodel, bus conversion, trip, …)
+2. **Open a project** — description, cover photo, and all receipts
+3. **Scan** — photo a receipt; free on-device AI suggests totals and categories
 
-### Updates (automatic)
-
-After install, open the app on Wi‑Fi or mobile data. It checks GitHub and installs a small update package by itself.  
-You only re-download the APK for rare native changes (or if something is badly broken).
-
-Settings → **Check for updates** if you want to force a check.
-
----
+Updates pull from GitHub when you open the app (no PC required).
 
 ## Develop
 
@@ -31,11 +24,8 @@ Settings → **Check for updates** if you want to force a check.
 npm install
 npm run dev
 npm run build
-npm run apk          # build APK (needs Android SDK)
 ```
-
-Publish: push to `main`, attach `schoolie.apk` + `web-update.zip` to a GitHub Release tagged `vX.Y.Z` matching `package.json` version.
 
 ## Privacy
 
-Receipts and purchases stay on your device. No account required.
+Receipts and purchases stay on your device.

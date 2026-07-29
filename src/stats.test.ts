@@ -8,6 +8,7 @@ function p(partial: Partial<Purchase> & Pick<Purchase, 'id' | 'amount' | 'catego
     description: 'Item',
     vendor: '',
     notes: '',
+    projectId: 'p1',
     receiptImageId: null,
     lineItems: [],
     aisUsed: [],

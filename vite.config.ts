@@ -89,9 +89,9 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'version.json'],
       manifest: {
         id: '/',
-        name: 'Schoolie Cost Tracker',
-        short_name: 'Schoolie',
-        description: 'Track purchases and receipts for your school bus conversion — free on-device AI',
+        name: 'Project Cost Tracker',
+        short_name: 'Cost Tracker',
+        description: 'Track receipts and spending for every project — free on-device AI',
         theme_color: '#0c0e13',
         background_color: '#0c0e13',
         display: 'standalone',

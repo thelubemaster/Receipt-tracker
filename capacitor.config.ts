@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
   appId: 'app.schoolie.tracker',
-  appName: 'Schoolie Cost Tracker',
+  appName: 'Project Cost Tracker',
   webDir: 'dist',
   server: {
     // Allow OTA / HTTPS calls to the home PC update server

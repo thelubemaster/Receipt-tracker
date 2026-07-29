@@ -11,10 +11,12 @@ import type { Purchase } from './types'
 function purchase(partial: Partial<Purchase> & Pick<Purchase, 'vendor' | 'categoryId'>): Purchase {
   return {
     id: '1',
+    projectId: 'p1',
     date: '2026-07-20',
     description: 'Tow',
     amount: 200,
     notes: '',
+    projectId: 'p1',
     receiptImageId: null,
     lineItems: [
       {

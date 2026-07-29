@@ -26,12 +26,16 @@ import {
 import { normalizeCategoryInput } from './agents/keywords'
 import {
   deletePurchase,
+  deleteProject,
   getImage,
+  getProject,
   getPurchase,
   getSettings,
+  listProjects,
   listPurchases,
   newId,
   saveImage,
+  saveProject,
   savePurchase,
   saveSettings,
   clearAllData,
@@ -43,6 +47,8 @@ import {
   getStorageNotice,
   clearStorageNotice,
 } from './db'
+import { APP_NAME_SHORT } from './brand'
+import { ProjectsHome } from './ProjectsHome'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
 import { downloadCsv, downloadPdfSummary } from './exportData'
 import {
@@ -98,6 +104,7 @@ import { regroupAllPurchases } from './regroup'
 import { categoryBreakdown, groupPurchasesByCategory, totalSpent } from './stats'
 import type {
   AppSettings,
+  Project,
   CategoryId,
   FieldSources,
   Purchase,
@@ -194,11 +201,26 @@ function ExpandableBlock(props: {
   )
 }
 
+function projectIdFromScreen(s: Screen): string | null {
+  if (
+    s.name === 'project' ||
+    s.name === 'add' ||
+    s.name === 'edit' ||
+    s.name === 'detail' ||
+    s.name === 'scan'
+  ) {
+    return 'projectId' in s ? s.projectId : null
+  }
+  return null
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   const [purchases, setPurchases] = useState<Purchase[]>([])
+  const [, setProjects] = useState<Project[]>([])
+  const [activeProject, setActiveProject] = useState<Project | null>(null)
   const [settings, setSettings] = useState<AppSettings>({
-    projectName: 'My Schoolie',
+    projectName: 'My project',
     lastSeenVersion: '',
     maxPowerMode: true,
     disabledAis: [],
@@ -217,12 +239,24 @@ export default function App() {
     setShowInstaller(shouldShowAndroidInstaller())
   }, [])
 
-  const refresh = useCallback(async () => {
-    const [p, s] = await Promise.all([listPurchases(), getSettings()])
-    setPurchases(p)
+  const refresh = useCallback(async (projectId?: string | null) => {
+    const pid = projectId === undefined ? projectIdFromScreen(screen) : projectId
+    const [projList, s, p] = await Promise.all([
+      listProjects(),
+      getSettings(),
+      pid ? listPurchases(pid) : Promise.resolve([] as Purchase[]),
+    ])
+    setProjects(projList)
     setSettings(s)
+    setPurchases(p)
+    if (pid) {
+      const found = projList.find((x) => x.id === pid) || (await getProject(pid)) || null
+      setActiveProject(found)
+    } else {
+      setActiveProject(null)
+    }
     return s
-  }, [])
+  }, [screen])
 
   useEffect(() => {
     let cancelled = false
@@ -343,6 +377,7 @@ export default function App() {
 
   async function handleSavePurchase(input: {
     id?: string
+    projectId: string
     date: string
     description: string
     amountRaw: string
@@ -394,6 +429,7 @@ export default function App() {
     const aisUsed = input.aisUsed ?? []
     const purchase: Purchase = {
       id: input.id ?? newId(),
+      projectId: input.projectId,
       date: input.date,
       description,
       amount,
@@ -434,13 +470,9 @@ export default function App() {
     if (input.bestAiId) {
       await recordAiWin(input.bestAiId, 5)
     }
-    await refresh()
-    setInfo(
-      input.bestAiId
-        ? `Purchase saved · ${getAi(input.bestAiId).name} got a win · phone memory updated`
-        : 'Purchase saved · on-device memory updated for next scan.',
-    )
-    setScreen({ name: 'home' })
+    await refresh(input.projectId)
+    setInfo(input.bestAiId ? `Saved · ${getAi(input.bestAiId).name}` : 'Saved')
+    setScreen({ name: 'project', projectId: input.projectId })
     return true
   }
 
@@ -460,7 +492,7 @@ export default function App() {
       <div className="app-shell">
         <div className="empty">
           <div className="spinner" />
-          Loading your schoolie log…
+          Loading…
           <p className="muted" style={{ marginTop: 12, fontSize: '0.85rem' }}>
             If this never finishes, hard-refresh the page.
           </p>
@@ -475,7 +507,7 @@ export default function App() {
         <div className="banner banner-update" role="status">
           <strong>New version ready</strong>
           <div className="muted" style={{ margin: '6px 0 10px' }}>
-            A newer build of Schoolie is available. Reload to switch to {formatVersionLabel()} and
+            A newer build is available. Reload to switch to {formatVersionLabel()} and
             see what changed.
           </div>
           <div className="row-actions">
@@ -525,7 +557,7 @@ export default function App() {
               onClick={() => {
                 if (
                   !confirm(
-                    'Reset local Schoolie data on this device? Purchases and receipt photos stored here will be deleted. Nothing is in the cloud.',
+                    'Reset local data on this device? Purchases and receipt photos stored here will be deleted. Nothing is in the cloud.',
                   )
                 ) {
                   return
@@ -581,8 +613,45 @@ export default function App() {
       )}
 
       {screen.name === 'home' && (
+        <ProjectsHome
+          onOpenProject={(id) => {
+            setError(null)
+            setScreen({ name: 'project', projectId: id })
+            void refresh(id)
+          }}
+          onNewProject={() => setScreen({ name: 'project-edit' })}
+          onSettings={() => setScreen({ name: 'settings' })}
+          onShowVersion={() => {
+            setWhatsNewMode('history')
+            setWhatsNew(CHANGELOG)
+          }}
+        />
+      )}
+
+      {screen.name === 'project-edit' && (
+        <ProjectEditScreen
+          projectId={screen.projectId}
+          onBack={() =>
+            setScreen(
+              screen.projectId
+                ? { name: 'project', projectId: screen.projectId }
+                : { name: 'home' },
+            )
+          }
+          onSaved={(id) => {
+            setScreen({ name: 'project', projectId: id })
+            void refresh(id)
+          }}
+          onDeleted={() => {
+            setScreen({ name: 'home' })
+            void refresh(null)
+          }}
+        />
+      )}
+
+      {screen.name === 'project' && activeProject && (
         <HomeScreen
-          projectName={settings.projectName}
+          project={activeProject}
           total={total}
           purchaseCount={purchases.length}
           breakdown={breakdown}
@@ -590,20 +659,33 @@ export default function App() {
           purchases={purchases}
           customCategories={customCats}
           onRegroup={handleRegroup}
+          onBackHome={() => {
+            setScreen({ name: 'home' })
+            void refresh(null)
+          }}
+          onEditProject={() =>
+            setScreen({ name: 'project-edit', projectId: activeProject.id })
+          }
           onScan={() => {
             setError(null)
             setInfo(null)
-            setScreen({ name: 'scan' })
+            setScreen({ name: 'scan', projectId: activeProject.id })
           }}
           onAdd={() => {
             setError(null)
             setInfo(null)
-            setScreen({ name: 'add' })
+            setScreen({ name: 'add', projectId: activeProject.id })
           }}
-          onOpen={(id) => setScreen({ name: 'detail', purchaseId: id })}
+          onOpen={(id) =>
+            setScreen({
+              name: 'detail',
+              purchaseId: id,
+              projectId: activeProject.id,
+            })
+          }
           onSettings={() => setScreen({ name: 'settings' })}
-          onExportCsv={() => downloadCsv(purchases, settings.projectName)}
-          onExportPdf={() => downloadPdfSummary(purchases, settings.projectName)}
+          onExportCsv={() => downloadCsv(purchases, activeProject.name)}
+          onExportPdf={() => downloadPdfSummary(purchases, activeProject.name)}
           onShowVersion={() => {
             setWhatsNewMode('history')
             setWhatsNew(CHANGELOG)
@@ -618,7 +700,7 @@ export default function App() {
           retryBlob={screen.retryBlob}
           retryPreviewUrl={screen.retryPreviewUrl}
           rejected={screen.rejected}
-          onBack={() => setScreen({ name: 'home' })}
+          onBack={() => setScreen({ name: 'project', projectId: screen.projectId })}
           onNeedSettings={() => setScreen({ name: 'settings' })}
           onParsed={(suggestion, blob, previewUrl) => {
             const aisUsed = (suggestion.aisUsed ?? []) as AiId[]
@@ -626,6 +708,7 @@ export default function App() {
             setError(null)
             setScreen({
               name: 'add',
+              projectId: screen.projectId,
               initial: {
                 date: suggestion.date ?? todayISO(),
                 description: suggestion.description,
@@ -651,6 +734,7 @@ export default function App() {
           onManualWithPhoto={(blob, previewUrl) => {
             setScreen({
               name: 'add',
+              projectId: screen.projectId,
               receiptBlob: blob,
               receiptPreviewUrl: previewUrl,
             })
@@ -666,7 +750,7 @@ export default function App() {
           receiptPreviewUrl={screen.receiptPreviewUrl}
           receiptBlob={screen.receiptBlob}
           categories={categoryList}
-          onBack={() => setScreen({ name: 'home' })}
+          onBack={() => setScreen({ name: 'project', projectId: screen.projectId })}
           onTryAgain={
             screen.receiptBlob
               ? (formSnapshot) => {
@@ -726,6 +810,7 @@ export default function App() {
                   })()
                   setScreen({
                     name: 'scan',
+                    projectId: screen.projectId,
                     retryBlob: screen.receiptBlob,
                     retryPreviewUrl: screen.receiptPreviewUrl,
                     rejected,
@@ -736,6 +821,7 @@ export default function App() {
           onDebugMessage={(msg) => setInfo(msg)}
           onSave={async (form, receiptBlob) => {
             await handleSavePurchase({
+              projectId: screen.projectId,
               date: form.date,
               description: form.description,
               amountRaw: form.amount,
@@ -755,10 +841,18 @@ export default function App() {
         <EditPurchaseScreen
           purchaseId={screen.purchaseId}
           categories={categoryList}
-          onBack={() => setScreen({ name: 'detail', purchaseId: screen.purchaseId })}
+          onBack={() =>
+            setScreen({
+              name: 'detail',
+              purchaseId: screen.purchaseId,
+              projectId: screen.projectId,
+            })
+          }
           onSave={async (form, existingId) => {
+            const existing = await getPurchase(screen.purchaseId)
             await handleSavePurchase({
               id: screen.purchaseId,
+              projectId: screen.projectId || existing?.projectId || '',
               date: form.date,
               description: form.description,
               amountRaw: form.amount,
@@ -779,14 +873,20 @@ export default function App() {
         <DetailScreen
           purchaseId={screen.purchaseId}
           customCategories={customCats}
-          onBack={() => setScreen({ name: 'home' })}
-          onEdit={() => setScreen({ name: 'edit', purchaseId: screen.purchaseId })}
+          onBack={() => setScreen({ name: 'project', projectId: screen.projectId })}
+          onEdit={() =>
+            setScreen({
+              name: 'edit',
+              purchaseId: screen.purchaseId,
+              projectId: screen.projectId,
+            })
+          }
           onDelete={async () => {
             if (!confirm('Delete this purchase?')) return
             await deletePurchase(screen.purchaseId)
-            await refresh()
-            setInfo('Purchase deleted.')
-            setScreen({ name: 'home' })
+            await refresh(screen.projectId)
+            setInfo('Deleted')
+            setScreen({ name: 'project', projectId: screen.projectId })
           }}
           onError={setError}
         />
@@ -971,8 +1071,189 @@ function AndroidInstallCard() {
   )
 }
 
+function ProjectEditScreen(props: {
+  projectId?: string
+  onBack: () => void
+  onSaved: (id: string) => void
+  onDeleted: () => void
+}) {
+  const isNew = !props.projectId
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [coverId, setCoverId] = useState<string | null>(null)
+  const [coverPreview, setCoverPreview] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!props.projectId) return
+    let cancelled = false
+    void (async () => {
+      const p = await getProject(props.projectId!)
+      if (!p || cancelled) {
+        if (!p) setLoadError('Project not found')
+        return
+      }
+      setName(p.name)
+      setDescription(p.description)
+      setCoverId(p.coverImageId)
+      if (p.coverImageId) {
+        const blob = await getImage(p.coverImageId)
+        if (blob && !cancelled) setCoverPreview(URL.createObjectURL(blob))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [props.projectId])
+
+  useEffect(() => {
+    return () => {
+      if (coverPreview) URL.revokeObjectURL(coverPreview)
+    }
+  }, [coverPreview])
+
+  async function onPickCover(file: File | null) {
+    if (!file || !file.type.startsWith('image/')) return
+    const id = await saveImage(file)
+    setCoverId(id)
+    if (coverPreview) URL.revokeObjectURL(coverPreview)
+    setCoverPreview(URL.createObjectURL(file))
+  }
+
+  async function save() {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      setLoadError('Give this project a name.')
+      return
+    }
+    setSaving(true)
+    setLoadError(null)
+    try {
+      const now = new Date().toISOString()
+      const existing = props.projectId ? await getProject(props.projectId) : null
+      const project: Project = {
+        id: props.projectId || newId(),
+        name: trimmed,
+        description: description.trim(),
+        coverImageId: coverId,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+      }
+      await saveProject(project)
+      props.onSaved(project.id)
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Could not save project')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function remove() {
+    if (!props.projectId) return
+    if (
+      !confirm(
+        'Delete this project and all of its receipts? This cannot be undone on this device.',
+      )
+    ) {
+      return
+    }
+    setSaving(true)
+    try {
+      await deleteProject(props.projectId)
+      props.onDeleted()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      <header className="topbar">
+        <button type="button" className="icon-btn" onClick={props.onBack} aria-label="Back">
+          ←
+        </button>
+        <h1>{isNew ? 'New project' : 'Edit project'}</h1>
+        <LogoMark size={36} />
+      </header>
+
+      <div className="form">
+        {loadError && (
+          <div className="banner banner-error" role="alert">
+            {loadError}
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="project-cover-picker"
+          onClick={() => fileRef.current?.click()}
+        >
+          {coverPreview ? (
+            <img src={coverPreview} alt="" className="project-cover-img" />
+          ) : (
+            <span className="muted">Tap to add a cover photo</span>
+          )}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          onChange={(e) => void onPickCover(e.target.files?.[0] ?? null)}
+        />
+
+        <div className="field">
+          <label htmlFor="proj-name">What is this project?</label>
+          <input
+            id="proj-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Kitchen remodel, School bus, Road trip"
+            autoFocus={isNew}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="proj-desc">What is it for?</label>
+          <textarea
+            id="proj-desc"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Short description — goals, notes, anything helpful"
+            rows={4}
+          />
+        </div>
+
+        <button
+          type="button"
+          className="btn btn-primary"
+          style={{ width: '100%' }}
+          disabled={saving}
+          onClick={() => void save()}
+        >
+          {saving ? 'Saving…' : isNew ? 'Create project' : 'Save project'}
+        </button>
+
+        {!isNew && (
+          <button
+            type="button"
+            className="btn btn-danger"
+            style={{ width: '100%', marginTop: 10 }}
+            disabled={saving}
+            onClick={() => void remove()}
+          >
+            Delete project
+          </button>
+        )}
+      </div>
+    </>
+  )
+}
+
 function HomeScreen(props: {
-  projectName: string
+  project: Project
   total: number
   purchaseCount: number
   breakdown: ReturnType<typeof categoryBreakdown>
@@ -980,6 +1261,8 @@ function HomeScreen(props: {
   purchases: Purchase[]
   customCategories: Category[]
   onRegroup: () => void | Promise<void>
+  onBackHome: () => void
+  onEditProject: () => void
   onScan: () => void
   onAdd: () => void
   onOpen: (id: string) => void
@@ -991,6 +1274,27 @@ function HomeScreen(props: {
   // Groups start expanded so the main screen shows receipts under each category
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [regroupBusy, setRegroupBusy] = useState(false)
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let revoked: string | null = null
+    let cancelled = false
+    void (async () => {
+      if (!props.project.coverImageId) {
+        setCoverUrl(null)
+        return
+      }
+      const blob = await getImage(props.project.coverImageId)
+      if (cancelled || !blob) return
+      const url = URL.createObjectURL(blob)
+      revoked = url
+      setCoverUrl(url)
+    })()
+    return () => {
+      cancelled = true
+      if (revoked) URL.revokeObjectURL(revoked)
+    }
+  }, [props.project.coverImageId])
 
   const isOpen = (id: string) => openGroups[id] !== false
 
@@ -1013,15 +1317,18 @@ function HomeScreen(props: {
   return (
     <>
       <header className="topbar">
-        <BrandLockup title={props.projectName} subtitle="Schoolie conversion costs" />
+        <button type="button" className="icon-btn" onClick={props.onBackHome} aria-label="Projects">
+          ←
+        </button>
+        <BrandLockup title={props.project.name} subtitle={APP_NAME_SHORT} size={36} />
         <div className="topbar-actions">
           <button
             type="button"
-            className="version-chip"
-            onClick={props.onShowVersion}
-            title="App version and release notes"
+            className="icon-btn"
+            aria-label="Edit project"
+            onClick={props.onEditProject}
           >
-            {formatVersionLabel()}
+            ✎
           </button>
           <button type="button" className="icon-btn" aria-label="Settings" onClick={props.onSettings}>
             ⚙
@@ -1029,15 +1336,23 @@ function HomeScreen(props: {
         </div>
       </header>
 
-      <section className="hero-card">
+      <section className="hero-card project-hero">
+        {coverUrl && (
+          <div className="project-hero-cover">
+            <img src={coverUrl} alt="" />
+          </div>
+        )}
         <div className="hero-inner">
           <div className="hero-label">Total spent</div>
           <div className="hero-total">{formatMoney(props.total)}</div>
           <div className="hero-sub">
             {props.purchaseCount === 0
-              ? 'No purchases yet — scan a receipt to start'
-              : `${props.purchaseCount} purchase${props.purchaseCount === 1 ? '' : 's'} · ${props.groups.length} group${props.groups.length === 1 ? '' : 's'}`}
+              ? 'No receipts yet — scan one to start'
+              : `${props.purchaseCount} receipt${props.purchaseCount === 1 ? '' : 's'} · ${props.groups.length} group${props.groups.length === 1 ? '' : 's'}`}
           </div>
+          {props.project.description ? (
+            <p className="project-hero-desc">{props.project.description}</p>
+          ) : null}
         </div>
       </section>
 
@@ -1104,10 +1419,7 @@ function HomeScreen(props: {
       {props.groups.length === 0 ? (
         <div className="empty empty-soft">
           <div className="empty-icon">📷</div>
-          <p>
-            Tap <strong>Scan receipt</strong> to photograph a purchase. Free on-device AIs read it,
-            pick a category, and it shows up in a group here.
-          </p>
+          <p>Scan a receipt to start tracking costs for this project.</p>
         </div>
       ) : (
         <div className="group-list">
@@ -1165,7 +1477,7 @@ function HomeScreen(props: {
       )}
 
       <p className="app-version-foot">
-        Schoolie Cost Tracker{' '}
+        Project Cost Tracker{' '}
         <button type="button" className="version-link" onClick={props.onShowVersion}>
           {formatVersionLabel()}
         </button>
@@ -2660,7 +2972,6 @@ function SettingsScreen(props: {
   onShowWhatsNew: () => void
   onUpdateAvailable: () => void
 }) {
-  const [projectName, setProjectName] = useState(props.settings.projectName)
   const [maxPowerMode, setMaxPowerMode] = useState(props.settings.maxPowerMode !== false)
   const [disabledAis, setDisabledAis] = useState<AiId[]>(
     () => sanitizeDisabledAis(props.settings.disabledAis ?? []),
@@ -2775,7 +3086,7 @@ function SettingsScreen(props: {
           setSaving(true)
           void props
             .onSave({
-              projectName: projectName.trim() || 'My Schoolie',
+              projectName: props.settings.projectName || 'My project',
               lastSeenVersion: props.settings.lastSeenVersion,
               maxPowerMode,
               disabledAis: sanitizeDisabledAis(disabledAis),
@@ -3063,16 +3374,6 @@ function SettingsScreen(props: {
             </div>
           </div>
         )}
-
-        <div className="field">
-          <label htmlFor="projectName">Project name</label>
-          <input
-            id="projectName"
-            value={projectName}
-            onChange={(e) => setProjectName(e.target.value)}
-            placeholder="My Schoolie"
-          />
-        </div>
 
         <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? 'Saving…' : 'Save settings'}

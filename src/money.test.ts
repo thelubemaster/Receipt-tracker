@@ -48,13 +48,15 @@ describe('stats', () => {
   const sample: Purchase[] = [
     {
       id: '1',
+      projectId: 'p1',
       date: '2026-07-01',
       description: 'Foam',
       amount: 100,
       categoryId: 'insulation',
       vendor: 'HD',
       notes: '',
-      receiptImageId: null,
+      projectId: 'p1',
+    receiptImageId: null,
       lineItems: [],
       aisUsed: [],
       createdAt: '2026-07-01T00:00:00.000Z',
@@ -62,13 +64,15 @@ describe('stats', () => {
     },
     {
       id: '2',
+      projectId: 'p1',
       date: '2026-07-02',
       description: 'Wire',
       amount: 50,
       categoryId: 'electrical',
       vendor: 'Lowe',
       notes: '',
-      receiptImageId: null,
+      projectId: 'p1',
+    receiptImageId: null,
       lineItems: [],
       aisUsed: [],
       createdAt: '2026-07-02T00:00:00.000Z',
@@ -92,6 +96,7 @@ describe('export', () => {
     const csv = purchasesToCsv([
       {
         id: '1',
+        projectId: 'p1',
         date: '2026-07-01',
         description: 'Foam, board',
         amount: 10,

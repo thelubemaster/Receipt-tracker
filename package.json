@@ -1,8 +1,8 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.23.1",
-  "description": "Schoolie Cost Tracker — free on-device receipt scans for bus conversions",
+  "version": "1.24.0",
+  "description": "Project Cost Tracker — free on-device receipts by project",
   "author": "Schoolie",
   "repository": {
     "type": "git",
@@ -62,7 +62,7 @@
   },
   "build": {
     "appId": "app.schoolie.tracker",
-    "productName": "Schoolie Cost Tracker",
+    "productName": "Project Cost Tracker",
     "copyright": "Free · on-device",
     "directories": {
       "output": "release"
@@ -85,7 +85,7 @@
       ],
       "category": "Office",
       "icon": "public/pwa-512.png",
-      "synopsis": "Track schoolie conversion costs with free on-device receipt AI"
+      "synopsis": "Track project costs with free on-device receipt AI"
     },
     "win": {
       "target": [

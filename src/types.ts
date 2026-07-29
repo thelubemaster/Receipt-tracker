@@ -13,8 +13,21 @@ export interface ReceiptLineItem {
   categoryId: CategoryId
 }
 
+/** A receipt-tracking project (school bus, kitchen remodel, trip, etc.). */
+export interface Project {
+  id: string
+  name: string
+  description: string
+  /** Cover photo in the images store */
+  coverImageId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface Purchase {
   id: string
+  /** Which project this receipt belongs to */
+  projectId: string
   date: string
   description: string
   amount: number
@@ -36,6 +49,7 @@ export interface CustomCategory {
 }
 
 export interface AppSettings {
+  /** @deprecated Prefer Project.name — kept for migration from single-project era */
   projectName: string
   lastSeenVersion: string
   /**
@@ -105,16 +119,20 @@ export type ScanFormSeed = Partial<Purchase> & {
 
 export type Screen =
   | { name: 'home' }
+  | { name: 'project'; projectId: string }
+  | { name: 'project-edit'; projectId?: string }
   | {
       name: 'add'
+      projectId: string
       initial?: ScanFormSeed
       receiptBlob?: Blob
       receiptPreviewUrl?: string
     }
-  | { name: 'edit'; purchaseId: string }
-  | { name: 'detail'; purchaseId: string }
+  | { name: 'edit'; purchaseId: string; projectId: string }
+  | { name: 'detail'; purchaseId: string; projectId: string }
   | {
       name: 'scan'
+      projectId: string
       /** Re-run AI on this photo (e.g. after a bad first read) */
       retryBlob?: Blob
       retryPreviewUrl?: string

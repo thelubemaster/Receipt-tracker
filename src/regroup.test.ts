@@ -5,12 +5,14 @@ import type { Purchase } from './types'
 function base(partial: Partial<Purchase> = {}): Purchase {
   return {
     id: 'p1',
+    projectId: 'p1',
     date: '2026-07-20',
     description: 'Parts order',
     amount: 100,
     categoryId: 'misc',
     vendor: 'NAPA',
     notes: '',
+    projectId: 'p1',
     receiptImageId: null,
     lineItems: [],
     aisUsed: [],

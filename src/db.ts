@@ -1,10 +1,11 @@
 /**
- * Local storage for Schoolie — free, on-device only.
+ * Local storage for Project Cost Tracker — free, on-device only.
  *
  * Strategy:
  * 1. Prefer IndexedDB when the full schema is present and healthy.
  * 2. On ANY store/schema error → wipe/repair once, then permanent localStorage.
  * 3. Public load APIs never throw storage errors (app always boots).
+ * 4. Multiple projects; each purchase belongs to a projectId.
  */
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { sanitizeDisabledAis } from './aiRoster'
@@ -13,13 +14,18 @@ import {
   emptyReceiptMemory,
   type ReceiptMemory,
 } from './receiptMemory'
-import type { AppSettings, Purchase } from './types'
+import type { AppSettings, Project, Purchase } from './types'
 
 interface SchoolieDB extends DBSchema {
+  projects: {
+    key: string
+    value: Project
+    indexes: { 'by-updated': string }
+  }
   purchases: {
     key: string
     value: Purchase
-    indexes: { 'by-date': string; 'by-created': string }
+    indexes: { 'by-date': string; 'by-created': string; 'by-project': string }
   }
   images: {
     key: string
@@ -40,13 +46,15 @@ interface SchoolieDB extends DBSchema {
 }
 
 const DB_NAME = 'schoolie-tracker'
-/** v4: aggressive self-heal; never surface missing-store errors to UI */
-const DB_VERSION = 4
-const REQUIRED_STORES = ['purchases', 'images', 'settings', 'meta'] as const
+/** v5: multi-project (projects store + purchase.projectId) */
+const DB_VERSION = 5
+const REQUIRED_STORES = ['projects', 'purchases', 'images', 'settings', 'meta'] as const
 const SETTINGS_KEY = 'app'
 const META_KEY = 'meta'
 const MEMORY_KEY = 'receipt-memory'
+const DEFAULT_PROJECT_ID = 'default-project'
 
+const LS_PROJECTS = 'outlay.v1.projects'
 const LS_PURCHASES = 'schoolie.v1.purchases'
 const LS_SETTINGS = 'schoolie.v1.settings'
 const LS_LEADERBOARD = 'schoolie.v1.leaderboard'
@@ -153,10 +161,15 @@ function isStorageSchemaError(e: unknown): boolean {
 }
 
 function ensureStores(db: IDBPDatabase<SchoolieDB>) {
+  if (!db.objectStoreNames.contains('projects')) {
+    const projects = db.createObjectStore('projects', { keyPath: 'id' })
+    projects.createIndex('by-updated', 'updatedAt')
+  }
   if (!db.objectStoreNames.contains('purchases')) {
     const purchases = db.createObjectStore('purchases', { keyPath: 'id' })
     purchases.createIndex('by-date', 'date')
     purchases.createIndex('by-created', 'createdAt')
+    purchases.createIndex('by-project', 'projectId')
   }
   if (!db.objectStoreNames.contains('images')) {
     db.createObjectStore('images', { keyPath: 'id' })
@@ -179,6 +192,15 @@ function openIdbAtVersion(version: number): Promise<IDBPDatabase<SchoolieDB>> {
           if (!store.indexNames.contains('by-date')) store.createIndex('by-date', 'date')
           if (!store.indexNames.contains('by-created')) {
             store.createIndex('by-created', 'createdAt')
+          }
+          if (!store.indexNames.contains('by-project')) {
+            store.createIndex('by-project', 'projectId')
+          }
+        }
+        if (db.objectStoreNames.contains('projects') && transaction) {
+          const store = transaction.objectStore('projects')
+          if (!store.indexNames.contains('by-updated')) {
+            store.createIndex('by-updated', 'updatedAt')
           }
         }
       } catch (e) {
@@ -236,6 +258,7 @@ function deleteIdb(): Promise<void> {
 async function probeStores(db: IDBPDatabase<SchoolieDB>): Promise<boolean> {
   if (!hasAllStores(db)) return false
   try {
+    await db.count('projects')
     await db.count('purchases')
     await db.count('images')
     await db.count('settings')
@@ -345,6 +368,7 @@ async function ensureStorage(): Promise<void> {
       storageNotice = null
       setForceLocal(false)
       await migrateLocalToIdbIfEmpty(db)
+      await ensureDefaultProjectAndIds(db)
       return
     }
 
@@ -411,8 +435,20 @@ export function newId(): string {
 function normalizePurchase(p: Purchase): Purchase {
   return {
     ...p,
+    projectId: p.projectId || DEFAULT_PROJECT_ID,
     lineItems: Array.isArray(p.lineItems) ? p.lineItems : [],
     aisUsed: Array.isArray(p.aisUsed) ? p.aisUsed : [],
+  }
+}
+
+function normalizeProject(p: Project): Project {
+  return {
+    id: p.id,
+    name: (p.name || 'Untitled project').trim() || 'Untitled project',
+    description: typeof p.description === 'string' ? p.description : '',
+    coverImageId: p.coverImageId ?? null,
+    createdAt: p.createdAt || new Date().toISOString(),
+    updatedAt: p.updatedAt || p.createdAt || new Date().toISOString(),
   }
 }
 
@@ -425,25 +461,185 @@ function sortPurchases(list: Purchase[]): Purchase[] {
     })
 }
 
-async function useLocalPurchases(): Promise<Purchase[]> {
-  return sortPurchases(lsRead<Purchase[]>(LS_PURCHASES, []))
+function sortProjects(list: Project[]): Project[] {
+  return list
+    .map(normalizeProject)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-/** Never throws — app must always load. */
-export async function listPurchases(): Promise<Purchase[]> {
+function useLocalProjects(): Project[] {
+  return sortProjects(lsRead<Project[]>(LS_PROJECTS, []))
+}
+
+async function useLocalPurchases(projectId?: string): Promise<Purchase[]> {
+  const all = sortPurchases(lsRead<Purchase[]>(LS_PURCHASES, []))
+  if (!projectId) return all
+  return all.filter((p) => p.projectId === projectId)
+}
+
+function backupProjects(list: Project[]): void {
+  if (!canUseLocalStorage()) return
+  try {
+    lsWrite(LS_PROJECTS, list)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * One-time: ensure at least one project exists and every purchase has projectId.
+ */
+async function ensureDefaultProjectAndIds(
+  db?: IDBPDatabase<SchoolieDB> | null,
+): Promise<void> {
+  try {
+    const settings = await getSettings()
+    const now = new Date().toISOString()
+    let projects = await listProjectsRaw()
+    if (projects.length === 0) {
+      const seeded: Project = {
+        id: DEFAULT_PROJECT_ID,
+        name: settings.projectName?.trim() || 'My project',
+        description: '',
+        coverImageId: null,
+        createdAt: now,
+        updatedAt: now,
+      }
+      await saveProject(seeded)
+      projects = [seeded]
+    }
+    const defaultId = projects[0]?.id || DEFAULT_PROJECT_ID
+    const purchases = await listPurchases()
+    let changed = false
+    for (const p of purchases) {
+      if (!p.projectId) {
+        await savePurchase({ ...p, projectId: defaultId })
+        changed = true
+      }
+    }
+    if (changed) console.info('[outlay] migrated purchases onto projects')
+    void db
+  } catch (e) {
+    console.warn('[outlay] project migration', e)
+  }
+}
+
+async function listProjectsRaw(): Promise<Project[]> {
+  await ensureStorage()
+  if (mode === 'local' || !idb) return useLocalProjects()
+  try {
+    if (!idb.objectStoreNames.contains('projects')) return useLocalProjects()
+    return sortProjects(await idb.getAll('projects'))
+  } catch {
+    return useLocalProjects()
+  }
+}
+
+export async function listProjects(): Promise<Project[]> {
   try {
     await ensureStorage()
-    if (mode !== 'idb' || !idb) return useLocalPurchases()
-    const all = await idb.getAll('purchases')
+    // Ensure migration has a chance to seed a project
+    if (mode === 'idb' && idb) {
+      const n = await idb.count('projects').catch(() => 0)
+      if (n === 0) await ensureDefaultProjectAndIds(idb)
+    } else if (useLocalProjects().length === 0) {
+      await ensureDefaultProjectAndIds(null)
+    }
+    const list = await listProjectsRaw()
+    backupProjects(list)
+    return list
+  } catch (e) {
+    console.warn('[outlay] listProjects failed', e)
+    return useLocalProjects()
+  }
+}
+
+export async function getProject(id: string): Promise<Project | undefined> {
+  try {
+    await ensureStorage()
+    if (mode === 'local' || !idb) {
+      return useLocalProjects().find((p) => p.id === id)
+    }
+    const row = await idb.get('projects', id)
+    return row ? normalizeProject(row) : undefined
+  } catch {
+    return useLocalProjects().find((p) => p.id === id)
+  }
+}
+
+export async function saveProject(project: Project): Promise<void> {
+  const row = normalizeProject({
+    ...project,
+    updatedAt: new Date().toISOString(),
+  })
+  try {
+    await ensureStorage()
+    if (mode === 'local' || !idb) {
+      const list = useLocalProjects().filter((p) => p.id !== row.id)
+      list.push(row)
+      backupProjects(list)
+      return
+    }
+    await idb.put('projects', row)
+    backupProjects(await idb.getAll('projects'))
+  } catch (e) {
+    console.warn('[outlay] saveProject failed → local', e)
+    if (isStorageSchemaError(e)) useLocalMode(String(e))
+    const list = useLocalProjects().filter((p) => p.id !== row.id)
+    list.push(row)
+    backupProjects(list)
+  }
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  try {
+    await ensureStorage()
+    const purchases = await listPurchases(id)
+    for (const p of purchases) {
+      await deletePurchase(p.id)
+    }
+    if (mode === 'local' || !idb) {
+      backupProjects(useLocalProjects().filter((p) => p.id !== id))
+      return
+    }
+    await idb.delete('projects', id)
+    backupProjects(await idb.getAll('projects'))
+  } catch (e) {
+    console.warn('[outlay] deleteProject', e)
+    backupProjects(useLocalProjects().filter((p) => p.id !== id))
+  }
+}
+
+/** Never throws — app must always load. Optional project filter. */
+export async function listPurchases(projectId?: string): Promise<Purchase[]> {
+  try {
+    await ensureStorage()
+    if (mode !== 'idb' || !idb) return useLocalPurchases(projectId)
+    let all: Purchase[]
+    if (projectId && idb.objectStoreNames.contains('purchases')) {
+      try {
+        all = await idb.getAllFromIndex('purchases', 'by-project', projectId)
+      } catch {
+        all = (await idb.getAll('purchases')).filter(
+          (p) => (p.projectId || DEFAULT_PROJECT_ID) === projectId,
+        )
+      }
+    } else {
+      all = await idb.getAll('purchases')
+    }
     const sorted = sortPurchases(all)
-    backupPurchaseList(sorted)
-    return sorted
+    backupPurchaseList(await idb.getAll('purchases').catch(() => sorted))
+    return projectId
+      ? sorted.filter((p) => p.projectId === projectId)
+      : sorted
   } catch (e) {
     console.warn('[schoolie] listPurchases failed → local', e)
     if (isStorageSchemaError(e)) useLocalMode(String(e))
-    return useLocalPurchases()
+    return useLocalPurchases(projectId)
   }
 }
+
+export { DEFAULT_PROJECT_ID }
 
 export async function getPurchase(id: string): Promise<Purchase | undefined> {
   try {
@@ -618,7 +814,7 @@ function parseSettingsRow(
         }))
     : []
   return {
-    projectName: row?.projectName ?? 'My Schoolie',
+    projectName: row?.projectName ?? 'My project',
     lastSeenVersion: row?.lastSeenVersion ?? '',
     maxPowerMode: row?.maxPowerMode !== false,
     disabledAis: sanitizeDisabledAis(

@@ -48,13 +48,13 @@ export function AndroidInstaller(props: Props) {
       <div className="installer-card">
         <img
           src="./pwa-512.png"
-          alt="Schoolie"
+          alt="Project Cost Tracker"
           className="installer-hero-logo"
           width={96}
           height={96}
         />
         <p className="installer-kicker">Android · {formatVersionLabel()}</p>
-        <h1 className="installer-title">Install Schoolie</h1>
+        <h1 className="installer-title">Install Project Cost Tracker</h1>
         <p className="installer-lead">
           One download. After install, the app updates itself from GitHub when you open it.
         </p>
