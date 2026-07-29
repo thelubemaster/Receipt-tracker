@@ -17,7 +17,7 @@ import {
   isShippingLineItem,
   primaryCategoryFromItems,
 } from './agents/lineItemsAgent'
-import { getCategory, humanizeCategoryId } from './categories'
+import { humanizeCategoryId } from './categories'
 import type { CategoryId, Purchase, ReceiptLineItem } from './types'
 
 function productish(items: ReceiptLineItem[]): boolean {
@@ -277,6 +277,6 @@ export function regroupAllPurchases(purchases: Purchase[]): RegroupResult {
 }
 
 /** Helper for UI: label of a category id if known. */
-export function regroupCategoryLabel(id: string, custom: { id: string; label: string }[] = []): string {
-  return getCategory(id, custom).label
+export function regroupCategoryLabel(id: string): string {
+  return humanizeCategoryId(id)
 }
