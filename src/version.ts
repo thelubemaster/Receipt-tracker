@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.28.1'
+export const APP_VERSION = '1.29.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.29.0',
+    date: '2026-07-30',
+    title: 'Receipt engine rebuild — accurate invoices',
+    changes: [
+      'New structured receipt engine: totals, fees, lines with arithmetic lock',
+      'PDF invoices rebuild lines from glyph positions (not a word soup)',
+      'Retry hard-bans the wrong total/vendor so Fix marked parts cannot repeat them',
+      'Engine + classic parse compete; picks the stronger arithmetic result',
+    ],
+  },
   {
     version: '1.28.1',
     date: '2026-07-30',

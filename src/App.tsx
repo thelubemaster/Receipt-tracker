@@ -1807,9 +1807,10 @@ function ScanScreen(props: {
 
       let suggestion: ScanResult
       if (doc.kind === 'pdf-text' && doc.embeddedText) {
-        // Digital PDF: parse embedded text (accurate for email/accounting invoices)
+        // Digital PDF: layout text + structured engine (not photo OCR soup)
         suggestion = await scanInvoiceFromText(doc.embeddedText, {
           fileName: doc.fileName,
+          layoutLines: doc.layoutLines,
           onProgress: (p) => {
             setProgress(p.progress)
           },

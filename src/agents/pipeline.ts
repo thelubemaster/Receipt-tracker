@@ -26,6 +26,7 @@ import { runTotalsAgent } from './totalsAgent'
 import { runLocalSmartPass } from './localSmartPass'
 import { runConsensusPass } from './consensusPass'
 import { scoreOcrText } from './ocrScore'
+import { banFromRejected, runReceiptEngine } from './receiptEngine'
 
 export { scoreOcrText } from './ocrScore'
 
@@ -55,8 +56,13 @@ function parseFromText(
   ocrNote: string,
   extraAis: AiId[],
   enabled: (id: AiId) => boolean,
+  ban?: import('./receiptEngine').EngineBan,
 ): LocalAgentResult {
   const text = normalizeOcrText(rawText)
+
+  // Structured engine (primary) + classic agents as cross-check
+  const engine = runReceiptEngine(text, { ban })
+
   const ledgerOnly = runLineItemsAgent(text)
   const sieve = enabled('sieve')
     ? runSieveAgent(text)
@@ -67,7 +73,7 @@ function parseFromText(
   const totals = runTotalsAgent(text)
   const merchant = runMerchantAgent(text)
 
-  const result = runArbiterAgent({
+  const classic = runArbiterAgent({
     rawText: text,
     lines: {
       ...sieve,
@@ -77,11 +83,43 @@ function parseFromText(
     merchant,
   })
 
+  // Prefer engine when it has total + decent conf, or when classic hits a banned total
+  let result = engine
+  const classicBanned =
+    ban?.amounts?.length &&
+    classic.amount != null &&
+    ban.amounts.some((a) => Math.abs(a - classic.amount!) < 0.05)
+  const engineScore =
+    (engine.confidence ?? 0) * 50 +
+    (engine.amount != null ? 25 : 0) +
+    (engine.lineItems?.length ?? 0) * 2
+  const classicScore =
+    (classic.confidence ?? 0) * 50 +
+    (classic.amount != null ? 22 : 0) +
+    (classic.lineItems?.length ?? 0) * 2
+
+  if (!classicBanned && classicScore > engineScore + 8) {
+    result = {
+      ...classic,
+      source: 'on-device',
+      confidence: classic.confidence,
+      rawText: text,
+      agentReport: classic.agentReport,
+    }
+  } else {
+    // Fill gaps from classic
+    result = {
+      ...engine,
+      vendor: engine.vendor || classic.vendor,
+      date: engine.date || classic.date,
+      amount: engine.amount ?? classic.amount,
+    }
+  }
+
   const used: AiId[] = ['ledger', 'cashier', 'clerk', 'arbiter', ...extraAis]
   if (enabled('sieve')) used.push('sieve')
   result.aisUsed = Array.from(new Set<AiId>(used))
   result.activeAiLabel = label
-  // Tag OCR contributor on field sources
   const ocrAi = extraAis.find((id) =>
     ['forge', 'lens', 'ruler', 'hammer', 'titan', 'scout', 'wedge', 'prism', 'bloom', 'mosaic'].includes(
       id,
@@ -91,8 +129,10 @@ function parseFromText(
     result.fieldSources = { ...(result.fieldSources ?? {}), ocr: ocrAi }
   }
   result.agentReport = [
-    `Free parse path: ${label}`,
+    `Parse path: ${label}`,
     ocrNote,
+    `Engine total ${engine.amount ?? '—'} conf ${Math.round((engine.confidence ?? 0) * 100)}%`,
+    `Classic total ${classic.amount ?? '—'} conf ${Math.round((classic.confidence ?? 0) * 100)}%`,
     `Ledger: ${ledgerOnly.items.length} · Sieve: ${enabled('sieve') ? sieve.items.length : 'off'}`,
     result.agentReport,
   ].join('\n')
@@ -400,7 +440,10 @@ export async function runMultiAgentReceiptPipeline(
   // Individual parses (for diversify / reliability) + shared huddle
   // Only use top OCR paths — weak dumps pollute votes when merged.
   const topOcr = usable.slice(0, Math.min(4, usable.length))
-  const parses = topOcr.map((u) => parseFromText(u.text, u.label, u.note, u.ais, enabled))
+  const ban = rejected ? banFromRejected(rejected) : undefined
+  const parses = topOcr.map((u) =>
+    parseFromText(u.text, u.label, u.note, u.ais, enabled, ban),
+  )
   const bestScore = scoreOcrText(topOcr[0].text)
   // Merge only paths that are close in quality to the leader (not random garbage)
   const mergeable = topOcr.filter((u) => scoreOcrText(u.text) >= bestScore * 0.55)
@@ -416,9 +459,22 @@ export async function runMultiAgentReceiptPipeline(
         `Merged ${mergeable.length} strong OCR engines (layout-first)`,
         mergeable.flatMap((u) => u.ais),
         enabled,
+        ban,
       ),
     )
   }
+
+  // Dedicated structured-engine pass on best OCR text
+  parses.push(
+    parseFromText(
+      topOcr[0].text,
+      'Receipt engine on best OCR',
+      'Structured arithmetic-first engine',
+      topOcr[0].ais,
+      enabled,
+      ban,
+    ),
+  )
 
   // Council / smart-pass text: prefer best single path, enrich from near-peers only
   let councilText = topOcr[0].text
@@ -673,6 +729,76 @@ export async function runMultiAgentReceiptPipeline(
   }
   final = runLocalSmartPass(final, councilText || final.rawText || '', memory)
 
+  // ── Structured engine final polish on best text (with ban on retry) ──
+  try {
+    const eng = runReceiptEngine(councilText || final.rawText || '', {
+      ban,
+      preferTotal:
+        rejected?.marks?.total === 'right' ? rejected.amount : undefined,
+      preferVendor:
+        rejected?.marks?.vendor === 'right' ? rejected.vendor : undefined,
+    })
+    // If final still matches rejected total and eng has a different one, take eng
+    if (
+      rejected &&
+      rejected.amount != null &&
+      final.amount != null &&
+      Math.abs(final.amount - rejected.amount) < 0.05 &&
+      eng.amount != null &&
+      Math.abs(eng.amount - rejected.amount) > 0.05
+    ) {
+      final = {
+        ...final,
+        ...eng,
+        fieldSources: { ...final.fieldSources, ...eng.fieldSources },
+        agentReport: [final.agentReport, '---', 'Engine overrode repeated rejected total', eng.agentReport].join(
+          '\n',
+        ),
+      }
+    } else if ((eng.confidence ?? 0) >= (final.confidence ?? 0) - 0.05 && eng.amount != null) {
+      // Merge stronger engine fields
+      final = {
+        ...final,
+        amount: final.amount ?? eng.amount,
+        vendor: final.vendor || eng.vendor,
+        subtotal: final.subtotal ?? eng.subtotal,
+        tax: final.tax ?? eng.tax,
+        lineItems:
+          (eng.lineItems?.length ?? 0) >= (final.lineItems?.length ?? 0)
+            ? eng.lineItems
+            : final.lineItems,
+        confidence: Math.max(final.confidence ?? 0, eng.confidence ?? 0),
+        agentReport: [final.agentReport, '---', eng.agentReport].join('\n'),
+      }
+    }
+  } catch {
+    /* engine polish optional */
+  }
+
+  // Hard ban: never return the exact rejected total if we have any alternate
+  if (
+    rejected?.amount != null &&
+    final.amount != null &&
+    Math.abs(final.amount - rejected.amount) < 0.05 &&
+    (rejected.marks?.total === 'wrong' || !rejected.marks)
+  ) {
+    const alt = parses.find(
+      (p) =>
+        p.amount != null && Math.abs(p.amount - rejected.amount!) > 0.08,
+    )
+    if (alt) {
+      final = {
+        ...alt,
+        fieldSources: { ...final.fieldSources, ...alt.fieldSources },
+        agentReport: [
+          final.agentReport,
+          'HARD BAN: previous total was marked wrong — switched to alternate parse',
+          alt.agentReport,
+        ].join('\n'),
+      }
+    }
+  }
+
   // ── Consensus: multi-path vote for more consistent totals/vendor/lines ──
   onProgress?.({
     stage: 'arbitrate',
@@ -686,6 +812,27 @@ export async function runMultiAgentReceiptPipeline(
     const rankedPaths = [...parses].sort((a, b) => scoreOf(b) - scoreOf(a)).slice(0, 5)
     if (final && !rankedPaths.includes(final)) rankedPaths.unshift(final)
     final = runConsensusPass(final, rankedPaths, councilText || final.rawText || '')
+    // Re-apply hard ban after consensus (it can reintroduce a banned total)
+    if (
+      rejected?.amount != null &&
+      final.amount != null &&
+      Math.abs(final.amount - rejected.amount) < 0.05 &&
+      (rejected.marks?.total === 'wrong' || !rejected.marks)
+    ) {
+      const alt = rankedPaths.find(
+        (p) => p.amount != null && Math.abs(p.amount - rejected.amount!) > 0.08,
+      )
+      if (alt?.amount != null) {
+        final = {
+          ...final,
+          amount: alt.amount,
+          agentReport: [
+            final.agentReport,
+            `Post-consensus ban: total forced to $${alt.amount.toFixed(2)}`,
+          ].join('\n'),
+        }
+      }
+    }
   } catch (e) {
     final.agentReport = [
       final.agentReport,

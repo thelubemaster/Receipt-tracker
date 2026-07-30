@@ -108,9 +108,11 @@ export async function scanInvoiceFromText(
   options: {
     onProgress?: ScanOptions['onProgress']
     fileName?: string
+    layoutLines?: import('./agents/layoutText').LayoutLine[] | null
+    rejected?: RejectedScanSnapshot
   } = {},
 ): Promise<ScanResult> {
-  const { onProgress, fileName } = options
+  const { onProgress, fileName, layoutLines, rejected } = options
   onProgress?.({
     stage: 'parse',
     progress: 0.2,
@@ -132,26 +134,41 @@ export async function scanInvoiceFromText(
   onProgress?.({
     stage: 'parse',
     progress: 0.55,
-    message: 'Extracting store, totals, and line items…',
+    message: rejected
+      ? 'Re-reading invoice — avoiding the previous wrong answer…'
+      : 'Extracting store, totals, and line items…',
     engine: 'on-device',
     aiId: 'cashier',
     aiName: 'Cashier',
   })
 
-  const local: LocalAgentResult = parseReceiptText(rawText, memory)
+  const { banFromRejected } = await import('./agents/receiptEngine')
+  const ban = rejected ? banFromRejected(rejected) : undefined
+  const preferTotal =
+    rejected?.marks?.total === 'right' ? rejected.amount : undefined
+  const preferVendor =
+    rejected?.marks?.vendor === 'right' ? rejected.vendor : undefined
+
+  const local: LocalAgentResult = parseReceiptText(rawText, memory, {
+    layoutLines,
+    ban,
+    preferTotal,
+    preferVendor,
+  })
   local.activeAiLabel = fileName
     ? `PDF invoice · ${fileName}`
-    : 'PDF invoice · embedded text'
+    : 'PDF invoice · structured engine'
   local.agentReport = [
-    'Source: digital PDF text layer (no photo OCR).',
+    'Source: digital PDF (layout text + structured receipt engine).',
     fileName ? `File: ${fileName}` : null,
+    rejected ? `Retry #${rejected.attempt} with banned previous wrong values` : null,
     local.agentReport,
   ]
     .filter(Boolean)
     .join('\n')
   local.fieldSources = {
     ...(local.fieldSources ?? {}),
-    primary: 'ledger',
+    primary: 'arbiter',
     answerLabel: local.activeAiLabel,
   }
 

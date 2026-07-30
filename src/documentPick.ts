@@ -17,11 +17,16 @@ import {
 } from './imagePick'
 import { scoreOcrText } from './agents/ocrScore'
 
+import type { LayoutLine, TextGlyph } from './agents/layoutText'
+import { linesFromGlyphs } from './agents/layoutText'
+
 export type NormalizedDocument = NormalizedPick & {
   /** Source kind */
   kind: 'image' | 'pdf-text' | 'pdf-scan'
   /** Embedded text from a digital PDF (skip camera OCR when rich enough) */
   embeddedText?: string
+  /** Layout-reconstructed lines (Y-grouped) for accurate invoice parse */
+  layoutLines?: LayoutLine[]
   /** How many PDF pages were used */
   pageCount?: number
   fileName?: string
@@ -85,6 +90,7 @@ async function openPdfDocument(
   name: string,
 ): Promise<{
   embeddedText: string
+  layoutLines: LayoutLine[]
   pageImages: Blob[]
   pageCount: number
   width: number
@@ -104,25 +110,56 @@ async function openPdfDocument(
   const pageCount = Math.min(pdf.numPages || 1, MAX_PDF_PAGES)
 
   const textParts: string[] = []
+  const allGlyphs: TextGlyph[] = []
   const pageCanvases: HTMLCanvasElement[] = []
   let maxW = 0
   let totalH = 0
+  let yOffset = 0
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await pdf.getPage(i)
+    const baseViewport = page.getViewport({ scale: 1 })
 
-    // Text layer (digital invoices)
+    // Text layer with positions (digital invoices — critical for structure)
     try {
       const content = await page.getTextContent()
-      const pageText = content.items
-        .map((it) => ('str' in it ? String((it as { str?: string }).str || '') : ''))
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-      if (pageText) textParts.push(pageText)
+      const glyphs: TextGlyph[] = []
+      for (const raw of content.items) {
+        const it = raw as {
+          str?: string
+          transform?: number[]
+          width?: number
+          height?: number
+        }
+        if (!it.str?.trim() || !it.transform) continue
+        // transform: [scaleX, skewY, skewX, scaleY, translateX, translateY]
+        const x = it.transform[4] ?? 0
+        const y = (it.transform[5] ?? 0) + yOffset
+        glyphs.push({
+          str: it.str,
+          x,
+          y,
+          w: it.width,
+          h: it.height,
+        })
+      }
+      allGlyphs.push(...glyphs)
+      const pageLines = linesFromGlyphs(glyphs)
+      const pageText = pageLines.map((l) => l.text).join('\n')
+      if (pageText.trim()) textParts.push(pageText)
+      // Also keep a flat fallback if layout empty
+      if (!pageText.trim()) {
+        const flat = content.items
+          .map((it) => ('str' in it ? String((it as { str?: string }).str || '') : ''))
+          .join(' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+        if (flat) textParts.push(flat)
+      }
     } catch {
       /* scan-only PDF */
     }
+    yOffset += baseViewport.height + 24
 
     const viewport = page.getViewport({ scale: PDF_RENDER_SCALE })
     const canvas = document.createElement('canvas')
@@ -186,8 +223,16 @@ async function openPdfDocument(
   }
 
   void name
+  const layoutLines = allGlyphs.length ? linesFromGlyphs(allGlyphs, 4) : []
+  // Prefer layout-reconstructed full text when we have enough lines
+  const embeddedText =
+    layoutLines.length >= 3
+      ? layoutLines.map((l) => l.text).join('\n')
+      : textParts.join('\n\n')
+
   return {
-    embeddedText: textParts.join('\n\n'),
+    embeddedText,
+    layoutLines,
     pageImages: [previewBlob],
     pageCount,
     width: outCanvas.width,
@@ -238,6 +283,7 @@ export async function normalizePickedDocument(
         height: pdf.height,
         kind: usefulText ? 'pdf-text' : 'pdf-scan',
         embeddedText: usefulText ? pdf.embeddedText : undefined,
+        layoutLines: usefulText ? pdf.layoutLines : undefined,
         pageCount: pdf.pageCount,
         fileName: name,
       }

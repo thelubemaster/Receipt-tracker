@@ -1,7 +1,7 @@
 {
-  "version": "1.28.1",
+  "version": "1.29.0",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "New cost-peak logo — ascending bars + rising trajectory",
+  "notes": "Receipt engine rebuild: layout PDF text, arithmetic lock, hard-ban retries",
   "apkVersion": "1.28.1",
   "apkVersionCode": 28,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.28.1/schoolie.apk"
