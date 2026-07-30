@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.4'
+export const APP_VERSION = '1.25.5'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.5',
+    date: '2026-07-30',
+    title: 'See your versions and get up to date',
+    changes: [
+      'Shows app content version, Android package build, and installer status',
+      'One “Get up to date” button: content first, then package (in-app)',
+      'Replaces the stuck Updating… / dual-button mess in Settings',
+    ],
+  },
   {
     version: '1.25.4',
     date: '2026-07-30',

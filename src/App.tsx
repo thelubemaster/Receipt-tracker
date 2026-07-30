@@ -94,14 +94,11 @@ import {
   shouldShowAndroidInstaller,
 } from './AndroidInstaller'
 import {
-  checkForApkUpdate,
-  runInAppUpdate,
   setAutoUpdate,
   useGitHubUpdates,
 } from './appUpdate'
-import { downloadAndInstallApk } from './apkInstaller'
 import { isNativeCapacitorApp } from './installApp'
-import { NativeUpdateBanner } from './NativeUpdateBanner'
+import { UpdateCenter } from './UpdateCenter'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -632,7 +629,7 @@ export default function App() {
 
       {screen.name === 'home' && (
         <>
-          <NativeUpdateBanner />
+          {isNativeCapacitorApp() && <UpdateCenter compact />}
           <ProjectsHome
             onOpenProject={(id) => {
               setError(null)
@@ -3076,44 +3073,12 @@ function SettingsScreen(props: {
     }
   }
 
-  const [otaStatus, setOtaStatus] = useState<string | null>(null)
-  const [otaBusy, setOtaBusy] = useState(false)
   const nativeApp = isNativeCapacitorApp()
 
   useEffect(() => {
     void useGitHubUpdates()
     void setAutoUpdate(true)
   }, [])
-
-  async function handleOtaCheck() {
-    setOtaBusy(true)
-    setOtaStatus('Checking for updates…')
-    try {
-      await useGitHubUpdates()
-      await setAutoUpdate(true)
-      // Cap overall so Settings never sticks on “Updating…”
-      const result = await Promise.race([
-        runInAppUpdate((m) => setOtaStatus(m)),
-        new Promise<Awaited<ReturnType<typeof runInAppUpdate>>>((resolve) =>
-          setTimeout(
-            () =>
-              resolve({
-                web: { status: 'error', message: 'Update check timed out' },
-                apk: { status: 'error', message: 'timed out' },
-                message:
-                  'Timed out. Use “Update home-screen logo” on the home screen (opens download immediately).',
-              }),
-            25_000,
-          ),
-        ),
-      ])
-      setOtaStatus(result.message)
-    } catch (e) {
-      setOtaStatus(e instanceof Error ? e.message : 'Update failed')
-    } finally {
-      setOtaBusy(false)
-    }
-  }
 
   return (
     <>
@@ -3141,64 +3106,7 @@ function SettingsScreen(props: {
             .finally(() => setSaving(false))
         }}
       >
-        {nativeApp && (
-          <div className="card settings-card">
-            <strong>Updates</strong>
-            <p className="muted" style={{ margin: '6px 0 12px' }}>
-              Features update automatically. The <strong>home-screen logo</strong> is part of the
-              Android app package — Android only allows changing it when you tap Install on an
-              update the app downloads for you (no browser, no App Store).
-            </p>
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ width: '100%' }}
-              disabled={otaBusy}
-              onClick={() => void handleOtaCheck()}
-            >
-              {otaBusy ? 'Updating…' : 'Check for updates'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ width: '100%', marginTop: 10 }}
-              disabled={otaBusy}
-              onClick={() => {
-                void (async () => {
-                  setOtaBusy(true)
-                  setOtaStatus('Checking home-screen package…')
-                  try {
-                    const apk = await checkForApkUpdate()
-                    if (apk.status !== 'available') {
-                      setOtaStatus(
-                        apk.status === 'current'
-                          ? `Home-screen package is current (v${apk.versionName}). If the icon still looks wrong, restart your phone launcher or reinstall once from Check for updates.`
-                          : apk.message,
-                      )
-                      return
-                    }
-                    setOtaStatus(`Updating home-screen package to v${apk.versionName}…`)
-                    const r = await downloadAndInstallApk(apk.url, setOtaStatus)
-                    if (r.ok) {
-                      setOtaStatus(
-                        'Download started. Tap Install when Android asks, then open the app again.',
-                      )
-                    } else setOtaStatus(r.message)
-                  } finally {
-                    setOtaBusy(false)
-                  }
-                })()
-              }}
-            >
-              Update home-screen logo
-            </button>
-            {otaStatus && (
-              <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.88rem' }}>
-                {otaStatus}
-              </p>
-            )}
-          </div>
-        )}
+        {nativeApp && <UpdateCenter />}
 
         <div className="card settings-card">
           <strong>Max power mode</strong>
