@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.9'
+export const APP_VERSION = '1.25.0'
 
 /** Android versionCode shipped with this release (launcher / native shell). */
 export const APK_VERSION_CODE = 9
@@ -19,6 +19,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.0',
+    date: '2026-07-30',
+    title: 'More consistent receipt AI',
+    changes: [
+      'New Consensus pass: multi-OCR paths vote on total, vendor, and date',
+      'Arithmetic check (products + tax + fee ≈ total) locks in the right total more often',
+      'Drops duplicate/ghost product lines that used to break the math',
+      'Stronger photo prep for dim thermal receipts + more OCR label cleanup',
+    ],
+  },
   {
     version: '1.24.9',
     date: '2026-07-30',

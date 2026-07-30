@@ -27,6 +27,7 @@ import { applySeekerToDraft, runSeekerAgent } from './seekerAgent'
 import { runSieveAgent } from './sieveAgent'
 import { runTotalsAgent } from './totalsAgent'
 import { runLocalSmartPass } from './localSmartPass'
+import { runConsensusPass } from './consensusPass'
 import type { ReceiptMemory } from '../receiptMemory'
 
 export type LocalAgentResult = ReceiptSuggestion & {
@@ -132,8 +133,19 @@ function scoreParseCandidate(
   if (c.date) s += 6
   if (c.lineItems?.length && c.amount != null) {
     const sum = c.lineItems.reduce((a, i) => a + i.amount, 0)
-    if (Math.abs(sum - c.amount) < 1 || Math.abs(sum - (c.subtotal ?? -1)) < 1) s += 12
+    const tax = c.tax ?? 0
+    // Strong reward when full arithmetic closes
+    if (Math.abs(sum + tax - c.amount) < 0.2 || Math.abs(sum - c.amount) < 0.15) s += 18
+    else if (Math.abs(sum - (c.subtotal ?? -1)) < 0.15) s += 12
+    else if (Math.abs(sum - c.amount) < 1.5) s += 4
+    else if (sum > c.amount * 1.2) s -= 10 // products overshoot total → likely dupes
+  } else if (c.amount == null) {
+    s -= 8
   }
+  // Prefer non-misc categories and real vendors over card-brand junk
+  if (c.categoryId && c.categoryId !== 'misc') s += 4
+  if (c.vendor && !/^(visa|mastercard|amex|debit|chip|purchase)$/i.test(c.vendor.trim())) s += 3
+  if (c.vendor && /^(visa|mastercard|amex|debit|chip)$/i.test(c.vendor.trim())) s -= 12
   s += Math.min(10, (c.description?.length ?? 0) / 20)
   // Weight by historical reliability of AIs on this path
   if (reliability && c.aisUsed?.length) {
@@ -635,6 +647,26 @@ export async function runMultiAgentReceiptPipeline(
   }
   final = runLocalSmartPass(final, councilText || final.rawText || '', memory)
 
+  // ── Consensus: multi-path vote for more consistent totals/vendor/lines ──
+  onProgress?.({
+    stage: 'arbitrate',
+    progress: 0.992,
+    message: 'Consensus pass — cross-checking OCR paths for a stable answer…',
+    aiId: 'quorum',
+    aiName: 'Quorum',
+  })
+  try {
+    // Rank independent parses; keep top paths for voting (not just the huddle winner)
+    const rankedPaths = [...parses].sort((a, b) => scoreOf(b) - scoreOf(a)).slice(0, 5)
+    if (final && !rankedPaths.includes(final)) rankedPaths.unshift(final)
+    final = runConsensusPass(final, rankedPaths, councilText || final.rawText || '')
+  } catch (e) {
+    final.agentReport = [
+      final.agentReport,
+      `Consensus skipped: ${e instanceof Error ? e.message : 'error'}`,
+    ].join('\n')
+  }
+
   final.source = 'on-device'
 
   onProgress?.({
@@ -642,7 +674,7 @@ export async function runMultiAgentReceiptPipeline(
     progress: 1,
     message: rejected?.marks
       ? 'Retry finished using your ✓/✗ marks…'
-      : 'On-device team finished (layout-first + local memory)',
+      : 'On-device team finished (layout + consensus + memory)',
     aiId: 'council',
     aiName: 'Council',
   })
@@ -666,7 +698,8 @@ export async function disposeOnDeviceAgent(): Promise<void> {
 }
 
 /**
- * Free local preprocess: resize + mild contrast so thermal / phone photos OCR better.
+ * Free local preprocess: resize + contrast so thermal / phone photos OCR more consistently.
+ * Adaptive stretch lifts dim receipts without crushing already-sharp ones.
  */
 export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Blob> {
   const bitmap = await createImageBitmap(blob)
@@ -683,8 +716,16 @@ export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Bl
     try {
       const img = ctx.getImageData(0, 0, w, h)
       const d = img.data
-      // Mild contrast + lift dark greys (thermal receipts)
-      const contrast = 1.18
+      // Sample luminance for adaptive contrast
+      let sum = 0
+      let count = 0
+      for (let i = 0; i < d.length; i += 32) {
+        sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+        count++
+      }
+      const mean = count ? sum / count : 128
+      // Dim / washed receipts get more punch; bright already-crisp photos stay mild
+      const contrast = mean < 90 ? 1.32 : mean > 170 ? 1.12 : 1.22
       const intercept = 128 * (1 - contrast)
       for (let i = 0; i < d.length; i += 4) {
         let r = d[i] * contrast + intercept
@@ -692,9 +733,11 @@ export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Bl
         let b = d[i + 2] * contrast + intercept
         // Soft grayscale mix helps Tesseract on tinted photos
         const y = 0.299 * r + 0.587 * g + 0.114 * b
-        r = y * 0.85 + r * 0.15
-        g = y * 0.85 + g * 0.15
-        b = y * 0.85 + b * 0.15
+        // Mild unsharp-style lift of midtones
+        const mid = y < 128 ? y * 1.04 : y
+        r = mid * 0.88 + r * 0.12
+        g = mid * 0.88 + g * 0.12
+        b = mid * 0.88 + b * 0.12
         d[i] = Math.max(0, Math.min(255, r))
         d[i + 1] = Math.max(0, Math.min(255, g))
         d[i + 2] = Math.max(0, Math.min(255, b))

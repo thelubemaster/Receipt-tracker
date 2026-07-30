@@ -32,6 +32,23 @@ const PHRASE_FIXES: [RegExp, string][] = [
   [/\bSHIPP[I1]NG\b/gi, 'SHIPPING'],
   [/\bAM[O0]UNT\s+DUE\b/gi, 'AMOUNT DUE'],
   [/\bBALA[N]CE\s+DUE\b/gi, 'BALANCE DUE'],
+  // Extra consistency fixes (common thermal OCR)
+  [/\bS[A4]LES?\s+T[A4]X\b/gi, 'SALES TAX'],
+  [/\bT[A4]X\b/gi, 'TAX'],
+  [/\bCH[A4]NGE\b/gi, 'CHANGE'],
+  [/\bC[A4]SH\b/gi, 'CASH'],
+  [/\bCRED[I1]T\b/gi, 'CREDIT'],
+  [/\bD[E3]B[I1]T\b/gi, 'DEBIT'],
+  [/\b[I1]TEM\b/gi, 'ITEM'],
+  [/\bQ[T1]Y\b/gi, 'QTY'],
+  [/\bW[A4]LM[A4]RT\b/gi, 'WALMART'],
+  [/\bT[A4]RGET\b/gi, 'TARGET'],
+  [/\b[A4]M[A4]Z[O0]N\b/gi, 'AMAZON'],
+  [/\b[A4]UT[O0]Z[O0]NE\b/gi, 'AUTOZONE'],
+  [/\b[O0]['’]?RE[I1]LLY\b/gi, "O'REILLY"],
+  [/\bN[A4]P[A4]\b/gi, 'NAPA'],
+  [/\bSERV[I1]CE\s+FEE\b/gi, 'SERVICE FEE'],
+  [/\bHANDL[I1]NG\b/gi, 'HANDLING'],
 ]
 
 /**
