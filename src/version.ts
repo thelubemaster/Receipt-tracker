@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.31.0'
+export const APP_VERSION = '1.31.1'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.31.1',
+    date: '2026-07-30',
+    title: 'Honest “who ran” on each scan',
+    changes: [
+      'Scan details only list AIs that actually ran — not every enabled model',
+      'Shows skipped / failed engines separately in the agent report',
+      'Leaderboard pick limited to real participants for that receipt',
+    ],
+  },
   {
     version: '1.31.0',
     date: '2026-07-30',

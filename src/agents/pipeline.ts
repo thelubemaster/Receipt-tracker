@@ -271,6 +271,8 @@ export async function runMultiAgentReceiptPipeline(
 
   const ocrTexts: { label: string; text: string; note: string; ais: AiId[] }[] = []
   const skipped: string[] = []
+  /** Only AIs that actually ran work this scan (never "all enabled"). */
+  const actuallyRan = new Set<AiId>()
 
   async function runOcrIfEnabled(
     id: AiId,
@@ -285,8 +287,14 @@ export async function runMultiAgentReceiptPipeline(
       const r = await runner()
       if (r.text.trim()) {
         ocrTexts.push({ label, text: r.text, note: r.note, ais: [id] })
+        actuallyRan.add(id)
+      } else {
+        skipped.push(`${label} produced no text`)
       }
     } catch (e) {
+      skipped.push(
+        `${label}: ${e instanceof Error ? e.message.slice(0, 60) : 'error'}`,
+      )
       onProgress?.({
         stage: 'ocr',
         progress: 0.45,
@@ -385,6 +393,7 @@ export async function runMultiAgentReceiptPipeline(
       const oracle = await runOracleVlm(workBlob, onProgress)
       if (!oracle.unavailable && oracle.text.trim()) {
         oracleStructured = oracle
+        actuallyRan.add('oracle')
         ocrTexts.push({
           label: 'Oracle vision path',
           text: oracle.text,
@@ -522,6 +531,7 @@ export async function runMultiAgentReceiptPipeline(
         const local = vlmResultToLocal(vr)
         if (local) {
           earlyVlmParses.push(local)
+          actuallyRan.add(vr.aiId)
           if (vr.text.trim()) {
             usable.push({
               label: `${vr.label} vision path`,
@@ -771,6 +781,7 @@ export async function runMultiAgentReceiptPipeline(
           }),
       })
       final = applySeekerToDraft(final, seek)
+      actuallyRan.add('seeker')
       if (enabled('council')) {
         final = runCouncilAgent(
           final,
@@ -788,6 +799,9 @@ export async function runMultiAgentReceiptPipeline(
         )
       }
     } catch (e) {
+      skipped.push(
+        `Seeker: ${e instanceof Error ? e.message.slice(0, 60) : 'offline'}`,
+      )
       final.agentReport = [
         final.agentReport,
         `Seeker skipped (optional): ${e instanceof Error ? e.message : 'offline'}`,
@@ -795,43 +809,60 @@ export async function runMultiAgentReceiptPipeline(
     }
   } else if (!enabled('seeker')) {
     skipped.push('Seeker off (optional web AI)')
+  } else {
+    skipped.push('Seeker offline')
   }
 
-  const ranIds = new Set<AiId>([
-    ...(final.aisUsed ?? []),
-    ...usable.flatMap((u) => u.ais),
-    'scout',
-    'ledger',
-    'cashier',
-    'clerk',
-    'arbiter',
-  ])
-  for (const id of [
-    'forge',
-    'lens',
-    'ruler',
-    'wedge',
-    'prism',
-    'bloom',
-    'mosaic',
-    'hammer',
-    'titan',
-    'oracle',
-    'smolvlm',
-    'rolmocr',
-    'qwen25vl',
-    'qwen3vl',
-    'gotocr',
-    'internvl',
-    'deepseekocr',
-    'sieve',
-    'quorum',
-    'council',
-    'seeker',
-  ] as AiId[]) {
-    if (enabled(id)) ranIds.add(id)
+  // Parse agents that always run when we have OCR text
+  actuallyRan.add('ledger')
+  actuallyRan.add('cashier')
+  actuallyRan.add('clerk')
+  actuallyRan.add('arbiter')
+  if (enabled('sieve')) actuallyRan.add('sieve')
+  // OCR engines that contributed a path
+  for (const u of usable) {
+    for (const id of u.ais) actuallyRan.add(id)
   }
-  if (oracleStructured && !oracleStructured.unavailable) ranIds.add('oracle')
+  if (oracleStructured && !oracleStructured.unavailable) actuallyRan.add('oracle')
+  for (const p of earlyVlmParses) {
+    for (const id of p.aisUsed ?? []) actuallyRan.add(id)
+  }
+  // Post-OCR agents only if they actually ran
+  if (enabled('council')) actuallyRan.add('council')
+  // Quorum only if multiple paths were merged / voted
+  if (enabled('quorum') && (usable.length > 1 || parses.length > 1)) {
+    actuallyRan.add('quorum')
+  }
+  // Team huddle always uses arbiter/ledger path when it succeeds
+  if (final.aisUsed?.length) {
+    for (const id of final.aisUsed) {
+      // Only trust ids that are real runners, not a bloated list from an older bug
+      if (
+        [
+          'ledger',
+          'sieve',
+          'cashier',
+          'clerk',
+          'arbiter',
+          'quorum',
+          'council',
+          'seeker',
+          'oracle',
+        ].includes(id) ||
+        usable.some((u) => u.ais.includes(id)) ||
+        earlyVlmParses.some((p) => p.aisUsed?.includes(id))
+      ) {
+        actuallyRan.add(id)
+      }
+    }
+  }
+
+  // Scout only if it was the emergency path (or contributed)
+  if (!usable.some((u) => u.ais.includes('scout'))) {
+    actuallyRan.delete('scout')
+  }
+
+  const ranIds = actuallyRan
   final.aisUsed = Array.from(ranIds)
   // Ensure field attribution + human-readable “who answered”
   const ocrLead = usable[0]?.ais[0]
@@ -859,16 +890,19 @@ export async function runMultiAgentReceiptPipeline(
   }
 
   final.agentReport = [
-    'Free AIs: on-device OCR + optional free vision VLMs (Qwen/RolmOCR/GOT/SmolVLM/…). No paid API keys required.',
+    'Free AIs: on-device OCR + optional free vision VLMs. No paid API keys required.',
     `WHO ANSWERED: ${final.fieldSources.answerLabel}`,
     final.fieldSources.primary
       ? `Primary: ${getAiName(final.fieldSources.primary)} · Total: ${getAiName(final.fieldSources.total ?? 'cashier')} · Vendor: ${getAiName(final.fieldSources.vendor ?? 'clerk')} · Lines: ${getAiName(final.fieldSources.category ?? 'ledger')}`
       : null,
     rejected ? formatRejectionBrief(rejected) : null,
     diversifyReport || null,
-    skipped.length ? `Disabled/skipped: ${skipped.join(', ')}` : null,
-    `On-device AIs this run: ${Array.from(ranIds).filter((id) => id !== 'seeker').join(', ')}`,
-    enabled('seeker') ? 'Seeker: optional free web (not required for a scan)' : null,
+    `Actually ran (${ranIds.size}): ${Array.from(ranIds)
+      .map((id) => getAiName(id))
+      .join(', ')}`,
+    skipped.length
+      ? `Skipped / off / failed (${skipped.length}): ${skipped.slice(0, 12).join(' · ')}${skipped.length > 12 ? '…' : ''}`
+      : null,
     ...usable.map((u) => u.note),
     final.agentReport,
   ]

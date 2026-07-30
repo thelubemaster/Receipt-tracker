@@ -80,22 +80,13 @@ export async function scanReceipt(
   return {
     ...local,
     source: 'on-device',
-    aisUsed: local.aisUsed ?? [
-      'forge',
-      'lens',
-      'hammer',
-      'titan',
-      'scout',
-      'ledger',
-      'sieve',
-      'cashier',
-      'clerk',
-      'arbiter',
-      'quorum',
-    ],
+    // Only credit AIs that actually ran — never invent a full roster
+    aisUsed: local.aisUsed?.length
+      ? local.aisUsed
+      : ['ledger', 'cashier', 'clerk', 'arbiter'],
     activeAiLabel:
       local.activeAiLabel ??
-      (rejected ? `Retry #${rejected.attempt}` : 'Max-power free team'),
+      (rejected ? `Retry #${rejected.attempt}` : 'Free scan team'),
   }
 }
 

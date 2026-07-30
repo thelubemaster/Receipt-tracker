@@ -1,7 +1,7 @@
 {
-  "version": "1.31.0",
+  "version": "1.31.1",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Vision VLMs: Qwen2.5-VL, Qwen3-VL, RolmOCR, GOT-OCR, SmolVLM, InternVL, DeepSeek-OCR",
+  "notes": "Honest credit — only list AIs that actually ran this scan",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

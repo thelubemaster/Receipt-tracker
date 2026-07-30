@@ -3002,7 +3002,7 @@ function PurchaseFormScreen(props: {
                     {form.aisUsed.length > 0 && (
                       <ExpandableBlock collapsedMax={52} className="answer-credit-team">
                         <div className="muted" style={{ fontSize: '0.78rem' }}>
-                          Full team:{' '}
+                          Actually ran this scan ({form.aisUsed.length}):{' '}
                           {form.aisUsed
                             .map((id) => `${getAi(id).emoji} ${getAi(id).name}`)
                             .join(' · ')}
@@ -3016,7 +3016,7 @@ function PurchaseFormScreen(props: {
                   <div className="field" style={{ marginTop: 12 }}>
                     <label>Who scanned best? (leaderboard)</label>
                     <p className="muted" style={{ margin: '0 0 8px' }}>
-                      Optional — pick who got closest for the leaderboard.
+                      Optional — pick only from AIs that ran this scan.
                     </p>
                     <div className="ai-pick-grid">
                       {form.aisUsed.map((id) => {
