@@ -1,8 +1,8 @@
 {
-  "version": "1.29.1",
+  "version": "1.29.2",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Fix APK download stuck at 0% — progress + WebView fallback",
+  "notes": "Unstick package download on build 27 — live % and native downloader no longer aborted early",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
-  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.29.1/schoolie.apk"
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
 }

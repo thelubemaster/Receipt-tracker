@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.29.1'
+export const APP_VERSION = '1.29.2'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.29.2',
+    date: '2026-07-30',
+    title: 'Unstick package download on build 27',
+    changes: [
+      'No longer aborts a working native download when progress events are silent',
+      'Shows live % while the ~15 MB package downloads (even on older shells)',
+      'Skips WebView pre-fetch that could hang at 0% before download starts',
+      'Build 27 can finish Install via native downloader; then you get build 29 logo',
+    ],
+  },
   {
     version: '1.29.1',
     date: '2026-07-30',

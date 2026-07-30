@@ -94,12 +94,16 @@ export function UpdateCenter() {
           setStatus(m)
           const match = /(\d+)\s*%/.exec(m)
           if (match) setPercent(parseInt(match[1], 10))
-          else if (/MB|Connecting|Redirect|Still downloading|alternate|Preparing|Saving/i.test(m)) {
-            // Keep bar alive with indeterminate-ish motion when only text updates
+          else if (
+            /MB|Connecting|Redirect|Still downloading|alternate|Preparing|Saving|Starting|Downloading|package|wait|server/i.test(
+              m,
+            )
+          ) {
+            // Keep bar alive when only text updates (old shells often omit %)
             setPercent((prev) => {
               if (prev == null || prev < 1) return 1
               if (prev >= 95) return prev
-              return prev
+              return Math.min(95, prev + 1)
             })
           }
         })

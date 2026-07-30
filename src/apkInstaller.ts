@@ -2,9 +2,13 @@
  * Fully in-app APK update — download + system PackageInstaller.
  * No browser, no external download links, no window.open.
  *
- * Paths:
- * 1) Native HttpURLConnection download (preferred)
- * 2) WebView XHR download + installBase64 (fallback if native stalls)
+ * Works on old shells (build 27+) and new ones (build 29+):
+ * 1) Native downloadAndInstall (always — build 27 has this)
+ * 2) CapacitorHttp / XHR + installBase64 (only when native plugin supports it)
+ *
+ * Critical: never abort a healthy native download just because progress
+ * events are missing — older ApkInstaller emitted off the main thread so
+ * JS often saw “0% forever” while the file was still downloading.
  */
 import { isNativeCapacitorApp } from './installApp'
 import { GITHUB_APK_LATEST, githubApkForTag } from './githubConfig'
@@ -21,7 +25,7 @@ type ApkPlugin = {
     fileName?: string
   }) => Promise<{ installed?: boolean; path?: string }>
   installFile: (opts: { path: string }) => Promise<void>
-  installBase64: (opts: { data: string }) => Promise<{ installed?: boolean; path?: string }>
+  installBase64?: (opts: { data: string }) => Promise<{ installed?: boolean; path?: string }>
   addListener: (
     event: 'apkProgress' | 'apkInstallStatus',
     cb: (data: ProgressEvent & InstallStatusEvent) => void,
@@ -51,6 +55,33 @@ async function getPlugin(): Promise<ApkPlugin | null> {
     return registerPlugin<ApkPlugin>('ApkInstaller')
   } catch {
     return null
+  }
+}
+
+/** True when this APK shell can accept bytes from the WebView. */
+async function pluginSupportsInstallBase64(plugin: ApkPlugin): Promise<boolean> {
+  if (typeof plugin.installBase64 === 'function') return true
+  // Capacitor still exposes missing methods as bridges that reject with UNIMPLEMENTED
+  try {
+    await withTimeout(
+      plugin.installBase64!({ data: '' }).then(
+        () => false,
+        (e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (/not implemented|UNIMPLEMENTED|is not implemented|does not exist/i.test(msg)) {
+            return false
+          }
+          // "data is required" / empty data → method exists
+          if (/data|required|empty|incomplete/i.test(msg)) return true
+          return false
+        },
+      ),
+      2500,
+      'installBase64 probe',
+    )
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -88,32 +119,28 @@ export function apkUrlCandidates(primary?: string | null): string[] {
 }
 
 /**
- * Follow redirects in the WebView (often more reliable than HttpURLConnection
- * on some devices for GitHub → Azure release assets).
+ * Optional redirect resolve — short timeout only. Never download the body.
+ * Older WebViews hang on GET of a 15 MB release asset.
  */
 export async function resolveFinalDownloadUrl(startUrl: string): Promise<string> {
-  let current = startUrl
-  for (let i = 0; i < 10; i++) {
-    try {
-      const res = await fetch(current, {
-        method: 'GET',
-        redirect: 'manual',
-        cache: 'no-store',
-        headers: { Accept: '*/*' },
-      })
-      if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get('Location') || res.headers.get('location')
-        if (!loc) break
-        current = new URL(loc, current).href
-        continue
-      }
-      // Some WebViews auto-follow anyway — URL is already final
-      return current
-    } catch {
-      break
-    }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 4000)
+  try {
+    const res = await fetch(startUrl, {
+      method: 'HEAD',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { Accept: '*/*' },
+    })
+    // response.url is final after follow (when supported)
+    if (res.url && /^https?:\/\//i.test(res.url)) return res.url
+    return startUrl
+  } catch {
+    return startUrl
+  } finally {
+    clearTimeout(timer)
   }
-  return current
 }
 
 function blobToBase64(blob: Blob, onProgress?: (pct: number) => void): Promise<string> {
@@ -127,7 +154,6 @@ function blobToBase64(blob: Blob, onProgress?: (pct: number) => void): Promise<s
     }
     reader.onload = () => {
       const result = String(reader.result || '')
-      // strip data:…;base64, prefix for native
       const comma = result.indexOf(',')
       resolve(comma >= 0 ? result.slice(comma + 1) : result)
     }
@@ -135,18 +161,200 @@ function blobToBase64(blob: Blob, onProgress?: (pct: number) => void): Promise<s
   })
 }
 
+/** ~15 MB package — synthetic % so the UI never freezes at 0% when native is silent. */
+function startSyntheticProgress(
+  onProgress: ((msg: string) => void) | undefined,
+  label: string,
+): () => void {
+  const started = Date.now()
+  // Expect ~15 MB; pace fake progress to ~90% over ~90s then crawl
+  const tick = () => {
+    const sec = Math.max(1, Math.round((Date.now() - started) / 1000))
+    const pct =
+      sec < 90
+        ? Math.min(90, Math.round((sec / 90) * 90))
+        : Math.min(97, 90 + Math.floor((sec - 90) / 15))
+    onProgress?.(`${label} ${pct}% · ${sec}s`)
+  }
+  tick()
+  const id = setInterval(tick, 1000)
+  return () => clearInterval(id)
+}
+
 /**
- * Download APK via XHR in the WebView (good redirect/CDN support), then
- * hand bytes to native PackageInstaller.
+ * Native downloadAndInstall — the only path that works on package build 27.
+ * Waits for real completion; does not abort just because events are quiet.
+ */
+async function downloadViaNative(
+  url: string,
+  plugin: ApkPlugin,
+  onProgress?: (msg: string) => void,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const removers: Array<() => void> = []
+  let sawNativeProgress = false
+  let stopSynth: (() => void) | null = null
+
+  try {
+    try {
+      const prog = await plugin.addListener('apkProgress', (data) => {
+        if (data?.message) {
+          sawNativeProgress = true
+          stopSynth?.()
+          stopSynth = null
+          onProgress?.(data.message)
+        } else if (typeof data?.percent === 'number' && data.percent >= 0) {
+          sawNativeProgress = true
+          stopSynth?.()
+          stopSynth = null
+          onProgress?.(`Downloading… ${data.percent}%`)
+        }
+      })
+      removers.push(() => {
+        void prog.remove()
+      })
+    } catch {
+      /* listeners optional */
+    }
+
+    try {
+      const inst = await plugin.addListener('apkInstallStatus', (data) => {
+        if (data?.message) onProgress?.(data.message)
+      })
+      removers.push(() => {
+        void inst.remove()
+      })
+    } catch {
+      /* optional */
+    }
+
+    stopSynth = startSyntheticProgress(onProgress, 'Downloading package…')
+    onProgress?.('Connecting to download server… 1%')
+
+    try {
+      await withTimeout(
+        plugin.downloadAndInstall({ url, fileName: 'schoolie-update.apk' }),
+        300_000,
+        'in-app download',
+      )
+      stopSynth?.()
+      onProgress?.(
+        'Confirm Install on the system screen. When it finishes, open Cost Tracker from the home screen.',
+      )
+      return { ok: true }
+    } catch (e) {
+      stopSynth?.()
+      const message = e instanceof Error ? e.message : String(e)
+      // Keep a hint when events never arrived (old shells)
+      if (!sawNativeProgress && /timed out/i.test(message)) {
+        return {
+          ok: false,
+          message:
+            'Download timed out with no progress from the package installer. Try Wi‑Fi, then tap Get up to date again.',
+        }
+      }
+      return { ok: false, message }
+    }
+  } finally {
+    stopSynth?.()
+    for (const r of removers) {
+      try {
+        r()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/**
+ * CapacitorHttp (native, no CORS) → installBase64. Only for shells that have it.
+ */
+async function downloadViaCapacitorHttp(
+  url: string,
+  plugin: ApkPlugin,
+  onProgress?: (msg: string) => void,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (typeof plugin.installBase64 !== 'function') {
+    return { ok: false, message: 'installBase64 not available' }
+  }
+
+  const stopSynth = startSyntheticProgress(onProgress, 'Downloading via app network…')
+  try {
+    const { CapacitorHttp } = await import('@capacitor/core')
+    onProgress?.('Downloading via app network… 5%')
+    const res = await withTimeout(
+      CapacitorHttp.get({
+        url,
+        connectTimeout: 45_000,
+        readTimeout: 280_000,
+        responseType: 'blob',
+        headers: {
+          Accept: '*/*',
+          'User-Agent': 'ProjectCostTracker-InAppUpdater/2.1',
+        },
+      }),
+      300_000,
+      'CapacitorHttp download',
+    )
+
+    if (res.status < 200 || res.status >= 300) {
+      return { ok: false, message: `Download failed (HTTP ${res.status})` }
+    }
+
+    // Native returns base64 string for blob responseType
+    let b64: string
+    if (typeof res.data === 'string') {
+      b64 = res.data.includes(',') ? res.data.slice(res.data.indexOf(',') + 1) : res.data
+    } else if (res.data instanceof Blob) {
+      b64 = await blobToBase64(res.data)
+    } else {
+      return { ok: false, message: 'Unexpected download payload' }
+    }
+
+    // Rough size check: base64 of 100KB ≈ 136KB chars
+    if (!b64 || b64.length < 130_000) {
+      return {
+        ok: false,
+        message: `Download incomplete (${b64?.length ?? 0} chars). Try Wi‑Fi.`,
+      }
+    }
+
+    stopSynth()
+    onProgress?.('Preparing package for Install… 95%')
+    await withTimeout(plugin.installBase64!({ data: b64 }), 120_000, 'install package')
+    onProgress?.(
+      'Confirm Install on the system screen. When it finishes, open Cost Tracker from the home screen.',
+    )
+    return { ok: true }
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : String(e),
+    }
+  } finally {
+    stopSynth()
+  }
+}
+
+/**
+ * WebView XHR fallback (may hit CORS on some CDNs). Needs installBase64.
  */
 async function downloadViaWebView(
   url: string,
   plugin: ApkPlugin,
   onProgress?: (msg: string) => void,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (typeof plugin.installBase64 !== 'function') {
+    return { ok: false, message: 'installBase64 not available' }
+  }
+
   onProgress?.('Downloading via app network… 0%')
-  const finalUrl = await resolveFinalDownloadUrl(url)
-  onProgress?.('Connected — downloading package…')
+  let finalUrl = url
+  try {
+    finalUrl = await resolveFinalDownloadUrl(url)
+  } catch {
+    finalUrl = url
+  }
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -188,24 +396,8 @@ async function downloadViaWebView(
     onProgress?.(`Preparing… ${Math.min(95, 88 + Math.round(pct * 0.07))}%`)
   })
 
-  // installBase64 may be missing on very old shells
-  if (typeof plugin.installBase64 !== 'function') {
-    return {
-      ok: false,
-      message:
-        'This app build can download but needs a one-time package update to finish Install. Try “Get up to date” again after reopening, or use the native downloader.',
-    }
-  }
-
-  const removers: Array<() => void> = []
   try {
-    const prog = await plugin.addListener('apkProgress', (data) => {
-      if (data?.message) onProgress?.(data.message)
-    })
-    removers.push(() => {
-      void prog.remove()
-    })
-    await withTimeout(plugin.installBase64({ data: b64 }), 120_000, 'install package')
+    await withTimeout(plugin.installBase64!({ data: b64 }), 120_000, 'install package')
     onProgress?.(
       'Confirm Install on the system screen. When it finishes, open Cost Tracker from the home screen.',
     )
@@ -214,91 +406,6 @@ async function downloadViaWebView(
     return {
       ok: false,
       message: e instanceof Error ? e.message : String(e),
-    }
-  } finally {
-    for (const r of removers) {
-      try {
-        r()
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-}
-
-async function downloadViaNative(
-  url: string,
-  plugin: ApkPlugin,
-  onProgress?: (msg: string) => void,
-): Promise<{ ok: true } | { ok: false; message: string }> {
-  const removers: Array<() => void> = []
-  let lastProgressAt = Date.now()
-  let lastMsg = ''
-
-  try {
-    const prog = await plugin.addListener('apkProgress', (data) => {
-      lastProgressAt = Date.now()
-      if (data?.message) {
-        lastMsg = data.message
-        onProgress?.(data.message)
-      } else if (typeof data?.percent === 'number' && data.percent >= 0) {
-        lastMsg = `Downloading… ${data.percent}%`
-        onProgress?.(lastMsg)
-      }
-    })
-    removers.push(() => {
-      void prog.remove()
-    })
-
-    const inst = await plugin.addListener('apkInstallStatus', (data) => {
-      if (data?.message) onProgress?.(data.message)
-    })
-    removers.push(() => {
-      void inst.remove()
-    })
-
-    // Stall watchdog: if no progress for 20s after start, abort and let fallback run
-    const stall = new Promise<{ ok: false; message: string }>((resolve) => {
-      const t = setInterval(() => {
-        if (Date.now() - lastProgressAt > 22_000) {
-          clearInterval(t)
-          resolve({
-            ok: false,
-            message: 'Native download stalled — trying alternate method…',
-          })
-        }
-      }, 2000)
-      // clear when outer settles — caller ignores if already done
-      setTimeout(() => clearInterval(t), 300_000)
-    })
-
-    const download = withTimeout(
-      plugin.downloadAndInstall({ url, fileName: 'schoolie-update.apk' }).then(() => {
-        onProgress?.(
-          'Confirm Install on the system screen. When it finishes, open Cost Tracker from the home screen.',
-        )
-        return { ok: true as const }
-      }),
-      280_000,
-      'in-app download',
-    ).catch((e: unknown) => ({
-      ok: false as const,
-      message: e instanceof Error ? e.message : String(e),
-    }))
-
-    const result = await Promise.race([download, stall])
-    if (!result.ok && /stalled/i.test(result.message)) {
-      // Don't leave native thread hanging forever — best effort
-      return result
-    }
-    return result
-  } finally {
-    for (const r of removers) {
-      try {
-        r()
-      } catch {
-        /* ignore */
-      }
     }
   }
 }
@@ -317,6 +424,8 @@ export async function downloadAndInstallApk(
       message: 'Updates install only inside the Android app.',
     }
   }
+
+  onProgress?.('Starting package update… 0%')
 
   const p = await getPlugin()
   if (!p) {
@@ -350,6 +459,7 @@ export async function downloadAndInstallApk(
     }
   }
 
+  const hasBase64 = await pluginSupportsInstallBase64(p)
   const urls = apkUrlCandidates(url)
   let lastError = 'Download failed'
 
@@ -357,33 +467,39 @@ export async function downloadAndInstallApk(
     const candidate = urls[i]
     onProgress?.(
       i === 0
-        ? 'Downloading update inside the app…'
-        : `Trying alternate download link (${i + 1}/${urls.length})…`,
+        ? 'Downloading update inside the app… 1%'
+        : `Trying alternate download link (${i + 1}/${urls.length})… 1%`,
     )
 
-    // Prefer resolving redirects in WebView first (helps some devices)
-    let finalUrl = candidate
-    try {
-      finalUrl = await resolveFinalDownloadUrl(candidate)
-    } catch {
-      finalUrl = candidate
-    }
-
-    // 1) Native downloader
-    const native = await downloadViaNative(finalUrl, p, onProgress)
+    // 1) Native downloader — works on package build 27 (no installBase64 needed)
+    //    Pass the GitHub release URL as-is; native follows redirects itself.
+    //    Do NOT pre-download in WebView (hangs) and do NOT abort on quiet progress.
+    const native = await downloadViaNative(candidate, p, onProgress)
     if (native.ok) return native
     lastError = native.message
 
-    // If permission / unimplemented — don't keep trying URLs the same way
     if (/permission|unknown apps|not implemented|UNIMPLEMENTED/i.test(native.message)) {
       return native
     }
 
-    // 2) WebView XHR fallback (same URL, different stack)
-    onProgress?.('Switching to alternate download method…')
-    const web = await downloadViaWebView(finalUrl, p, onProgress)
-    if (web.ok) return web
-    lastError = web.message
+    // 2) Only when this shell can install bytes from JS (build 29+)
+    if (hasBase64) {
+      onProgress?.('Switching to alternate download method… 2%')
+      const http = await downloadViaCapacitorHttp(candidate, p, onProgress)
+      if (http.ok) return http
+      lastError = http.message
+
+      const web = await downloadViaWebView(candidate, p, onProgress)
+      if (web.ok) return web
+      lastError = web.message
+    }
+  }
+
+  if (!hasBase64) {
+    return {
+      ok: false,
+      message: `${lastError}. Stay on Wi‑Fi and tap Get up to date again — this package build downloads inside the app (no browser). If it keeps failing, force-close the app once and retry.`,
+    }
   }
 
   return {

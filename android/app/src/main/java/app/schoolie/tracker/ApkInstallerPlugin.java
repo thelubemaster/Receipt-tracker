@@ -132,7 +132,7 @@ public class ApkInstallerPlugin extends Plugin {
                         () -> {
                             File apkFile = null;
                             try {
-                                emit(0, "Connecting…");
+                                emit(1, "Connecting…");
                                 Log.i(TAG, "download start: " + url);
                                 apkFile = downloadToFile(url, fileName);
                                 if (cancelled) {
