@@ -1,8 +1,8 @@
 {
-  "version": "1.24.7",
+  "version": "1.24.8",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "In-app updates: web OTA + full APK when the home-screen icon or native shell needs a bump",
-  "apkVersion": "1.24.7",
-  "apkVersionCode": 7,
+  "notes": "Bold new infinity logo + in-app updates",
+  "apkVersion": "1.24.8",
+  "apkVersionCode": 8,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
 }

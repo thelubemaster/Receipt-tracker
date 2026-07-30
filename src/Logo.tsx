@@ -2,15 +2,14 @@ import { useId } from 'react'
 import { APP_NAME, APP_TAGLINE } from './brand'
 
 /**
- * Project Cost Tracker mark — project folder + receipt + check.
- * (Replaces the old school-bus logo.)
+ * Project Cost Tracker mark — infinity path (cost cycle) rising to a peak.
+ * Drastic redesign: not a bus, folder, or receipt.
  */
 export function LogoMark({ size = 40 }: { size?: number }) {
   const uid = useId().replace(/:/g, '')
   const bg = `bg-${uid}`
-  const paper = `paper-${uid}`
-  const accent = `accent-${uid}`
-  const folder = `folder-${uid}`
+  const ribbon = `ribbon-${uid}`
+  const coin = `coin-${uid}`
 
   return (
     <svg
@@ -23,25 +22,29 @@ export function LogoMark({ size = 40 }: { size?: number }) {
       className="logo-mark"
     >
       <defs>
-        <linearGradient id={bg} x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#1a222c" />
-          <stop offset="1" stopColor="#0c0e13" />
+        <linearGradient id={bg} x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#152033" />
+          <stop offset="1" stopColor="#0a0e16" />
         </linearGradient>
-        <linearGradient id={folder} x1="12" y1="16" x2="52" y2="52" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#2a3846" />
-          <stop offset="1" stopColor="#1a2630" />
-        </linearGradient>
-        <linearGradient id={paper} x1="22" y1="16" x2="42" y2="50" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#2dd4bf" />
+        <linearGradient id={ribbon} x1="10" y1="40" x2="54" y2="20" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#ccfbf1" />
+          <stop offset="0.35" stopColor="#5eead4" />
+          <stop offset="0.7" stopColor="#2dd4bf" />
           <stop offset="1" stopColor="#0f766e" />
         </linearGradient>
-        <linearGradient id={accent} x1="40" y1="40" x2="56" y2="56" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#fb923c" />
-          <stop offset="1" stopColor="#ea580c" />
+        <linearGradient id={coin} x1="14" y1="28" x2="28" y2="44" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#f8fafc" />
+          <stop offset="1" stopColor="#94a3b8" />
         </linearGradient>
+        <filter id={`g-${uid}`} x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="1.4" result="b" />
+          <feMerge>
+            <feMergeNode in="b" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
       </defs>
 
-      {/* app tile */}
       <rect width="64" height="64" rx="16" fill={`url(#${bg})`} />
       <rect
         x="1.5"
@@ -49,50 +52,51 @@ export function LogoMark({ size = 40 }: { size?: number }) {
         width="61"
         height="61"
         rx="14.5"
-        stroke="rgba(45,212,191,0.28)"
+        stroke="rgba(45,212,191,0.2)"
         strokeWidth="1.2"
       />
 
-      {/* project folder */}
-      <path
-        d="M14 22h14c1.2 0 1.8.4 2.4 1.2L32 26h18a3 3 0 0 1 3 3v20a3 3 0 0 1-3 3H14a3 3 0 0 1-3-3V25a3 3 0 0 1 3-3z"
-        fill={`url(#${folder})`}
-      />
-      <rect x="13" y="28" width="38" height="22" rx="3" fill="#121a22" opacity="0.55" />
+      {/* infinity ribbon (horizontal figure-8, right side lifted) */}
+      <g filter={`url(#g-${uid})`}>
+        <path
+          d="M12 36c0-7.5 6-12.5 13.5-11.5 5 .7 8 4.2 10.5 7.2 2.2-3.5 6-8.2 12.5-9 8.5-1 15 4.8 14.2 13-.7 6.5-6.2 10.8-12.8 10.2-5.2-.5-8.2-3.8-10.6-6.8-2.2 3.2-5.8 6.5-11.2 7C17 47 12 42.5 12 36z"
+          fill="none"
+          stroke={`url(#${ribbon})`}
+          strokeWidth="6.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.95"
+        />
+        {/* inner highlight stripe */}
+        <path
+          d="M16 35.5c1.2-5.5 5.8-8.8 11-8 4 .5 6.5 3.5 8.8 6.2"
+          fill="none"
+          stroke="rgba(255,255,255,0.45)"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </g>
 
-      {/* multi-project dots */}
-      <circle cx="38" cy="24.5" r="1.6" fill="#5b9fd4" />
-      <circle cx="42.5" cy="24.5" r="1.6" fill="#5cb88a" />
-      <circle cx="47" cy="24.5" r="1.6" fill="#e8a54b" />
-
-      {/* receipt */}
+      {/* coin edge on left loop */}
       <path
-        d="M22 18h16a2.5 2.5 0 0 1 2.5 2.5V46c0 .55-.62.84-1.02.48l-1.9-1.7-1.9 1.7c-.4.36-1.02.07-1.02-.48v-2.2c0-.55-.45-1-1-1h-8.7c-.55 0-1 .45-1 1V46c0 .55-.62.84-1.02.48l-1.9-1.7-1.9 1.7c-.4.36-1.02.07-1.02-.48V20.5A2.5 2.5 0 0 1 22 18z"
-        fill={`url(#${paper})`}
-      />
-      {/* fold corner */}
-      <path d="M37.5 18L40.5 21H37.5V18z" fill="#0d5c56" opacity="0.55" />
-      {/* lines */}
-      <path
-        d="M25.5 27h11M25.5 32.5h9.5M25.5 38h7.5"
-        stroke="#e8f7f5"
-        strokeWidth="2.1"
-        strokeLinecap="round"
-        opacity="0.92"
-      />
-      {/* total bar */}
-      <rect x="25.5" y="43" width="9" height="2.2" rx="1" fill="rgba(8,30,28,0.45)" />
-
-      {/* check badge */}
-      <circle cx="44" cy="45" r="10.5" fill={`url(#${accent})`} />
-      <path
-        d="M39.6 45.2l2.9 2.9 6.2-7.1"
+        d="M15.5 31.5c-1.2 1.5-1.8 3.2-1.8 5 0 5.2 3.8 8.8 9 8.8"
         fill="none"
-        stroke="#fff"
-        strokeWidth="2.5"
+        stroke={`url(#${coin})`}
+        strokeWidth="2.2"
         strokeLinecap="round"
-        strokeLinejoin="round"
+        opacity="0.85"
       />
+      <path
+        d="M15 33.5h-2.6M14.2 37h-2.8M15 40.5h-2.4"
+        stroke="rgba(226,232,240,0.55)"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+
+      {/* rising peak node */}
+      <circle cx="49" cy="16.5" r="6.5" fill="rgba(251,113,133,0.22)" />
+      <circle cx="49" cy="16.5" r="4.4" fill="#fb923c" />
+      <circle cx="47.8" cy="15.3" r="1.4" fill="rgba(255,255,255,0.5)" />
     </svg>
   )
 }

@@ -51,10 +51,27 @@ export async function downloadAndInstallApk(
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   const p = await getPlugin()
   if (!p) {
-    // Browser / missing plugin — open the URL so the OS can download
+    // Older APK without the installer plugin — still open download from inside the app
     try {
-      onProgress?.('Opening download…')
-      window.open(url, '_blank')
+      onProgress?.('Opening download inside the app…')
+      try {
+        const { App } = await import('@capacitor/app')
+        // Capacitor 7: openUrl launches the system handler for the APK link
+        await (App as unknown as { openUrl?: (o: { url: string }) => Promise<void> }).openUrl?.({
+          url,
+        })
+      } catch {
+        /* fall through */
+      }
+      // Always also try window / anchor — works in WebView for https APK URLs
+      const a = document.createElement('a')
+      a.href = url
+      a.target = '_blank'
+      a.rel = 'noopener'
+      a.download = 'schoolie.apk'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
       return { ok: true }
     } catch (e) {
       return {

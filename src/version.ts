@@ -5,10 +5,10 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.7'
+export const APP_VERSION = '1.24.8'
 
 /** Android versionCode shipped with this release (launcher / native shell). */
-export const APK_VERSION_CODE = 7
+export const APK_VERSION_CODE = 8
 
 export type ChangelogEntry = {
   version: string
@@ -19,6 +19,15 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.8',
+    date: '2026-07-30',
+    title: 'Bold new infinity logo',
+    changes: [
+      'Completely new brand mark — rising infinity path (not a bus or receipt)',
+      'Home screen, splash, and in-app logo all refreshed',
+    ],
+  },
   {
     version: '1.24.7',
     date: '2026-07-30',
