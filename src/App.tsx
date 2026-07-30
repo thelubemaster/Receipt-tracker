@@ -1704,21 +1704,30 @@ function ScanScreen(props: {
   onError: (msg: string) => void
 }) {
   const [busy, setBusy] = useState(Boolean(props.retryBlob && props.rejected))
+  /** opening = loading/normalizing gallery pick; scanning = OCR team running */
+  const [workPhase, setWorkPhase] = useState<'opening' | 'scanning' | null>(
+    props.retryBlob && props.rejected ? 'scanning' : null,
+  )
   const [progress, setProgress] = useState(0)
   const [scanError, setScanError] = useState<string | null>(null)
   const [heldBlob, setHeldBlob] = useState<Blob | null>(props.retryBlob ?? null)
   const [heldPreview, setHeldPreview] = useState<string | null>(props.retryPreviewUrl ?? null)
   const autoStarted = useRef(false)
+  /** Blocks double-pick while gallery open / normalize / scan is in flight */
+  const inFlightRef = useRef(false)
 
   async function runScan(
     blob: Blob,
     previewUrl: string,
     rejected?: RejectedScanSnapshot,
   ) {
+    if (inFlightRef.current) return
+    inFlightRef.current = true
     setScanError(null)
     setHeldBlob(blob)
     setHeldPreview(previewUrl)
     setBusy(true)
+    setWorkPhase('scanning')
     setProgress(0.02)
     const isRetry = Boolean(rejected)
     try {
@@ -1738,7 +1747,9 @@ function ScanScreen(props: {
       setScanError(msg)
       props.onError(msg)
     } finally {
+      inFlightRef.current = false
       setBusy(false)
+      setWorkPhase(null)
       setProgress(0)
     }
   }
@@ -1754,12 +1765,40 @@ function ScanScreen(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on mount for this retry session
   }, [])
 
-  async function handleFile(file: File | null) {
+  async function handleFile(file: File | null, inputEl?: HTMLInputElement | null) {
+    // Always clear so the same photo can be re-picked later if needed
+    if (inputEl) inputEl.value = ''
     if (!file) return
+    // Already opening or scanning — ignore second pick
+    if (inFlightRef.current || busy) return
+
+    inFlightRef.current = true
+    setScanError(null)
+    setBusy(true)
+    setWorkPhase('opening')
+    setProgress(0)
+    // Drop previous held photo immediately so we never show the pick screen again
+    setHeldBlob(null)
+    setHeldPreview(null)
+
     try {
       // Android "Recent" often has empty MIME / HEIC / partial streams — normalize first
       const normalized = await normalizePickedImage(file)
-      await runScan(normalized.blob, normalized.previewUrl)
+      setHeldBlob(normalized.blob)
+      setHeldPreview(normalized.previewUrl)
+      setWorkPhase('scanning')
+      setProgress(0.02)
+
+      const board = normalizeLeaderboard(await getLeaderboard())
+      const suggestion = await scanReceipt(normalized.blob, {
+        maxPower: props.maxPowerMode,
+        disabledAis: props.disabledAis,
+        reliability: reliabilityWeights(board),
+        onProgress: (p) => {
+          setProgress(p.progress)
+        },
+      })
+      props.onParsed(suggestion, normalized.blob, normalized.previewUrl)
     } catch (e) {
       const msg =
         e instanceof Error
@@ -1767,26 +1806,40 @@ function ScanScreen(props: {
           : 'Could not open that photo. Try another album or Take photo.'
       setScanError(msg)
       props.onError(msg)
+    } finally {
+      inFlightRef.current = false
+      setBusy(false)
+      setWorkPhase(null)
+      setProgress(0)
     }
   }
 
   function clearHeldPhoto() {
+    if (busy || inFlightRef.current) return
     setHeldBlob(null)
     setHeldPreview(null)
     setScanError(null)
   }
 
+  const working = busy || workPhase != null
+
   return (
     <>
       <header className="topbar">
-        <button type="button" className="icon-btn" onClick={props.onBack} aria-label="Back">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={props.onBack}
+          aria-label="Back"
+          disabled={working}
+        >
           ←
         </button>
         <h1>Scan receipt</h1>
         <LogoMark size={36} />
       </header>
 
-      {props.rejected && (
+      {props.rejected && !working && (
         <div className="banner banner-info">
           <strong>Retry #{props.rejected.attempt}</strong>
           {props.rejected.amount != null
@@ -1795,8 +1848,8 @@ function ScanScreen(props: {
         </div>
       )}
 
-      {busy ? (
-        <div className="card agent-status">
+      {working ? (
+        <div className="card agent-status" aria-busy="true" aria-live="polite">
           {heldPreview && (
             <SafeImage
               className="receipt-preview receipt-preview-sm"
@@ -1806,17 +1859,30 @@ function ScanScreen(props: {
           )}
           <div className="spinner" />
           <div className="status-title">
-            {progress < 0.95 ? 'Reading your receipt…' : 'Almost done…'}
+            {workPhase === 'opening'
+              ? 'Opening photo…'
+              : progress < 0.95
+                ? 'Reading your receipt…'
+                : 'Almost done…'}
           </div>
           <p className="muted" style={{ margin: '6px 0 0', textAlign: 'center' }}>
-            Extracting store, total, date, and line items
+            {workPhase === 'opening'
+              ? 'Please wait — don’t pick another photo'
+              : 'Extracting store, total, date, and line items'}
           </p>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${Math.round(progress * 100)}%` }} />
-          </div>
-          <div className="muted">{Math.round(progress * 100)}%</div>
+          {workPhase === 'scanning' && (
+            <>
+              <div className="progress-track">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${Math.round(progress * 100)}%` }}
+                />
+              </div>
+              <div className="muted">{Math.round(progress * 100)}%</div>
+            </>
+          )}
         </div>
-      ) : scanError && heldBlob ? (
+      ) : scanError ? (
         <div className="card scan-retry-card">
           {heldPreview && (
             <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
@@ -1824,26 +1890,32 @@ function ScanScreen(props: {
           <div className="banner banner-error" role="alert" style={{ margin: 0 }}>
             {scanError}
           </div>
-          <strong className="scan-retry-title">Scan didn&apos;t work</strong>
+          <strong className="scan-retry-title">
+            {heldBlob ? "Scan didn't work" : "Couldn't open that photo"}
+          </strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
-            Try the same photo again, take a clearer shot, or type the purchase in.
+            {heldBlob
+              ? 'Try the same photo again, take a clearer shot, or type the purchase in.'
+              : 'Pick another photo, or take a new one with the camera.'}
           </p>
           <div className="row-actions stack" style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() =>
-                void runScan(
-                  heldBlob,
-                  heldPreview ?? URL.createObjectURL(heldBlob),
-                  props.rejected
-                    ? { ...props.rejected, attempt: props.rejected.attempt + 1 }
-                    : undefined,
-                )
-              }
-            >
-              Try again
-            </button>
+            {heldBlob && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() =>
+                  void runScan(
+                    heldBlob,
+                    heldPreview ?? URL.createObjectURL(heldBlob),
+                    props.rejected
+                      ? { ...props.rejected, attempt: props.rejected.attempt + 1 }
+                      : undefined,
+                  )
+                }
+              >
+                Try again
+              </button>
+            )}
             <label className="btn btn-secondary">
               New photo
               <input
@@ -1852,21 +1924,36 @@ function ScanScreen(props: {
                 accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 capture="environment"
                 onChange={(e) => {
-                  clearHeldPhoto()
-                  void handleFile(e.target.files?.[0] ?? null)
+                  void handleFile(e.target.files?.[0] ?? null, e.currentTarget)
                 }}
               />
             </label>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                setScanError(null)
-                props.onManualWithPhoto(heldBlob, heldPreview ?? URL.createObjectURL(heldBlob))
-              }}
-            >
-              Enter manually
-            </button>
+            <label className="btn btn-secondary">
+              Gallery
+              <input
+                className="hidden-input"
+                type="file"
+                accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                onChange={(e) => {
+                  void handleFile(e.target.files?.[0] ?? null, e.currentTarget)
+                }}
+              />
+            </label>
+            {heldBlob && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setScanError(null)
+                  props.onManualWithPhoto(
+                    heldBlob,
+                    heldPreview ?? URL.createObjectURL(heldBlob),
+                  )
+                }}
+              >
+                Enter manually
+              </button>
+            )}
           </div>
         </div>
       ) : heldBlob && heldPreview && !props.rejected ? (
@@ -1892,8 +1979,7 @@ function ScanScreen(props: {
                 accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 capture="environment"
                 onChange={(e) => {
-                  clearHeldPhoto()
-                  void handleFile(e.target.files?.[0] ?? null)
+                  void handleFile(e.target.files?.[0] ?? null, e.currentTarget)
                 }}
               />
             </label>
@@ -1910,23 +1996,25 @@ function ScanScreen(props: {
             Get the full receipt in frame — totals and store name at the bottom count most.
           </p>
           <div className="row-actions" style={{ marginTop: 16 }}>
-            <label className="btn btn-primary">
+            <label className={`btn btn-primary${working ? ' btn-disabled' : ''}`}>
               Take photo
               <input
                 className="hidden-input"
                 type="file"
                 accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 capture="environment"
-                onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
+                disabled={working}
+                onChange={(e) => void handleFile(e.target.files?.[0] ?? null, e.currentTarget)}
               />
             </label>
-            <label className="btn btn-secondary">
+            <label className={`btn btn-secondary${working ? ' btn-disabled' : ''}`}>
               Gallery
               <input
                 className="hidden-input"
                 type="file"
                 accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
-                onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
+                disabled={working}
+                onChange={(e) => void handleFile(e.target.files?.[0] ?? null, e.currentTarget)}
               />
             </label>
           </div>

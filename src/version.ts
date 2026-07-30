@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.26.0'
+export const APP_VERSION = '1.26.1'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.26.1',
+    date: '2026-07-30',
+    title: 'No double-upload while opening a photo',
+    changes: [
+      'As soon as you pick a gallery photo, the pick screen locks with “Opening photo…”',
+      'Blocks a second Take photo / Gallery tap while the first image is loading or scanning',
+      'Avoids accidental duplicate scans when the gallery is slow',
+    ],
+  },
   {
     version: '1.26.0',
     date: '2026-07-30',
