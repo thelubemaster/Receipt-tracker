@@ -1,8 +1,8 @@
 {
-  "version": "1.29.0",
+  "version": "1.29.1",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Receipt engine rebuild: layout PDF text, arithmetic lock, hard-ban retries",
-  "apkVersion": "1.28.1",
-  "apkVersionCode": 28,
-  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.28.1/schoolie.apk"
+  "notes": "Fix APK download stuck at 0% — progress + WebView fallback",
+  "apkVersion": "1.29.1",
+  "apkVersionCode": 29,
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.29.1/schoolie.apk"
 }

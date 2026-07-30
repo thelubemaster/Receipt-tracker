@@ -87,13 +87,21 @@ export function UpdateCenter() {
       // ── Step 2: Android package (logo + real in-app installer) ──
       if (s.shellUpdateAvailable && native) {
         setStatus(
-          `Downloading Android package build ${s.latestShellCode} inside the app…`,
+          `Downloading Android package build ${s.latestShellCode} (~15 MB)…`,
         )
         setPercent(0)
         const r = await downloadAndInstallApk(s.apkUrl, (m) => {
           setStatus(m)
           const match = /(\d+)\s*%/.exec(m)
           if (match) setPercent(parseInt(match[1], 10))
+          else if (/MB|Connecting|Redirect|Still downloading|alternate|Preparing|Saving/i.test(m)) {
+            // Keep bar alive with indeterminate-ish motion when only text updates
+            setPercent((prev) => {
+              if (prev == null || prev < 1) return 1
+              if (prev >= 95) return prev
+              return prev
+            })
+          }
         })
         if (r.ok) {
           setPercent(100)

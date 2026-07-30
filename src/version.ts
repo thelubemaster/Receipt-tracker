@@ -5,17 +5,17 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.29.0'
+export const APP_VERSION = '1.29.1'
 
 /**
  * Android versionCode for the launcher/shell APK.
  * Bump this whenever the home-screen icon or native plugins change.
  * In-app “Update home-screen logo” compares this to the installed package.
  */
-export const APK_VERSION_CODE = 28
+export const APK_VERSION_CODE = 29
 
 /** GitHub release tag that hosts schoolie.apk (keep in sync when shipping a new shell). */
-export const APK_RELEASE_TAG = 'v1.28.1'
+export const APK_RELEASE_TAG = 'v1.29.1'
 
 export type ChangelogEntry = {
   version: string
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.29.1',
+    date: '2026-07-30',
+    title: 'Fix package download stuck at 0%',
+    changes: [
+      'In-app APK downloader follows GitHub redirects more reliably',
+      'Shows live progress / heartbeat instead of freezing at 0%',
+      'Falls back to WebView download + Install if native download stalls',
+      'Tries alternate release URLs automatically',
+    ],
+  },
   {
     version: '1.29.0',
     date: '2026-07-30',
