@@ -518,11 +518,13 @@ function normalizePurchase(p: Purchase): Purchase {
 }
 
 function normalizeProject(p: Project): Project {
+  const themeRaw = typeof p.themeId === 'string' ? p.themeId.trim() : ''
   return {
     id: p.id,
     name: (p.name || 'Untitled project').trim() || 'Untitled project',
     description: typeof p.description === 'string' ? p.description : '',
     coverImageId: p.coverImageId ?? null,
+    themeId: themeRaw || null,
     createdAt: p.createdAt || new Date().toISOString(),
     updatedAt: p.updatedAt || p.createdAt || new Date().toISOString(),
   }
@@ -578,6 +580,7 @@ async function ensureDefaultProjectAndIds(
         name: settings.projectName?.trim() || 'My project',
         description: '',
         coverImageId: null,
+        themeId: null,
         createdAt: now,
         updatedAt: now,
       }

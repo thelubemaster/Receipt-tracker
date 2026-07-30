@@ -167,3 +167,15 @@ export function readCachedThemeId(): ThemeId {
     return DEFAULT_THEME_ID
   }
 }
+
+/**
+ * Theme for the current screen:
+ * project’s own theme if set, otherwise Settings / app default.
+ */
+export function resolveThemeId(
+  projectThemeId: string | null | undefined,
+  appThemeId: string | null | undefined,
+): ThemeId {
+  if (projectThemeId && isThemeId(projectThemeId)) return projectThemeId
+  return normalizeThemeId(appThemeId)
+}

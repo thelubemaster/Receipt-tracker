@@ -101,11 +101,12 @@ import { isNativeCapacitorApp } from './installApp'
 import { UpdateCenter } from './UpdateCenter'
 import { VersionChip } from './VersionChip'
 import {
-  THEMES,
   applyTheme,
   normalizeThemeId,
+  resolveThemeId,
   type ThemeId,
 } from './themes'
+import { ThemePicker } from './ThemePicker'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -257,7 +258,6 @@ export default function App() {
     ])
     setProjects(projList)
     setSettings(s)
-    applyTheme(s.themeId)
     setPurchases(p)
     if (pid) {
       const found = projList.find((x) => x.id === pid) || (await getProject(pid)) || null
@@ -267,6 +267,47 @@ export default function App() {
     }
     return s
   }, [screen])
+
+  /** Project screens use that project’s theme; home/settings use the app default. */
+  useEffect(() => {
+    let cancelled = false
+    const projectScreens = new Set([
+      'project',
+      'project-edit',
+      'scan',
+      'add',
+      'detail',
+      'edit',
+    ])
+
+    void (async () => {
+      if (!projectScreens.has(screen.name)) {
+        applyTheme(normalizeThemeId(settings.themeId))
+        return
+      }
+      // New project form: ProjectEditScreen owns live theme preview
+      if (screen.name === 'project-edit' && !screen.projectId) return
+
+      const pid =
+        'projectId' in screen && screen.projectId
+          ? screen.projectId
+          : activeProject?.id
+      if (!pid) {
+        applyTheme(normalizeThemeId(settings.themeId))
+        return
+      }
+      let p = activeProject?.id === pid ? activeProject : null
+      if (!p) {
+        p = (await getProject(pid)) ?? null
+      }
+      if (cancelled) return
+      applyTheme(resolveThemeId(p?.themeId, settings.themeId))
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [screen, activeProject, settings.themeId])
 
   useEffect(() => {
     let cancelled = false
@@ -651,6 +692,7 @@ export default function App() {
       {screen.name === 'project-edit' && (
         <ProjectEditScreen
           projectId={screen.projectId}
+          defaultThemeId={normalizeThemeId(settings.themeId)}
           onBack={() =>
             setScreen(
               screen.projectId
@@ -1095,6 +1137,8 @@ function AndroidInstallCard() {
 
 function ProjectEditScreen(props: {
   projectId?: string
+  /** Settings default — used for new projects or projects without a theme */
+  defaultThemeId: ThemeId
   onBack: () => void
   onSaved: (id: string) => void
   onDeleted: () => void
@@ -1104,6 +1148,7 @@ function ProjectEditScreen(props: {
   const [description, setDescription] = useState('')
   const [coverId, setCoverId] = useState<string | null>(null)
   const [coverPreview, setCoverPreview] = useState<string | null>(null)
+  const [themeId, setThemeId] = useState<ThemeId>(props.defaultThemeId)
   const [pickingCover, setPickingCover] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -1113,7 +1158,11 @@ function ProjectEditScreen(props: {
   const cameraInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (!props.projectId) return
+    if (!props.projectId) {
+      setThemeId(props.defaultThemeId)
+      applyTheme(props.defaultThemeId)
+      return
+    }
     let cancelled = false
     void (async () => {
       const p = await getProject(props.projectId!)
@@ -1124,6 +1173,9 @@ function ProjectEditScreen(props: {
       setName(p.name)
       setDescription(p.description)
       setCoverId(p.coverImageId)
+      const tid = resolveThemeId(p.themeId, props.defaultThemeId)
+      setThemeId(tid)
+      applyTheme(tid)
       if (p.coverImageId) {
         const url = await getImageUrl(p.coverImageId)
         if (url && !cancelled) {
@@ -1136,7 +1188,7 @@ function ProjectEditScreen(props: {
     return () => {
       cancelled = true
     }
-  }, [props.projectId])
+  }, [props.projectId, props.defaultThemeId])
 
   // Revoke only on leave this screen
   useEffect(() => {
@@ -1206,10 +1258,12 @@ function ProjectEditScreen(props: {
         name: trimmed,
         description: description.trim(),
         coverImageId: coverId,
+        themeId,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       }
       await saveProject(project)
+      applyTheme(themeId)
       // Confirm it stuck (localStorage / idb)
       const check = await getProject(project.id)
       if (coverId && check && check.coverImageId !== coverId) {
@@ -1337,6 +1391,21 @@ function ProjectEditScreen(props: {
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Short description — goals, notes, anything helpful"
             rows={4}
+          />
+        </div>
+
+        <div className="card settings-card">
+          <strong>Project theme</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Only this project uses this look. Home screen uses your Settings theme.
+          </p>
+          <ThemePicker
+            value={themeId}
+            ariaLabel="Project theme"
+            onChange={(id) => {
+              setThemeId(id)
+              applyTheme(id)
+            }}
           />
         </div>
 
@@ -3212,47 +3281,27 @@ function SettingsScreen(props: {
         {nativeApp && <UpdateCenter />}
 
         <div className="card settings-card">
-          <strong>Theme</strong>
+          <strong>Home theme</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Pick a look for the whole app. Applies instantly.
+            Look for the home screen and Settings. Each project can pick its own
+            theme under Edit project.
           </p>
-          <div className="theme-grid" role="listbox" aria-label="App themes">
-            {THEMES.map((t) => {
-              const active = themeId === t.id
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="option"
-                  aria-selected={active}
-                  className={`theme-option${active ? ' theme-option-active' : ''}`}
-                  onClick={() => {
-                    setThemeId(t.id)
-                    applyTheme(t.id)
-                    void props.onThemeChange({
-                      projectName: props.settings.projectName || 'My project',
-                      lastSeenVersion: props.settings.lastSeenVersion,
-                      maxPowerMode,
-                      disabledAis: sanitizeDisabledAis(disabledAis),
-                      customCategories: props.settings.customCategories ?? [],
-                      themeId: t.id,
-                    })
-                  }}
-                >
-                  <div className="theme-swatch" aria-hidden>
-                    <span style={{ background: t.preview[0] }} />
-                    <span style={{ background: t.preview[1] }} />
-                    <span style={{ background: t.preview[2] }} />
-                  </div>
-                  <div className="theme-option-meta">
-                    <strong>{t.name}</strong>
-                    <span>{t.blurb}</span>
-                    {active ? <span className="theme-option-check">Selected</span> : null}
-                  </div>
-                </button>
-              )
-            })}
-          </div>
+          <ThemePicker
+            value={themeId}
+            ariaLabel="Home theme"
+            onChange={(id) => {
+              setThemeId(id)
+              applyTheme(id)
+              void props.onThemeChange({
+                projectName: props.settings.projectName || 'My project',
+                lastSeenVersion: props.settings.lastSeenVersion,
+                maxPowerMode,
+                disabledAis: sanitizeDisabledAis(disabledAis),
+                customCategories: props.settings.customCategories ?? [],
+                themeId: id,
+              })
+            }}
+          />
         </div>
 
         <div className="card settings-card">

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.9'
+export const APP_VERSION = '1.26.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.26.0',
+    date: '2026-07-30',
+    title: 'Theme per project',
+    changes: [
+      'Each project can have its own color theme (Edit project → Project theme)',
+      'Opening a project switches to that look; home uses Settings → Home theme',
+      'New projects start from your home theme until you change them',
+    ],
+  },
   {
     version: '1.25.9',
     date: '2026-07-30',

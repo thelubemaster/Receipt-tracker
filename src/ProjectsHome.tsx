@@ -7,6 +7,7 @@ import { formatMoney } from './money'
 import { BrandLockup, LogoMark } from './Logo'
 import type { Project } from './types'
 import { VersionChip } from './VersionChip'
+import { getTheme, resolveThemeId } from './themes'
 
 type Row = Project & { total: number; count: number; coverUrl: string | null }
 
@@ -136,6 +137,16 @@ export function ProjectsHome(props: {
                   <span className="muted">
                     {p.count} receipt{p.count === 1 ? '' : 's'}
                   </span>
+                  {p.themeId ? (
+                    <span
+                      className="project-theme-dot"
+                      title={getTheme(resolveThemeId(p.themeId, null)).name}
+                      style={{
+                        background: getTheme(resolveThemeId(p.themeId, null)).preview[2],
+                      }}
+                      aria-label={`Theme: ${getTheme(resolveThemeId(p.themeId, null)).name}`}
+                    />
+                  ) : null}
                 </div>
               </div>
             </button>

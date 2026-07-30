@@ -20,6 +20,11 @@ export interface Project {
   description: string
   /** Cover photo in the images store */
   coverImageId: string | null
+  /**
+   * Color theme for this project (see themes.ts).
+   * Empty / missing → fall back to Settings default theme.
+   */
+  themeId?: string | null
   createdAt: string
   updatedAt: string
 }

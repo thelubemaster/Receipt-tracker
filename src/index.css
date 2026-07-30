@@ -2608,6 +2608,15 @@ code {
   display: block;
 }
 
+.project-theme-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px var(--border);
+  margin-left: auto;
+}
+
 /* After-scan: receipt data first */
 .receipt-read-banner {
   margin: 0 0 14px;
