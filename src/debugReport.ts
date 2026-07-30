@@ -74,6 +74,156 @@ export function downloadDebugReport(report: DebugReportPayload): void {
   URL.revokeObjectURL(url)
 }
 
+export type ScanDebugTextInput = {
+  userNote?: string
+  suggestion: {
+    date?: string | null
+    vendor?: string
+    amount?: number | null
+    description?: string
+    categoryId?: CategoryId
+    notes?: string
+    lineItems?: ReceiptLineItem[]
+    subtotal?: number | null
+    tax?: number | null
+    agentReport?: string
+    aisUsed?: AiId[]
+    activeAiLabel?: string
+    confidence?: number
+    rawText?: string
+    source?: string
+    fieldSources?: {
+      primary?: AiId
+      ocr?: AiId
+      total?: AiId
+      vendor?: AiId
+      category?: AiId
+      date?: AiId
+      answerLabel?: string
+    }
+  }
+  /** What the user currently sees / edited on the form */
+  form?: {
+    date?: string
+    vendor?: string
+    amount?: string
+    description?: string
+    categoryId?: CategoryId
+    notes?: string
+    lineItems?: ReceiptLineItem[]
+  }
+}
+
+/**
+ * Plain-text dump for pasting into chat with the coding agent.
+ * No image bytes — just what the scan did and what it decided.
+ */
+export function formatScanDebugText(input: ScanDebugTextInput): string {
+  const s = input.suggestion
+  const f = input.form
+  const lines: string[] = []
+  const money = (n: number | null | undefined) =>
+    n == null || Number.isNaN(n) ? '—' : `$${Number(n).toFixed(2)}`
+
+  lines.push('=== SCHOOLIE SCAN DEBUG (paste into chat) ===')
+  lines.push(`App version: ${APP_VERSION}`)
+  lines.push(`When: ${new Date().toISOString()}`)
+  if (input.userNote?.trim()) lines.push(`User note: ${input.userNote.trim()}`)
+  lines.push('')
+
+  lines.push('--- AI ANSWER (what the scan produced) ---')
+  lines.push(`Active label: ${s.activeAiLabel || '—'}`)
+  lines.push(`Source: ${s.source || '—'}`)
+  lines.push(
+    `Confidence: ${s.confidence != null ? `${Math.round(s.confidence * 100)}%` : '—'}`,
+  )
+  lines.push(`Vendor: ${s.vendor || '—'}`)
+  lines.push(`Date: ${s.date || '—'}`)
+  lines.push(`Total: ${money(s.amount ?? null)}`)
+  lines.push(`Subtotal: ${money(s.subtotal ?? null)}`)
+  lines.push(`Tax: ${money(s.tax ?? null)}`)
+  lines.push(`Category: ${s.categoryId || '—'}`)
+  lines.push(`Description: ${s.description || '—'}`)
+  lines.push(`Notes: ${s.notes || '—'}`)
+  if (s.fieldSources) {
+    const fs = s.fieldSources
+    lines.push(
+      `Field sources: primary=${fs.primary || '—'} ocr=${fs.ocr || '—'} total=${fs.total || '—'} vendor=${fs.vendor || '—'} category=${fs.category || '—'} date=${fs.date || '—'}`,
+    )
+    if (fs.answerLabel) lines.push(`Answer label: ${fs.answerLabel}`)
+  }
+  lines.push(
+    `AIs that actually ran (${s.aisUsed?.length ?? 0}): ${(s.aisUsed || []).join(', ') || '—'}`,
+  )
+  lines.push('')
+  lines.push('--- LINE ITEMS (AI) ---')
+  if (s.lineItems?.length) {
+    for (const li of s.lineItems) {
+      lines.push(
+        `  • ${li.description || '(no name)'} | ${money(li.amount)} | cat=${li.categoryId}`,
+      )
+    }
+  } else {
+    lines.push('  (none)')
+  }
+
+  if (f) {
+    lines.push('')
+    lines.push('--- FORM ON SCREEN (what user sees / edited) ---')
+    lines.push(`Vendor: ${f.vendor || '—'}`)
+    lines.push(`Date: ${f.date || '—'}`)
+    lines.push(`Total: ${f.amount || '—'}`)
+    lines.push(`Category: ${f.categoryId || '—'}`)
+    lines.push(`Description: ${f.description || '—'}`)
+    lines.push(`Notes: ${f.notes || '—'}`)
+    lines.push('--- LINE ITEMS (FORM) ---')
+    if (f.lineItems?.length) {
+      for (const li of f.lineItems) {
+        lines.push(
+          `  • ${li.description || '(no name)'} | ${money(li.amount)} | cat=${li.categoryId}`,
+        )
+      }
+    } else {
+      lines.push('  (none)')
+    }
+  }
+
+  lines.push('')
+  lines.push('--- RAW OCR / VISION TEXT ---')
+  lines.push((s.rawText || '').trim() || '(empty — OCR produced no text)')
+  lines.push('')
+  lines.push('--- FULL AGENT REPORT ---')
+  lines.push((s.agentReport || '').trim() || '(no agent report)')
+  lines.push('')
+  lines.push('=== END SCAN DEBUG ===')
+  return lines.join('\n')
+}
+
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 export type SubmitDebugResult =
   | { ok: true; mode: 'server'; id: string; path: string }
   | { ok: true; mode: 'download'; id: string }

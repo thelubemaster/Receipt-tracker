@@ -129,6 +129,8 @@ import {
 import {
   blobToDataUrl,
   buildReportShell,
+  copyTextToClipboard,
+  formatScanDebugText,
   listRemoteDebugReports,
   submitDebugReport,
   type RemoteDebugSummary,
@@ -2220,6 +2222,8 @@ function PurchaseFormScreen(props: {
   const [showScanDetails, setShowScanDetails] = useState(false)
   const [reporting, setReporting] = useState(false)
   const [reportNote, setReportNote] = useState('')
+  const [debugCopyStatus, setDebugCopyStatus] = useState<string | null>(null)
+  const [showDebugPreview, setShowDebugPreview] = useState(false)
   const [partMarks, setPartMarks] = useState<ScanPartMarks>(() => emptyPartMarks())
   /** Draft strings so typing "12." keeps the period (line amounts are numbers in state). */
   const [lineAmountDrafts, setLineAmountDrafts] = useState<Record<string, string>>({})
@@ -2337,6 +2341,55 @@ function PurchaseFormScreen(props: {
     } finally {
       setReporting(false)
     }
+  }
+
+  function buildDebugText(): string {
+    const amountNum = parseMoneyInputLoose(form.amount)
+    return formatScanDebugText({
+      userNote: reportNote.trim() || undefined,
+      suggestion: {
+        date: form.date || null,
+        vendor: form.vendor,
+        amount: amountNum,
+        description: form.description,
+        categoryId: form.categoryId,
+        notes: form.notes,
+        lineItems: form.lineItems,
+        agentReport: form.agentReport,
+        aisUsed: form.aisUsed,
+        activeAiLabel: form.activeAiLabel,
+        confidence: form.confidence,
+        rawText: form.rawText,
+        source: form.source,
+        subtotal: form.subtotal,
+        tax: form.tax,
+        fieldSources: form.fieldSources,
+      },
+      form: {
+        date: form.date,
+        vendor: form.vendor,
+        amount: form.amount,
+        description: form.description,
+        categoryId: form.categoryId,
+        notes: form.notes,
+        lineItems: form.lineItems,
+      },
+    })
+  }
+
+  async function handleCopyScanDebug() {
+    const text = buildDebugText()
+    const ok = await copyTextToClipboard(text)
+    if (ok) {
+      setDebugCopyStatus('Copied — paste into chat with Grok')
+      props.onDebugMessage?.(
+        'Scan debug text copied. Paste it in chat so the agent can see exactly what the scan did.',
+      )
+    } else {
+      setShowDebugPreview(true)
+      setDebugCopyStatus('Clipboard blocked — select the text below and copy')
+    }
+    window.setTimeout(() => setDebugCopyStatus(null), 5000)
   }
 
   function updateLine(id: string, patch: Partial<ReceiptLineItem>) {
@@ -2924,6 +2977,58 @@ function PurchaseFormScreen(props: {
           </button>
         </div>
 
+        {/* —— Copy plain-text debug for pasting to the coding agent —— */}
+        {fromScan && (hasScanMeta || form.rawText || form.agentReport) && (
+          <div className="card settings-card" style={{ marginTop: 12 }}>
+            <strong>Copy scan debug for chat</strong>
+            <p className="muted" style={{ margin: '6px 0 10px' }}>
+              Copies OCR text, which AIs actually ran, totals, line items, and the full
+              agent report — paste that into chat so Grok can see how the scan went wrong.
+            </p>
+            {reportNote.trim() ? null : (
+              <p className="muted" style={{ margin: '0 0 10px', fontSize: '0.85rem' }}>
+                Optional: write what looks wrong under Scan details → then copy (your note is
+                included).
+              </p>
+            )}
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: '100%', minHeight: 48 }}
+              onClick={() => void handleCopyScanDebug()}
+            >
+              Copy scan debug text
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ width: '100%', marginTop: 8 }}
+              onClick={() => setShowDebugPreview((v) => !v)}
+            >
+              {showDebugPreview ? 'Hide preview' : 'Show / select text'}
+            </button>
+            {debugCopyStatus && (
+              <p className="muted" style={{ margin: '10px 0 0' }} role="status">
+                {debugCopyStatus}
+              </p>
+            )}
+            {showDebugPreview && (
+              <textarea
+                readOnly
+                value={buildDebugText()}
+                onFocus={(e) => e.currentTarget.select()}
+                style={{
+                  width: '100%',
+                  marginTop: 10,
+                  minHeight: 180,
+                  fontFamily: 'ui-monospace, monospace',
+                  fontSize: '0.75rem',
+                }}
+              />
+            )}
+          </div>
+        )}
+
         {/* —— AI / scan details last (collapsed) —— */}
         {(hasScanMeta || props.receiptBlob || props.receiptPreviewUrl) && (
           <div className="card settings-card scan-details-card">
@@ -3058,31 +3163,46 @@ function PurchaseFormScreen(props: {
                   </div>
                 )}
 
-                {(props.receiptBlob || props.receiptPreviewUrl) && (
-                  <div className="debug-report-card" style={{ marginTop: 12 }}>
-                    <strong>Still wrong after a retry?</strong>
-                    <p className="muted" style={{ margin: '6px 0 10px' }}>
-                      Report this scan so a developer can inspect the photo and results.
-                    </p>
-                    <div className="field">
-                      <label htmlFor="debugNote">What went wrong? (optional)</label>
-                      <textarea
-                        id="debugNote"
-                        value={reportNote}
-                        onChange={(e) => setReportNote(e.target.value)}
-                        placeholder="e.g. Missed the $26.75 filter, shipping should be $9.95…"
-                      />
-                    </div>
+                <div className="debug-report-card" style={{ marginTop: 12 }}>
+                  <strong>Share this scan with Grok</strong>
+                  <p className="muted" style={{ margin: '6px 0 10px' }}>
+                    Copy the text dump (OCR + who ran + answers) and paste it in chat. No
+                    need to retype what went wrong.
+                  </p>
+                  <div className="field">
+                    <label htmlFor="debugNote">What went wrong? (optional — included in copy)</label>
+                    <textarea
+                      id="debugNote"
+                      value={reportNote}
+                      onChange={(e) => setReportNote(e.target.value)}
+                      placeholder="e.g. Total should be $76.67, vendor is Swag not Pennsylvania…"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ width: '100%', marginBottom: 8 }}
+                    onClick={() => void handleCopyScanDebug()}
+                  >
+                    Copy scan debug text
+                  </button>
+                  {(props.receiptBlob || props.receiptPreviewUrl) && (
                     <button
                       type="button"
                       className="btn btn-secondary"
+                      style={{ width: '100%' }}
                       disabled={reporting}
                       onClick={() => void handleReportBadScan()}
                     >
-                      {reporting ? 'Reporting…' : 'Report bad scan for debugging'}
+                      {reporting ? 'Reporting…' : 'Also save full report (JSON)'}
                     </button>
-                  </div>
-                )}
+                  )}
+                  {debugCopyStatus && (
+                    <p className="muted" style={{ margin: '10px 0 0' }} role="status">
+                      {debugCopyStatus}
+                    </p>
+                  )}
+                </div>
               </div>
             )}
           </div>

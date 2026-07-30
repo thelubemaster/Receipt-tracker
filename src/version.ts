@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.31.1'
+export const APP_VERSION = '1.31.2'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.31.2',
+    date: '2026-07-30',
+    title: 'Copy scan debug text for chat',
+    changes: [
+      'After a scan: one tap copies OCR text, who ran, totals, line items, and the full agent report',
+      'Paste that text into chat so Grok can see exactly how the scan went wrong',
+      'Optional “what went wrong” note is included in the copy',
+    ],
+  },
   {
     version: '1.31.1',
     date: '2026-07-30',

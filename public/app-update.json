@@ -1,7 +1,7 @@
 {
-  "version": "1.31.1",
+  "version": "1.31.2",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Honest credit — only list AIs that actually ran this scan",
+  "notes": "Copy scan debug text — paste OCR + who ran + agent report into chat",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
