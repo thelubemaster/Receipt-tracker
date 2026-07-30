@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.6'
+export const APP_VERSION = '1.25.7'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.7',
+    date: '2026-07-30',
+    title: 'Ten app themes',
+    changes: [
+      'Settings → Theme: 10 full looks (dark, light, workshop, blueprint…)',
+      'Theme applies instantly and is remembered on this device',
+      'Status bar color follows the active theme on Android',
+    ],
+  },
   {
     version: '1.25.6',
     date: '2026-07-30',

@@ -67,6 +67,8 @@ export interface AppSettings {
    * Grouped with builtins in pickers and home breakdown.
    */
   customCategories: CustomCategory[]
+  /** App color theme id (see themes.ts). */
+  themeId: string
 }
 
 /** Which free AI primarily produced each field (for ✓/✗ weighting). */

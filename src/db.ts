@@ -1076,6 +1076,8 @@ function parseSettingsRow(
           color: typeof c.color === 'string' ? c.color : '#7f8c8d',
         }))
     : []
+  const themeRaw = (row as { themeId?: unknown } | undefined)?.themeId
+  // Lazy import avoided: keep string; App applies via normalizeThemeId
   return {
     projectName: row?.projectName ?? 'My project',
     lastSeenVersion: row?.lastSeenVersion ?? '',
@@ -1084,6 +1086,7 @@ function parseSettingsRow(
       (row as { disabledAis?: unknown } | undefined)?.disabledAis,
     ),
     customCategories,
+    themeId: typeof themeRaw === 'string' && themeRaw.trim() ? themeRaw.trim() : 'midnight-teal',
   }
 }
 

@@ -100,6 +100,12 @@ import {
 import { isNativeCapacitorApp } from './installApp'
 import { UpdateCenter } from './UpdateCenter'
 import { VersionChip } from './VersionChip'
+import {
+  THEMES,
+  applyTheme,
+  normalizeThemeId,
+  type ThemeId,
+} from './themes'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -227,6 +233,7 @@ export default function App() {
     maxPowerMode: true,
     disabledAis: [],
     customCategories: [],
+    themeId: 'midnight-teal',
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -250,6 +257,7 @@ export default function App() {
     ])
     setProjects(projList)
     setSettings(s)
+    applyTheme(s.themeId)
     setPurchases(p)
     if (pid) {
       const found = projList.find((x) => x.id === pid) || (await getProject(pid)) || null
@@ -907,8 +915,14 @@ export default function App() {
           onSave={async (next) => {
             await saveSettings(next)
             setSettings(next)
+            applyTheme(next.themeId)
             setInfo('Settings saved.')
             setScreen({ name: 'home' })
+          }}
+          onThemeChange={async (next) => {
+            await saveSettings(next)
+            setSettings(next)
+            applyTheme(next.themeId)
           }}
           onClear={async () => {
             if (!confirm('Delete ALL purchases and receipt photos on this device?')) return
@@ -2991,6 +3005,8 @@ function SettingsScreen(props: {
   settings: AppSettings
   onBack: () => void
   onSave: (s: AppSettings) => Promise<void>
+  /** Persist theme without leaving Settings */
+  onThemeChange: (s: AppSettings) => Promise<void>
   onClear: () => Promise<void>
   onShowWhatsNew: () => void
   onUpdateAvailable: () => void
@@ -2998,6 +3014,9 @@ function SettingsScreen(props: {
   const [maxPowerMode, setMaxPowerMode] = useState(props.settings.maxPowerMode !== false)
   const [disabledAis, setDisabledAis] = useState<AiId[]>(
     () => sanitizeDisabledAis(props.settings.disabledAis ?? []),
+  )
+  const [themeId, setThemeId] = useState<ThemeId>(() =>
+    normalizeThemeId(props.settings.themeId),
   )
   const [saving, setSaving] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>({ state: 'idle' })
@@ -3088,11 +3107,56 @@ function SettingsScreen(props: {
               maxPowerMode,
               disabledAis: sanitizeDisabledAis(disabledAis),
               customCategories: props.settings.customCategories ?? [],
+              themeId,
             })
             .finally(() => setSaving(false))
         }}
       >
         {nativeApp && <UpdateCenter />}
+
+        <div className="card settings-card">
+          <strong>Theme</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Pick a look for the whole app. Applies instantly.
+          </p>
+          <div className="theme-grid" role="listbox" aria-label="App themes">
+            {THEMES.map((t) => {
+              const active = themeId === t.id
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`theme-option${active ? ' theme-option-active' : ''}`}
+                  onClick={() => {
+                    setThemeId(t.id)
+                    applyTheme(t.id)
+                    void props.onThemeChange({
+                      projectName: props.settings.projectName || 'My project',
+                      lastSeenVersion: props.settings.lastSeenVersion,
+                      maxPowerMode,
+                      disabledAis: sanitizeDisabledAis(disabledAis),
+                      customCategories: props.settings.customCategories ?? [],
+                      themeId: t.id,
+                    })
+                  }}
+                >
+                  <div className="theme-swatch" aria-hidden>
+                    <span style={{ background: t.preview[0] }} />
+                    <span style={{ background: t.preview[1] }} />
+                    <span style={{ background: t.preview[2] }} />
+                  </div>
+                  <div className="theme-option-meta">
+                    <strong>{t.name}</strong>
+                    <span>{t.blurb}</span>
+                    {active ? <span className="theme-option-check">Selected</span> : null}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
 
         <div className="card settings-card">
           <strong>Max power mode</strong>
