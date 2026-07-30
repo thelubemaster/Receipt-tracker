@@ -13,10 +13,17 @@ export const GITHUB_PAGES_BASE = `https://${GITHUB_OWNER}.github.io/${GITHUB_REP
 export const GITHUB_RELEASES_PAGE = `${GITHUB_REPO_URL}/releases/latest`
 
 /**
- * Direct APK download — always the newest release asset named schoolie.apk.
- * Works in any browser (no API token). GitHub redirects to the real file.
+ * Direct APK download.
+ * Prefer a versioned release URL from app-update.json when possible —
+ * `releases/latest/download/schoolie.apk` 404s if the latest tag only has web assets.
  */
 export const GITHUB_APK_LATEST = `${GITHUB_REPO_URL}/releases/latest/download/schoolie.apk`
+
+/** Stable download for the current shell (tag always includes schoolie.apk). */
+export function githubApkForTag(tag: string): string {
+  const t = tag.startsWith('v') ? tag : `v${tag}`
+  return `${GITHUB_REPO_URL}/releases/download/${t}/schoolie.apk`
+}
 
 /**
  * Install pack: zip with schoolie.apk + 00-OPEN-ME-TO-INSTALL.html

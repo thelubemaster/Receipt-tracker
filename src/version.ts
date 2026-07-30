@@ -5,10 +5,17 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.0'
+export const APP_VERSION = '1.25.1'
 
-/** Android versionCode shipped with this release (launcher / native shell). */
-export const APK_VERSION_CODE = 9
+/**
+ * Android versionCode for the launcher/shell APK.
+ * Bump this whenever the home-screen icon or native plugins change.
+ * In-app “Update home-screen logo” compares this to the installed package.
+ */
+export const APK_VERSION_CODE = 25
+
+/** GitHub release tag that always hosts schoolie.apk for this shell. */
+export const APK_RELEASE_TAG = 'v1.25.1'
 
 export type ChangelogEntry = {
   version: string
@@ -19,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.1',
+    date: '2026-07-30',
+    title: 'Home-screen logo install fixed',
+    changes: [
+      'Fixed broken APK download link (latest release was missing schoolie.apk)',
+      'In-app Update home-screen logo uses a direct release URL that always works',
+      'Always shows the update card until the installed package is new enough',
+    ],
+  },
   {
     version: '1.25.0',
     date: '2026-07-30',

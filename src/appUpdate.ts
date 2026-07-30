@@ -18,8 +18,9 @@ import {
 
 export { GITHUB_PAGES_BASE } from './githubConfig'
 import { downloadAndInstallApk } from './apkInstaller'
-import { APP_VERSION } from './version'
+import { APP_VERSION, APK_VERSION_CODE, APK_RELEASE_TAG } from './version'
 import { isNativeCapacitorApp } from './installApp'
+import { githubApkForTag } from './githubConfig'
 
 const PREF_SERVER = 'schoolie-update-server'
 const PREF_AUTO = 'schoolie-auto-update'
@@ -330,6 +331,10 @@ export async function getNativeAppInfo(): Promise<{
 /**
  * Is a published APK newer than the shell this install was built with?
  * Launcher icon / native plugins only update via APK.
+ *
+ * Always floors remote versionCode at APK_VERSION_CODE (bundled in this web
+ * build) so a missing/stale GitHub manifest cannot hide a needed shell update.
+ * APK URL prefers a versioned release asset (never 404 from web-only "latest").
  */
 export async function checkForApkUpdate(
   manifest?: UpdateManifest | null,
@@ -342,47 +347,45 @@ export async function checkForApkUpdate(
     return { status: 'error', message: 'Could not read installed app version' }
   }
 
-  let remoteCode = manifest?.apkVersionCode
-  let remoteName = manifest?.apkVersion || manifest?.version
-  let apkUrl = manifest?.apkUrl || GITHUB_APK_LATEST
+  // Bundled floor — this web build expects at least this shell
+  let remoteCode = APK_VERSION_CODE
+  let remoteName = APP_VERSION
+  let apkUrl = githubApkForTag(APK_RELEASE_TAG)
 
-  // Prefer explicit fields from app-update.json on Releases
-  if (remoteCode == null) {
-    try {
-      const file = await fetchJson(
-        `${GITHUB_REPO_URL}/releases/latest/download/app-update.json`,
-      )
-      if (file && typeof file === 'object') {
-        const m = file as Partial<UpdateManifest>
-        if (typeof m.apkVersionCode === 'number') remoteCode = m.apkVersionCode
-        else if (m.apkVersionCode != null) {
-          remoteCode = parseInt(String(m.apkVersionCode), 10) || undefined
-        }
-        if (m.apkVersion) remoteName = String(m.apkVersion).replace(/^v/i, '')
-        if (m.apkUrl) apkUrl = String(m.apkUrl)
-        if (!remoteName && m.version) remoteName = String(m.version).replace(/^v/i, '')
-      }
-    } catch {
-      /* ignore */
+  // Merge remote app-update.json / manifest if newer
+  const applyRemote = (m: Partial<UpdateManifest>) => {
+    const code =
+      typeof m.apkVersionCode === 'number'
+        ? m.apkVersionCode
+        : m.apkVersionCode != null
+          ? parseInt(String(m.apkVersionCode), 10) || 0
+          : 0
+    if (code > remoteCode) remoteCode = code
+    if (m.apkVersion) remoteName = String(m.apkVersion).replace(/^v/i, '')
+    else if (m.version && code >= remoteCode) {
+      remoteName = String(m.version).replace(/^v/i, '')
+    }
+    // Only trust apkUrl if it points at a real file path (versioned or latest)
+    if (m.apkUrl && /schoolie\.apk/i.test(String(m.apkUrl))) {
+      apkUrl = String(m.apkUrl)
     }
   }
 
-  // Fall back: compare version names if no versionCode published
-  if (remoteCode == null && remoteName) {
-    if (compareVersions(remoteName, native.versionName) > 0) {
-      // Treat as available using a synthetic code so install still runs
-      remoteCode = native.versionCode + 1
-    } else {
-      remoteCode = native.versionCode
-    }
+  if (manifest) applyRemote(manifest)
+
+  try {
+    const file = await fetchJson(
+      `${GITHUB_REPO_URL}/releases/latest/download/app-update.json`,
+    )
+    if (file && typeof file === 'object') applyRemote(file as Partial<UpdateManifest>)
+  } catch {
+    /* offline — still use bundled floor */
   }
 
-  if (remoteCode == null) {
-    return {
-      status: 'current',
-      versionCode: native.versionCode,
-      versionName: native.versionName,
-    }
+  // Prefer versioned URL when using our known shell tag
+  if (remoteCode <= APK_VERSION_CODE) {
+    apkUrl = githubApkForTag(APK_RELEASE_TAG)
+    remoteName = remoteName || APP_VERSION
   }
 
   if (remoteCode > native.versionCode) {

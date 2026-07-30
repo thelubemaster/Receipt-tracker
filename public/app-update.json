@@ -1,8 +1,8 @@
 {
-  "version": "1.25.0",
+  "version": "1.25.1",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "More consistent free on-device receipt AI (consensus pass)",
-  "apkVersion": "1.24.9",
-  "apkVersionCode": 9,
-  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
+  "notes": "Home-screen logo install fixed \u2014 APK is on this release",
+  "apkVersion": "1.25.1",
+  "apkVersionCode": 25,
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.1/schoolie.apk"
 }
