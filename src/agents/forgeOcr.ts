@@ -1,9 +1,10 @@
 /**
  * Forge — free high-power on-device OCR.
- * Multiple preprocess variants + dual page segmentation; keeps richest text.
+ * Multiple preprocess variants + receipt-oriented page segmentation; keeps richest text.
  */
 import type { Worker } from 'tesseract.js'
 import type { AgentProgress } from './pipeline'
+import { scoreOcrText } from './ocrScore'
 
 export type ForgeOcrResult = {
   text: string
@@ -11,60 +12,111 @@ export type ForgeOcrResult = {
   scores: { pass: string; score: number; chars: number }[]
 }
 
-function scoreOcrText(text: string): number {
-  const lines = text.split(/\n/).filter((l) => l.trim()).length
-  const money = (text.match(/\d+[.,]\d{2}/g) || []).length
-  const letters = (text.match(/[A-Za-z]/g) || []).length
-  return lines * 2 + money * 6 + Math.min(letters, 1000) * 0.05
+async function blobFromGray(
+  w: number,
+  h: number,
+  gray: Uint8ClampedArray,
+): Promise<Blob> {
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas unavailable')
+  const imageData = ctx.createImageData(w, h)
+  const d = imageData.data
+  for (let p = 0; p < w * h; p++) {
+    const v = gray[p]
+    const i = p * 4
+    d[i] = d[i + 1] = d[i + 2] = v
+    d[i + 3] = 255
+  }
+  ctx.putImageData(imageData, 0, 0)
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/png')
+  })
 }
 
+/**
+ * Receipt-friendly preprocess variants.
+ * Avoid a single global hard threshold — that destroys thermal gray text.
+ */
 async function preprocessVariants(blob: Blob): Promise<{ name: string; blob: Blob }[]> {
   const bitmap = await createImageBitmap(blob)
-  const maxEdge = 1600
+  const maxEdge = 1800
   const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height))
   const w = Math.max(1, Math.round(bitmap.width * scale))
   const h = Math.max(1, Math.round(bitmap.height * scale))
 
-  const variants: { name: string; blob: Blob }[] = []
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) {
+    bitmap.close()
+    throw new Error('Canvas unavailable')
+  }
+  ctx.drawImage(bitmap, 0, 0, w, h)
+  bitmap.close()
 
-  async function render(name: string, map: (r: number, g: number, b: number) => number) {
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('Canvas unavailable')
-    ctx.drawImage(bitmap, 0, 0, w, h)
-    const imageData = ctx.getImageData(0, 0, w, h)
-    const d = imageData.data
-    for (let i = 0; i < d.length; i += 4) {
-      const v = map(d[i], d[i + 1], d[i + 2])
-      d[i] = d[i + 1] = d[i + 2] = v
-    }
-    ctx.putImageData(imageData, 0, 0)
-    const out = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', 0.9)
-    })
-    variants.push({ name, blob: out })
+  const img = ctx.getImageData(0, 0, w, h)
+  const d = img.data
+  const n = w * h
+  const base = new Uint8ClampedArray(n)
+  for (let p = 0; p < n; p++) {
+    const i = p * 4
+    base[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
   }
 
-  // Contrast-boost grayscale
-  await render('contrast', (r, g, b) => {
-    const gray = 0.299 * r + 0.587 * g + 0.114 * b
-    return Math.min(255, Math.max(0, (gray - 128) * 1.35 + 128))
-  })
-  // Hard threshold (helps faint thermal receipts)
-  await render('threshold', (r, g, b) => {
-    const gray = 0.299 * r + 0.587 * g + 0.114 * b
-    return gray > 140 ? 255 : 0
-  })
-  // Inverted contrast (dark paper / light ink edge cases)
-  await render('invert-soft', (r, g, b) => {
-    const gray = 0.299 * r + 0.587 * g + 0.114 * b
-    const boosted = Math.min(255, Math.max(0, (gray - 128) * 1.2 + 128))
-    return 255 - boosted
-  })
+  // Percentile stretch → contrast gray
+  const samples: number[] = []
+  const step = Math.max(1, Math.floor(n / 50_000))
+  for (let p = 0; p < n; p += step) samples.push(base[p])
+  samples.sort((a, b) => a - b)
+  const lo = samples[Math.floor(samples.length * 0.02)] ?? 0
+  const hi = samples[Math.floor(samples.length * 0.98)] ?? 255
+  const range = Math.max(1, hi - lo)
+  const contrast = new Uint8ClampedArray(n)
+  for (let p = 0; p < n; p++) {
+    contrast[p] = Math.max(0, Math.min(255, ((base[p] - lo) / range) * 255))
+  }
 
-  bitmap.close()
+  // Adaptive local threshold (block mean) — robust on uneven lighting
+  const adaptive = new Uint8ClampedArray(n)
+  const block = Math.max(15, Math.floor(Math.min(w, h) / 40) | 1) // odd
+  const half = (block / 2) | 0
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let sum = 0
+      let c = 0
+      for (let dy = -half; dy <= half; dy += 2) {
+        const yy = y + dy
+        if (yy < 0 || yy >= h) continue
+        for (let dx = -half; dx <= half; dx += 2) {
+          const xx = x + dx
+          if (xx < 0 || xx >= w) continue
+          sum += contrast[yy * w + xx]
+          c++
+        }
+      }
+      const mean = c ? sum / c : 128
+      const v = contrast[y * w + x]
+      // Slightly below local mean → ink (black)
+      adaptive[y * w + x] = v < mean - 8 ? 0 : 255
+    }
+  }
+
+  // Soft global threshold as a third option (only when contrast is decent)
+  const softThresh = new Uint8ClampedArray(n)
+  const mid = samples[Math.floor(samples.length * 0.55)] ?? 140
+  for (let p = 0; p < n; p++) {
+    softThresh[p] = contrast[p] > mid ? 255 : 0
+  }
+
+  const variants: { name: string; blob: Blob }[] = [
+    { name: 'contrast', blob: await blobFromGray(w, h, contrast) },
+    { name: 'adaptive', blob: await blobFromGray(w, h, adaptive) },
+    { name: 'soft-bin', blob: await blobFromGray(w, h, softThresh) },
+  ]
   return variants
 }
 
@@ -94,7 +146,12 @@ async function getWorker(onProgress?: (p: AgentProgress) => void): Promise<Worke
           }
         },
       })
-      await worker.setParameters({ preserve_interword_spaces: '1' })
+      // Receipt-friendly defaults (spaces + no forced dictionary “corrections” on SKUs)
+      await worker.setParameters({
+        preserve_interword_spaces: '1',
+        // Allow digits and common receipt punctuation; letters still free via default
+        tessedit_char_blacklist: '|{}[]<>~`',
+      })
       return worker
     })()
   }
@@ -114,6 +171,9 @@ export async function runForgeOcr(
   })
 
   const variants = await preprocessVariants(imageBlob)
+  // Always include the already-prepped input as a “color/gray as-is” pass
+  variants.unshift({ name: 'as-is', blob: imageBlob })
+
   const worker = await getWorker(onProgress)
   const Tesseract = await import('tesseract.js')
 
@@ -122,9 +182,11 @@ export async function runForgeOcr(
   let bestScore = -1
   let bestPass = ''
 
+  // Receipt layout modes: tall column, block of text, sparse labels
   const modes = [
+    { name: 'column', psm: Tesseract.PSM.SINGLE_COLUMN },
+    { name: 'block', psm: Tesseract.PSM.SINGLE_BLOCK },
     { name: 'auto', psm: Tesseract.PSM.AUTO },
-    { name: 'sparse', psm: Tesseract.PSM.SPARSE_TEXT },
   ]
 
   let step = 0
@@ -139,7 +201,10 @@ export async function runForgeOcr(
         aiId: 'forge',
         aiName: 'Forge',
       })
-      await worker.setParameters({ tessedit_pageseg_mode: mode.psm })
+      await worker.setParameters({
+        tessedit_pageseg_mode: mode.psm,
+        preserve_interword_spaces: '1',
+      })
       const result = await worker.recognize(variant.blob)
       const text = result.data.text || ''
       const score = scoreOcrText(text)

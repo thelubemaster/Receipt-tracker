@@ -1,10 +1,7 @@
 import type { AiId } from '../aiRoster'
 import { getAi, isAiEnabled } from '../aiRoster'
-
-function getAiName(id: AiId): string {
-  return getAi(id).name
-}
 import type { ReceiptSuggestion } from '../types'
+import type { ReceiptMemory } from '../receiptMemory'
 import { runArbiterAgent } from './arbiterAgent'
 import { runForgeOcr } from './forgeOcr'
 import { runHammerOcr } from './hammerOcr'
@@ -28,7 +25,13 @@ import { runSieveAgent } from './sieveAgent'
 import { runTotalsAgent } from './totalsAgent'
 import { runLocalSmartPass } from './localSmartPass'
 import { runConsensusPass } from './consensusPass'
-import type { ReceiptMemory } from '../receiptMemory'
+import { scoreOcrText } from './ocrScore'
+
+export { scoreOcrText } from './ocrScore'
+
+function getAiName(id: AiId): string {
+  return getAi(id).name
+}
 
 export type LocalAgentResult = ReceiptSuggestion & {
   source: 'on-device'
@@ -44,13 +47,6 @@ export type AgentProgress = {
   message: string
   aiId?: AiId
   aiName?: string
-}
-
-function scoreOcrText(text: string): number {
-  const lines = text.split(/\n/).filter((l) => l.trim()).length
-  const money = (text.match(/\d+[.,]\d{2}/g) || []).length
-  const letters = (text.match(/[A-Za-z]/g) || []).length
-  return lines * 2 + money * 5 + Math.min(letters, 800) * 0.05
 }
 
 function parseFromText(
@@ -202,9 +198,12 @@ export async function runMultiAgentReceiptPipeline(
     })
   }
 
-  // Local image prep (contrast + size) before any OCR — free, on-device
+  // Local image prep: upscale small shots, stretch contrast, sharpen — free, on-device
   try {
-    workBlob = await prepareImageForOcr(workBlob, maxPower ? 1600 : 1400)
+    workBlob = await prepareImageForOcr(workBlob, {
+      maxEdge: maxPower ? 2000 : 1600,
+      minEdge: maxPower ? 1400 : 1200,
+    })
   } catch {
     /* keep original */
   }
@@ -280,7 +279,12 @@ export async function runMultiAgentReceiptPipeline(
   const bestPhase1Text = ocrTexts.length
     ? [...ocrTexts].sort((a, b) => scoreOcrText(b.text) - scoreOcrText(a.text))[0].text
     : ''
-  const strongEnough = q >= 55 && layoutish(bestPhase1Text) >= 2
+  const hasTotalLabel =
+    /\b(grand\s+)?t[o0]tal\b|\bamount\s+due\b/i.test(bestPhase1Text) &&
+    (bestPhase1Text.match(/\d+[.,]\d{2}/g) || []).length >= 2
+  // Require real receipt structure — not just "some letters"
+  const strongEnough =
+    q >= 72 && layoutish(bestPhase1Text) >= 3 && hasTotalLabel
   const needMore = !strongEnough || Boolean(rejected)
 
   if (needMore) {
@@ -297,9 +301,18 @@ export async function runMultiAgentReceiptPipeline(
     skipped.push('Lens/Prism skipped (layout OCR already strong)')
   }
 
-  // ── Phase 3: heavy free engines only when still weak or max-power retry ──
+  // ── Phase 3: heavy free engines when still weak, no total line, or max-power retry ──
   q = bestOcrQuality()
-  const stillWeak = q < 70 || layoutish(ocrTexts[0]?.text || '') < 2
+  const bestNow = ocrTexts.length
+    ? [...ocrTexts].sort((a, b) => scoreOcrText(b.text) - scoreOcrText(a.text))[0].text
+    : ''
+  const stillWeak =
+    q < 90 ||
+    layoutish(bestNow) < 3 ||
+    !(
+      /\b(grand\s+)?t[o0]tal\b|\bamount\s+due\b/i.test(bestNow) &&
+      (bestNow.match(/\d+[.,]\d{2}/g) || []).length >= 2
+    )
   if (stillWeak || (maxPower && rejected)) {
     await runOcrIfEnabled('bloom', 'Bloom upscale path', async () => {
       const { runBloomOcr } = await import('./bloomOcr')
@@ -338,7 +351,10 @@ export async function runMultiAgentReceiptPipeline(
     skipped.push('Heavy OCR (Hammer/Bloom/Mosaic/Titan) skipped — layout path was solid')
   }
 
-  const usable = ocrTexts.filter((o) => o.text.trim().length > 10)
+  // Drop near-empty / garbage OCR paths before voting (they pollute merge + consensus)
+  const usable = ocrTexts
+    .filter((o) => o.text.trim().length > 10 && scoreOcrText(o.text) >= 8)
+    .sort((a, b) => scoreOcrText(b.text) - scoreOcrText(a.text))
   if (!usable.length) {
     // last-ditch scout (core — always allowed)
     try {
@@ -382,26 +398,36 @@ export async function runMultiAgentReceiptPipeline(
   })
 
   // Individual parses (for diversify / reliability) + shared huddle
-  const parses = usable.map((u) => parseFromText(u.text, u.label, u.note, u.ais, enabled))
-  let merged = usable[0].text
-  for (let i = 1; i < usable.length; i++) {
-    merged = mergeOcrTexts(merged, usable[i].text)
+  // Only use top OCR paths — weak dumps pollute votes when merged.
+  const topOcr = usable.slice(0, Math.min(4, usable.length))
+  const parses = topOcr.map((u) => parseFromText(u.text, u.label, u.note, u.ais, enabled))
+  const bestScore = scoreOcrText(topOcr[0].text)
+  // Merge only paths that are close in quality to the leader (not random garbage)
+  const mergeable = topOcr.filter((u) => scoreOcrText(u.text) >= bestScore * 0.55)
+  let merged = mergeable[0].text
+  for (let i = 1; i < mergeable.length; i++) {
+    merged = mergeOcrTexts(merged, mergeable[i].text)
   }
-  if (usable.length > 1 && scoreOcrText(merged) > scoreOcrText(usable[0].text) * 0.85) {
+  if (mergeable.length > 1 && scoreOcrText(merged) > bestScore * 0.8) {
     parses.push(
       parseFromText(
         merged,
         'Merged multi-OCR path',
-        `Merged ${usable.length} OCR engines (layout-first)`,
-        usable.flatMap((u) => u.ais),
+        `Merged ${mergeable.length} strong OCR engines (layout-first)`,
+        mergeable.flatMap((u) => u.ais),
         enabled,
       ),
     )
   }
 
-  let councilText = usable[0].text
-  for (let i = 1; i < usable.length; i++) {
-    councilText = mergeOcrTexts(councilText, usable[i].text)
+  // Council / smart-pass text: prefer best single path, enrich from near-peers only
+  let councilText = topOcr[0].text
+  for (let i = 1; i < mergeable.length; i++) {
+    councilText = mergeOcrTexts(councilText, mergeable[i].text)
+  }
+  // If merge is worse than the best single dump, stick with best alone
+  if (scoreOcrText(councilText) < bestScore * 0.9) {
+    councilText = topOcr[0].text
   }
 
   // ── On-device team huddle: OCR + parse agents post, challenge, agree ──
@@ -697,57 +723,135 @@ export async function disposeOnDeviceAgent(): Promise<void> {
   }
 }
 
+export type ImagePrepOptions = {
+  /** Cap longest edge (downscale huge camera photos). Default 2000. */
+  maxEdge?: number
+  /** Upscale short edge up to this when the photo is small (phone crops). Default 1400. */
+  minEdge?: number
+}
+
 /**
- * Free local preprocess: resize + contrast so thermal / phone photos OCR more consistently.
- * Adaptive stretch lifts dim receipts without crushing already-sharp ones.
+ * Receipt-oriented image prep for OCR (proper path, not a hack):
+ * 1) Upscale small shots (Tesseract needs ~readable pixel height per character)
+ * 2) Downscale huge shots to a workable size
+ * 3) Grayscale + percentile contrast stretch (handles dim / glare thermal paper)
+ * 4) Mild unsharp mask so thin digits stay crisp
  */
-export async function prepareImageForOcr(blob: Blob, maxEdge = 1400): Promise<Blob> {
+export async function prepareImageForOcr(
+  blob: Blob,
+  maxEdgeOrOpts: number | ImagePrepOptions = 1600,
+): Promise<Blob> {
+  const opts: ImagePrepOptions =
+    typeof maxEdgeOrOpts === 'number'
+      ? { maxEdge: maxEdgeOrOpts, minEdge: 1200 }
+      : maxEdgeOrOpts
+  const maxEdge = opts.maxEdge ?? 2000
+  const minEdge = opts.minEdge ?? 1400
+
   const bitmap = await createImageBitmap(blob)
   try {
-    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height))
-    const w = Math.max(1, Math.round(bitmap.width * scale))
-    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const srcW = bitmap.width
+    const srcH = bitmap.height
+    const long = Math.max(srcW, srcH)
+    const short = Math.min(srcW, srcH)
+    // Upscale small / cropped photos; never exceed maxEdge on the long side
+    let scale = 1
+    if (short > 0 && short < minEdge) {
+      scale = minEdge / short
+    }
+    if (long * scale > maxEdge) {
+      scale = maxEdge / long
+    }
+    // Keep scale sane (avoid huge memory on weird inputs)
+    scale = Math.min(3, Math.max(0.25, scale))
+    const w = Math.max(1, Math.round(srcW * scale))
+    const h = Math.max(1, Math.round(srcH * scale))
+
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) throw new Error('Canvas unavailable')
+    // High-quality resample when upscaling
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(bitmap, 0, 0, w, h)
+
     try {
       const img = ctx.getImageData(0, 0, w, h)
       const d = img.data
-      // Sample luminance for adaptive contrast
-      let sum = 0
-      let count = 0
-      for (let i = 0; i < d.length; i += 32) {
-        sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
-        count++
+      const n = w * h
+      // Build luminance histogram (downsample sample for speed on big images)
+      const step = n > 800_000 ? 4 : n > 300_000 ? 2 : 1
+      const samples: number[] = []
+      for (let p = 0; p < n; p += step) {
+        const i = p * 4
+        samples.push(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])
       }
-      const mean = count ? sum / count : 128
-      // Dim / washed receipts get more punch; bright already-crisp photos stay mild
-      const contrast = mean < 90 ? 1.32 : mean > 170 ? 1.12 : 1.22
-      const intercept = 128 * (1 - contrast)
-      for (let i = 0; i < d.length; i += 4) {
-        let r = d[i] * contrast + intercept
-        let g = d[i + 1] * contrast + intercept
-        let b = d[i + 2] * contrast + intercept
-        // Soft grayscale mix helps Tesseract on tinted photos
-        const y = 0.299 * r + 0.587 * g + 0.114 * b
-        // Mild unsharp-style lift of midtones
-        const mid = y < 128 ? y * 1.04 : y
-        r = mid * 0.88 + r * 0.12
-        g = mid * 0.88 + g * 0.12
-        b = mid * 0.88 + b * 0.12
-        d[i] = Math.max(0, Math.min(255, r))
-        d[i + 1] = Math.max(0, Math.min(255, g))
-        d[i + 2] = Math.max(0, Math.min(255, b))
+      samples.sort((a, b) => a - b)
+      const pct = (p: number) =>
+        samples[Math.min(samples.length - 1, Math.max(0, Math.floor(p * (samples.length - 1))))] ??
+        0
+      // Clip extremes (glare / black borders) then stretch midtones
+      let lo = pct(0.02)
+      let hi = pct(0.98)
+      if (hi - lo < 28) {
+        // Almost flat image — force a wider window around the median
+        const mid = pct(0.5)
+        lo = Math.max(0, mid - 40)
+        hi = Math.min(255, mid + 40)
+      }
+      const range = Math.max(1, hi - lo)
+
+      // Pass 1: grayscale + contrast stretch into gray[]
+      const gray = new Float32Array(n)
+      for (let p = 0; p < n; p++) {
+        const i = p * 4
+        const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+        gray[p] = ((y - lo) / range) * 255
+      }
+
+      // Pass 2: mild unsharp mask (gray - blur) to keep thin thermal digits
+      const sharpened = new Float32Array(n)
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const p = y * w + x
+          // 3×3 box blur sample
+          let sum = 0
+          let c = 0
+          for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy
+            if (yy < 0 || yy >= h) continue
+            for (let dx = -1; dx <= 1; dx++) {
+              const xx = x + dx
+              if (xx < 0 || xx >= w) continue
+              sum += gray[yy * w + xx]
+              c++
+            }
+          }
+          const blur = c ? sum / c : gray[p]
+          const amount = 0.55
+          sharpened[p] = gray[p] + amount * (gray[p] - blur)
+        }
+      }
+
+      for (let p = 0; p < n; p++) {
+        const v = Math.max(0, Math.min(255, sharpened[p]))
+        const i = p * 4
+        d[i] = d[i + 1] = d[i + 2] = v
+        // alpha unchanged
       }
       ctx.putImageData(img, 0, 0)
     } catch {
       /* putImageData may fail on huge images — resized draw is still fine */
     }
+
     return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', 0.9)
+      // PNG avoids extra JPEG mosquito noise on fine text after prep
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('encode'))),
+        'image/png',
+      )
     })
   } finally {
     bitmap.close()

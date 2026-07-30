@@ -1,7 +1,7 @@
 {
-  "version": "1.26.2",
+  "version": "1.27.0",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Home screen theme and each project theme are fully separate",
+  "notes": "Better receipt scanning: proper image prep, Forge OCR, cleaner totals",
   "apkVersion": "1.25.4",
   "apkVersionCode": 27,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.4/schoolie.apk"

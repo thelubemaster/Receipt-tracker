@@ -68,23 +68,32 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
       continue
     }
 
-    // Strategy votes for TOTAL (t0tal / total)
+    // Strategy votes for TOTAL (t0tal / total) — prefer last amount on the line
+    // (stores often print "TOTAL 12.00 45.67" with running + final)
+    const lineTotal = amounts[amounts.length - 1]
     if (/\bgrand\s*t[o0]tal\b/i.test(line)) {
-      votes.push({ label: 'grand-total-line', total: roundMoney(amount), weight: 12 })
+      votes.push({ label: 'grand-total-line', total: roundMoney(lineTotal), weight: 14 })
     } else if (/\bamount\s*due\b|\bbalance\s*due\b/i.test(line)) {
-      votes.push({ label: 'amount-due-line', total: roundMoney(amount), weight: 11 })
+      votes.push({ label: 'amount-due-line', total: roundMoney(lineTotal), weight: 13 })
     } else if (
       /\bt[o0]tal\b/i.test(line) &&
       !/\bsub\b/i.test(line) &&
       !/\btax\b/i.test(line) &&
       !/\bitem\s*total\b/i.test(line)
     ) {
-      votes.push({ label: 'total-line', total: roundMoney(amount), weight: 10 })
-    } else if (/\b(visa|mastercard|amex|debit|credit)\b/i.test(line) && amounts.length) {
-      // Only if line has a charge amount (not bare "VISA CHIP")
-      votes.push({ label: 'card-charge-line', total: roundMoney(amount), weight: 7 })
-    } else if (/\b(paid|payment|tender)\b/i.test(line) && !/payment date|payment method|payment details/i.test(line)) {
-      votes.push({ label: 'payment-line', total: roundMoney(amount), weight: 6 })
+      votes.push({ label: 'total-line', total: roundMoney(lineTotal), weight: 12 })
+    } else if (
+      /\b(visa|mastercard|amex|debit|credit)\b/i.test(line) &&
+      amounts.length &&
+      // Ignore bare "VISA CHIP" with no real charge, or tiny incidental numbers
+      lineTotal >= 1
+    ) {
+      votes.push({ label: 'card-charge-line', total: roundMoney(lineTotal), weight: 6 })
+    } else if (
+      /\b(paid|payment|tender)\b/i.test(line) &&
+      !/payment date|payment method|payment details/i.test(line)
+    ) {
+      votes.push({ label: 'payment-line', total: roundMoney(lineTotal), weight: 5 })
     }
   }
 

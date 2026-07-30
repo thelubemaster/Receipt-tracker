@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.26.2'
+export const APP_VERSION = '1.27.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,18 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.27.0',
+    date: '2026-07-30',
+    title: 'Much better receipt scanning (proper OCR path)',
+    changes: [
+      'Upscales small / cropped photos before OCR (was only downscaling)',
+      'Percentile contrast + unsharp prep for thermal and dim phone shots',
+      'Forge: adaptive binarize + column/block page modes for tall receipts',
+      'Drops weak OCR garbage so it can’t outvote a strong read',
+      'Stronger TOTAL-line detection and money OCR fixes (O→0, l→1)',
+    ],
+  },
   {
     version: '1.26.2',
     date: '2026-07-30',
