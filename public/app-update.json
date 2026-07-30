@@ -1,8 +1,8 @@
 {
-  "version": "1.25.3",
+  "version": "1.25.4",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "In-app installer no longer freezes \u2014 opens system download immediately",
-  "apkVersion": "1.25.2",
-  "apkVersionCode": 26,
-  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.2/schoolie.apk"
+  "notes": "Fully in-app updates \u2014 download + install, no browser",
+  "apkVersion": "1.25.4",
+  "apkVersionCode": 27,
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.4/schoolie.apk"
 }

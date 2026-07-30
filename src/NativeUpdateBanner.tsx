@@ -1,10 +1,10 @@
 /**
- * Home-screen logo update card — works after web OTA without reinstalling first.
- * Opens system download/Install immediately (no hanging native wait).
+ * Fully in-app home-screen logo / shell update.
+ * Download + PackageInstaller only — no browser, no external links.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { checkForApkUpdate, getNativeAppInfo } from './appUpdate'
-import { downloadAndInstallApk, openSystemApkUrl } from './apkInstaller'
+import { downloadAndInstallApk } from './apkInstaller'
 import { githubApkForTag } from './githubConfig'
 import { isNativeCapacitorApp } from './installApp'
 import { APK_RELEASE_TAG, APK_VERSION_CODE, APP_VERSION } from './version'
@@ -20,6 +20,7 @@ export function NativeUpdateBanner() {
   const [nativeLabel, setNativeLabel] = useState<string>('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const [percent, setPercent] = useState<number | null>(null)
 
   const refresh = useCallback(async () => {
     if (!isNativeCapacitorApp()) return
@@ -38,13 +39,6 @@ export function NativeUpdateBanner() {
         return
       }
       if (native && native.versionCode < APK_VERSION_CODE) {
-        setApk({
-          versionCode: APK_VERSION_CODE,
-          versionName: APP_VERSION,
-          url: githubApkForTag(APK_RELEASE_TAG),
-        })
-      } else if (!native) {
-        // Still offer — better than silent fail
         setApk({
           versionCode: APK_VERSION_CODE,
           versionName: APP_VERSION,
@@ -74,26 +68,28 @@ export function NativeUpdateBanner() {
   async function startUpdate() {
     const url = apk?.url || githubApkForTag(APK_RELEASE_TAG)
     setBusy(true)
-    setStatus('Opening download…')
+    setPercent(0)
+    setStatus('Starting in-app download…')
     try {
-      // Fire system open immediately so something visible happens in <1s
-      openSystemApkUrl(url)
-      const result = await downloadAndInstallApk(url, (m) => setStatus(m))
+      const result = await downloadAndInstallApk(url, (m) => {
+        setStatus(m)
+        const match = /(\d+)\s*%/.exec(m)
+        if (match) setPercent(parseInt(match[1], 10))
+        if (/Install/i.test(m)) setPercent(100)
+      })
       if (result.ok) {
+        setPercent(100)
         setStatus(
-          'If Install did not appear: swipe down notifications → tap the APK download → Install. Then open Cost Tracker from the home screen.',
+          result.message ||
+            'Confirm Install on the system screen, then open Cost Tracker from the home screen.',
         )
       } else {
         setStatus(result.message)
+        setPercent(null)
       }
     } catch (e) {
-      // Still try system open
-      openSystemApkUrl(url)
-      setStatus(
-        e instanceof Error
-          ? e.message
-          : 'Tap your notification shade for the download, then Install.',
-      )
+      setStatus(e instanceof Error ? e.message : 'Update failed')
+      setPercent(null)
     } finally {
       setBusy(false)
     }
@@ -102,28 +98,34 @@ export function NativeUpdateBanner() {
   if (!isNativeCapacitorApp() || !apk) return null
 
   return (
-    <div className="native-update-card" role="region" aria-label="Home screen logo update">
+    <div className="native-update-card" role="region" aria-label="In-app app update">
       <div className="native-update-row">
         <img
           src="./pwa-192.png"
-          alt="New logo"
+          alt=""
           width={56}
           height={56}
           className="native-update-preview"
         />
         <div className="native-update-copy">
-          <strong>Update home-screen logo</strong>
+          <strong>Update available (in-app)</strong>
           <p className="muted" style={{ margin: '4px 0 0' }}>
-            Tap the button. Android will download the package (~15&nbsp;MB) and ask to{' '}
-            <em>Install</em>. That is required for the home-screen icon — there is no way around
-            it on Android.
+            Downloads and installs entirely inside Cost Tracker — no browser. You only confirm{' '}
+            <em>Install</em> on the Android screen.
           </p>
           <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.8rem' }}>
-            {nativeLabel ? `Installed: ${nativeLabel} → ` : ''}
-            need build {apk.versionCode}
+            {nativeLabel ? `${nativeLabel} → ` : ''}
+            build {apk.versionCode}
           </p>
         </div>
       </div>
+
+      {percent != null && (
+        <div className="native-update-progress" aria-hidden>
+          <div className="native-update-progress-fill" style={{ width: `${percent}%` }} />
+        </div>
+      )}
+
       <button
         type="button"
         className="btn btn-primary"
@@ -131,30 +133,13 @@ export function NativeUpdateBanner() {
         disabled={busy}
         onClick={() => void startUpdate()}
       >
-        {busy ? 'Opening download…' : 'Update home-screen logo now'}
+        {busy
+          ? percent != null && percent < 100
+            ? `Downloading… ${percent}%`
+            : 'Working…'
+          : 'Update now (in-app)'}
       </button>
-      {/* Visible link so user can also open download if WebView blocks intents */}
-      <a
-        className="btn btn-secondary"
-        style={{
-          width: '100%',
-          marginTop: 10,
-          minHeight: 44,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          textDecoration: 'none',
-        }}
-        href={apk.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={() => {
-          openSystemApkUrl(apk.url)
-          setStatus('Opened download link. Tap Install when Android asks.')
-        }}
-      >
-        Open download link
-      </a>
+
       {status && (
         <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.88rem' }} role="status">
           {status}

@@ -5,17 +5,17 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.3'
+export const APP_VERSION = '1.25.4'
 
 /**
  * Android versionCode for the launcher/shell APK.
  * Bump this whenever the home-screen icon or native plugins change.
  * In-app “Update home-screen logo” compares this to the installed package.
  */
-export const APK_VERSION_CODE = 26
+export const APK_VERSION_CODE = 27
 
 /** GitHub release tag that hosts schoolie.apk (keep in sync when shipping a new shell). */
-export const APK_RELEASE_TAG = 'v1.25.2'
+export const APK_RELEASE_TAG = 'v1.25.4'
 
 export type ChangelogEntry = {
   version: string
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.4',
+    date: '2026-07-30',
+    title: 'Updates fully inside the app',
+    changes: [
+      'APK downloads inside Cost Tracker (no browser, no external links)',
+      'Uses Android PackageInstaller with in-app progress %',
+      'You only confirm Install on the system sheet',
+    ],
+  },
   {
     version: '1.25.3',
     date: '2026-07-30',

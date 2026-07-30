@@ -971,6 +971,20 @@ a {
   cursor: pointer;
 }
 
+.native-update-progress {
+  margin-top: 12px;
+  height: 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.native-update-progress-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent-bright));
+  transition: width 0.2s ease;
+}
+
 .banner-error {
   background: rgba(224, 90, 79, 0.12);
   border: 1px solid rgba(224, 90, 79, 0.35);
