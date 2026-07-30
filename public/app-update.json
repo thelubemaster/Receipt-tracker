@@ -1,8 +1,8 @@
 {
-  "version": "1.25.1",
+  "version": "1.25.2",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Home-screen logo install fixed \u2014 APK is on this release",
-  "apkVersion": "1.25.1",
-  "apkVersionCode": 25,
-  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.1/schoolie.apk"
+  "notes": "Fix stuck Updating\u2026 \u2014 APK download with progress + Install",
+  "apkVersion": "1.25.2",
+  "apkVersionCode": 26,
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.2/schoolie.apk"
 }

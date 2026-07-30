@@ -585,13 +585,25 @@ export async function runInAppUpdate(
 
   if (web.status === 'available') {
     onStatus?.(`Updating app content to v${web.manifest.version}…`)
-    const applied = await applyAppBundleUpdate(web.manifest, onStatus)
-    appliedWeb = applied.ok
-    parts.push(
-      applied.ok
-        ? `Content updated to v${web.manifest.version}`
-        : `Content update failed: ${applied.message}`,
-    )
+    try {
+      const applied = await Promise.race([
+        applyAppBundleUpdate(web.manifest, onStatus),
+        new Promise<{ ok: false; message: string }>((resolve) =>
+          setTimeout(
+            () => resolve({ ok: false, message: 'Content update timed out (network)' }),
+            60_000,
+          ),
+        ),
+      ])
+      appliedWeb = applied.ok
+      parts.push(
+        applied.ok
+          ? `Content updated to v${web.manifest.version}`
+          : `Content update failed: ${applied.message}`,
+      )
+    } catch (e) {
+      parts.push(e instanceof Error ? e.message : 'Content update failed')
+    }
   } else if (web.status === 'current') {
     parts.push(`Content up to date (v${web.version})`)
   } else if (web.status === 'error') {
@@ -601,15 +613,19 @@ export async function runInAppUpdate(
   const apk = await checkForApkUpdate(manifest)
   if (apk.status === 'available') {
     onStatus?.(
-      `Installing full app v${apk.versionName} (home screen icon & native fixes)…`,
+      `Updating full app v${apk.versionName} (home-screen logo)…`,
     )
-    const r = await downloadAndInstallApk(apk.url, onStatus)
-    appliedApk = r.ok
-    parts.push(
-      r.ok
-        ? 'Full app download started — tap Install when Android asks'
-        : `Full app update failed: ${r.message}`,
-    )
+    try {
+      const r = await downloadAndInstallApk(apk.url, onStatus)
+      appliedApk = r.ok
+      parts.push(
+        r.ok
+          ? 'Full app download started — tap Install when Android asks'
+          : `Full app update failed: ${r.message}`,
+      )
+    } catch (e) {
+      parts.push(e instanceof Error ? e.message : 'Full app update failed')
+    }
   } else if (apk.status === 'current') {
     parts.push(`Native shell v${apk.versionName} (${apk.versionCode})`)
   }

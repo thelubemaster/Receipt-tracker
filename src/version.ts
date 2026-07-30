@@ -5,17 +5,17 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.1'
+export const APP_VERSION = '1.25.2'
 
 /**
  * Android versionCode for the launcher/shell APK.
  * Bump this whenever the home-screen icon or native plugins change.
  * In-app “Update home-screen logo” compares this to the installed package.
  */
-export const APK_VERSION_CODE = 25
+export const APK_VERSION_CODE = 26
 
 /** GitHub release tag that always hosts schoolie.apk for this shell. */
-export const APK_RELEASE_TAG = 'v1.25.1'
+export const APK_RELEASE_TAG = 'v1.25.2'
 
 export type ChangelogEntry = {
   version: string
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.2',
+    date: '2026-07-30',
+    title: 'Fix update stuck on “Updating…”',
+    changes: [
+      'APK download no longer hangs forever waiting on Android DownloadManager',
+      'Shows download % progress, then opens Install',
+      'Falls back to system download if streaming fails',
+    ],
+  },
   {
     version: '1.25.1',
     date: '2026-07-30',

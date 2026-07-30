@@ -3087,12 +3087,29 @@ function SettingsScreen(props: {
 
   async function handleOtaCheck() {
     setOtaBusy(true)
-    setOtaStatus('Checking GitHub…')
+    setOtaStatus('Checking for updates…')
     try {
       await useGitHubUpdates()
       await setAutoUpdate(true)
-      const result = await runInAppUpdate((m) => setOtaStatus(m))
+      // Cap overall so Settings never sticks on “Updating…”
+      const result = await Promise.race([
+        runInAppUpdate((m) => setOtaStatus(m)),
+        new Promise<Awaited<ReturnType<typeof runInAppUpdate>>>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                web: { status: 'error', message: 'Update check timed out' },
+                apk: { status: 'error', message: 'timed out' },
+                message:
+                  'Still working in the background, or timed out. Use “Update home-screen logo” below, or try again on Wi‑Fi.',
+              }),
+            90_000,
+          ),
+        ),
+      ])
       setOtaStatus(result.message)
+    } catch (e) {
+      setOtaStatus(e instanceof Error ? e.message : 'Update failed')
     } finally {
       setOtaBusy(false)
     }
