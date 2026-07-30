@@ -524,7 +524,8 @@ function normalizeProject(p: Project): Project {
     name: (p.name || 'Untitled project').trim() || 'Untitled project',
     description: typeof p.description === 'string' ? p.description : '',
     coverImageId: p.coverImageId ?? null,
-    themeId: themeRaw || null,
+    // Always store a concrete theme so projects never “follow” the home theme live
+    themeId: themeRaw || 'midnight-teal',
     createdAt: p.createdAt || new Date().toISOString(),
     updatedAt: p.updatedAt || p.createdAt || new Date().toISOString(),
   }
@@ -580,7 +581,8 @@ async function ensureDefaultProjectAndIds(
         name: settings.projectName?.trim() || 'My project',
         description: '',
         coverImageId: null,
-        themeId: null,
+        // Own theme copy — not linked to Settings home theme
+        themeId: 'midnight-teal',
         createdAt: now,
         updatedAt: now,
       }

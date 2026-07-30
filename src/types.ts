@@ -21,8 +21,8 @@ export interface Project {
   /** Cover photo in the images store */
   coverImageId: string | null
   /**
-   * Color theme for this project (see themes.ts).
-   * Empty / missing → fall back to Settings default theme.
+   * Color theme for this project only (see themes.ts).
+   * Independent of the Home Screen theme in Settings.
    */
   themeId?: string | null
   createdAt: string
@@ -72,7 +72,7 @@ export interface AppSettings {
    * Grouped with builtins in pickers and home breakdown.
    */
   customCategories: CustomCategory[]
-  /** App color theme id (see themes.ts). */
+  /** Home Screen / Settings theme id only (see themes.ts). Not used inside projects. */
   themeId: string
 }
 

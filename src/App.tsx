@@ -102,8 +102,9 @@ import { UpdateCenter } from './UpdateCenter'
 import { VersionChip } from './VersionChip'
 import {
   applyTheme,
+  homeThemeId,
   normalizeThemeId,
-  resolveThemeId,
+  projectThemeId,
   type ThemeId,
 } from './themes'
 import { ThemePicker } from './ThemePicker'
@@ -268,7 +269,11 @@ export default function App() {
     return s
   }, [screen])
 
-  /** Project screens use that project’s theme; home/settings use the app default. */
+  /**
+   * Home / Settings → Home Screen theme only.
+   * Inside a project (scan, receipts, edit…) → that project’s theme only.
+   * Never cross-wire the two.
+   */
   useEffect(() => {
     let cancelled = false
     const projectScreens = new Set([
@@ -281,11 +286,13 @@ export default function App() {
     ])
 
     void (async () => {
+      // Home list + Settings always use the Home Screen theme
       if (!projectScreens.has(screen.name)) {
-        applyTheme(normalizeThemeId(settings.themeId))
+        // Persist so cold start uses Home Screen theme, not last project preview
+        applyTheme(homeThemeId(settings.themeId), { persistHome: true })
         return
       }
-      // New project form: ProjectEditScreen owns live theme preview
+      // New project form: ProjectEditScreen owns live preview (does not touch home)
       if (screen.name === 'project-edit' && !screen.projectId) return
 
       const pid =
@@ -293,7 +300,7 @@ export default function App() {
           ? screen.projectId
           : activeProject?.id
       if (!pid) {
-        applyTheme(normalizeThemeId(settings.themeId))
+        applyTheme(homeThemeId(settings.themeId))
         return
       }
       let p = activeProject?.id === pid ? activeProject : null
@@ -301,7 +308,8 @@ export default function App() {
         p = (await getProject(pid)) ?? null
       }
       if (cancelled) return
-      applyTheme(resolveThemeId(p?.themeId, settings.themeId))
+      // Project’s own theme only — never Settings home theme
+      applyTheme(projectThemeId(p?.themeId))
     })()
 
     return () => {
@@ -692,7 +700,7 @@ export default function App() {
       {screen.name === 'project-edit' && (
         <ProjectEditScreen
           projectId={screen.projectId}
-          defaultThemeId={normalizeThemeId(settings.themeId)}
+          homeThemeId={homeThemeId(settings.themeId)}
           onBack={() =>
             setScreen(
               screen.projectId
@@ -957,14 +965,15 @@ export default function App() {
           onSave={async (next) => {
             await saveSettings(next)
             setSettings(next)
-            applyTheme(next.themeId)
+            // Home Screen theme only — does not rewrite project themes
+            applyTheme(homeThemeId(next.themeId), { persistHome: true })
             setInfo('Settings saved.')
             setScreen({ name: 'home' })
           }}
           onThemeChange={async (next) => {
             await saveSettings(next)
             setSettings(next)
-            applyTheme(next.themeId)
+            applyTheme(homeThemeId(next.themeId), { persistHome: true })
           }}
           onClear={async () => {
             if (!confirm('Delete ALL purchases and receipt photos on this device?')) return
@@ -1137,8 +1146,8 @@ function AndroidInstallCard() {
 
 function ProjectEditScreen(props: {
   projectId?: string
-  /** Settings default — used for new projects or projects without a theme */
-  defaultThemeId: ThemeId
+  /** Current Home Screen theme — only a starter suggestion for brand-new projects */
+  homeThemeId: ThemeId
   onBack: () => void
   onSaved: (id: string) => void
   onDeleted: () => void
@@ -1148,7 +1157,8 @@ function ProjectEditScreen(props: {
   const [description, setDescription] = useState('')
   const [coverId, setCoverId] = useState<string | null>(null)
   const [coverPreview, setCoverPreview] = useState<string | null>(null)
-  const [themeId, setThemeId] = useState<ThemeId>(props.defaultThemeId)
+  // New projects start from a *copy* of the home theme; then they live separately
+  const [themeId, setThemeId] = useState<ThemeId>(props.homeThemeId)
   const [pickingCover, setPickingCover] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -1159,8 +1169,9 @@ function ProjectEditScreen(props: {
 
   useEffect(() => {
     if (!props.projectId) {
-      setThemeId(props.defaultThemeId)
-      applyTheme(props.defaultThemeId)
+      // New project: suggest home look as a starting point (not linked after save)
+      setThemeId(props.homeThemeId)
+      applyTheme(props.homeThemeId) // visual only — does not persist home
       return
     }
     let cancelled = false
@@ -1173,9 +1184,10 @@ function ProjectEditScreen(props: {
       setName(p.name)
       setDescription(p.description)
       setCoverId(p.coverImageId)
-      const tid = resolveThemeId(p.themeId, props.defaultThemeId)
+      // This project’s theme only (never Settings home)
+      const tid = projectThemeId(p.themeId)
       setThemeId(tid)
-      applyTheme(tid)
+      applyTheme(tid) // visual only
       if (p.coverImageId) {
         const url = await getImageUrl(p.coverImageId)
         if (url && !cancelled) {
@@ -1188,7 +1200,7 @@ function ProjectEditScreen(props: {
     return () => {
       cancelled = true
     }
-  }, [props.projectId, props.defaultThemeId])
+  }, [props.projectId, props.homeThemeId])
 
   // Revoke only on leave this screen
   useEffect(() => {
@@ -1258,12 +1270,13 @@ function ProjectEditScreen(props: {
         name: trimmed,
         description: description.trim(),
         coverImageId: coverId,
+        // Always save this project’s own theme (never writes Settings / home theme)
         themeId,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       }
       await saveProject(project)
-      applyTheme(themeId)
+      applyTheme(themeId) // visual only
       // Confirm it stuck (localStorage / idb)
       const check = await getProject(project.id)
       if (coverId && check && check.coverImageId !== coverId) {
@@ -1395,16 +1408,16 @@ function ProjectEditScreen(props: {
         </div>
 
         <div className="card settings-card">
-          <strong>Project theme</strong>
+          <strong>This project’s theme</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Only this project uses this look. Home screen uses your Settings theme.
+            Only this project. Does not change the home screen or other projects.
           </p>
           <ThemePicker
             value={themeId}
-            ariaLabel="Project theme"
+            ariaLabel="This project’s theme"
             onChange={(id) => {
               setThemeId(id)
-              applyTheme(id)
+              applyTheme(id) // preview only — home theme stays stored as-is
             }}
           />
         </div>
@@ -3369,17 +3382,17 @@ function SettingsScreen(props: {
         {nativeApp && <UpdateCenter />}
 
         <div className="card settings-card">
-          <strong>Home theme</strong>
+          <strong>Home screen theme</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Look for the home screen and Settings. Each project can pick its own
-            theme under Edit project.
+            Only the projects list and this Settings screen. Each project has its
+            own theme under Edit project — changing home never rewrites them.
           </p>
           <ThemePicker
             value={themeId}
-            ariaLabel="Home theme"
+            ariaLabel="Home screen theme"
             onChange={(id) => {
               setThemeId(id)
-              applyTheme(id)
+              applyTheme(id, { persistHome: true })
               void props.onThemeChange({
                 projectName: props.settings.projectName || 'My project',
                 lastSeenVersion: props.settings.lastSeenVersion,

@@ -128,17 +128,36 @@ export function getTheme(id: ThemeId | unknown): ThemeDef {
   return THEMES.find((t) => t.id === normalized) ?? THEMES[0]!
 }
 
+const LS_HOME_THEME = 'schoolie-home-theme'
+/** @deprecated legacy key — only used as boot fallback */
+const LS_LEGACY_THEME = 'schoolie-theme'
+
+export type ApplyThemeOptions = {
+  /**
+   * When true, persist as the Home Screen theme only.
+   * Project theme previews must NOT set this — home stays independent.
+   */
+  persistHome?: boolean
+}
+
 /** Apply theme to the document (instant UI change). */
-export function applyTheme(id: ThemeId | unknown): ThemeId {
+export function applyTheme(
+  id: ThemeId | unknown,
+  options?: ApplyThemeOptions,
+): ThemeId {
   const themeId = normalizeThemeId(id)
   const theme = getTheme(themeId)
   const root = document.documentElement
   root.setAttribute('data-theme', themeId)
   root.style.colorScheme = theme.mode
-  try {
-    localStorage.setItem('schoolie-theme', themeId)
-  } catch {
-    /* ignore */
+  if (options?.persistHome) {
+    try {
+      localStorage.setItem(LS_HOME_THEME, themeId)
+      // Keep legacy key in sync for older code paths
+      localStorage.setItem(LS_LEGACY_THEME, themeId)
+    } catch {
+      /* ignore */
+    }
   }
   // Best-effort Android status bar match (no await — fire and forget)
   void syncNativeChrome(theme)
@@ -159,23 +178,44 @@ async function syncNativeChrome(theme: ThemeDef): Promise<void> {
   }
 }
 
-/** Read last theme from localStorage (before settings DB loads). */
-export function readCachedThemeId(): ThemeId {
+/** Home Screen theme from localStorage (before settings DB loads). */
+export function readCachedHomeThemeId(): ThemeId {
   try {
-    return normalizeThemeId(localStorage.getItem('schoolie-theme'))
+    const home = localStorage.getItem(LS_HOME_THEME)
+    if (home) return normalizeThemeId(home)
+    // One-time migrate from legacy single-theme key
+    return normalizeThemeId(localStorage.getItem(LS_LEGACY_THEME))
   } catch {
     return DEFAULT_THEME_ID
   }
 }
 
+/** @deprecated use readCachedHomeThemeId */
+export function readCachedThemeId(): ThemeId {
+  return readCachedHomeThemeId()
+}
+
+/** Home Screen theme from Settings. */
+export function homeThemeId(settingsThemeId: string | null | undefined): ThemeId {
+  return normalizeThemeId(settingsThemeId)
+}
+
 /**
- * Theme for the current screen:
- * project’s own theme if set, otherwise Settings / app default.
+ * Theme for a project — always that project’s own id.
+ * Does NOT follow the home theme (missing → default, not Settings).
+ */
+export function projectThemeId(projectTheme: string | null | undefined): ThemeId {
+  return normalizeThemeId(projectTheme)
+}
+
+/**
+ * @deprecated Prefer projectThemeId / homeThemeId so home and projects stay separate.
+ * Kept for call sites that need “project if set, else home”.
  */
 export function resolveThemeId(
-  projectThemeId: string | null | undefined,
+  projectTheme: string | null | undefined,
   appThemeId: string | null | undefined,
 ): ThemeId {
-  if (projectThemeId && isThemeId(projectThemeId)) return projectThemeId
+  if (projectTheme && isThemeId(projectTheme)) return projectTheme
   return normalizeThemeId(appThemeId)
 }

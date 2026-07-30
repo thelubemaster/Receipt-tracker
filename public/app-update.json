@@ -1,7 +1,7 @@
 {
-  "version": "1.26.1",
+  "version": "1.26.2",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Lock scan UI while opening a gallery photo — no accidental double upload",
+  "notes": "Home screen theme and each project theme are fully separate",
   "apkVersion": "1.25.4",
   "apkVersionCode": 27,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.4/schoolie.apk"

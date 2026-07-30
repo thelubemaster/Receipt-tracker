@@ -3,11 +3,11 @@ import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import { setupInstallCapture } from './installApp'
 import { autoUpdateIfAvailable, notifyNativeAppReady } from './appUpdate'
-import { applyTheme, getTheme, readCachedThemeId } from './themes'
+import { applyTheme, getTheme, readCachedHomeThemeId } from './themes'
 import './index.css'
 
-// Apply cached theme before first paint so boot isn’t flash-default
-applyTheme(readCachedThemeId())
+// Boot with Home Screen theme only (project themes apply when a project opens)
+applyTheme(readCachedHomeThemeId())
 
 // Capture Chrome/Android install prompt before React mounts
 setupInstallCapture()
@@ -20,7 +20,7 @@ async function setupNativeChrome() {
     const { StatusBar, Style } = await import('@capacitor/status-bar')
     // Push web content below the system status bar instead of drawing under it
     await StatusBar.setOverlaysWebView({ overlay: false })
-    const theme = getTheme(readCachedThemeId())
+    const theme = getTheme(readCachedHomeThemeId())
     await StatusBar.setBackgroundColor({ color: theme.statusBar })
     await StatusBar.setStyle({
       style: theme.mode === 'light' ? Style.Light : Style.Dark,
