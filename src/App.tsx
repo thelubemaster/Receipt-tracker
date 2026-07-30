@@ -1053,7 +1053,7 @@ function AndroidInstallCard() {
   return (
     <div className="card install-card">
       <div className="install-card-row">
-        <img src="./pwa-192.png" alt="Schoolie" className="install-logo" width={48} height={48} />
+        <img src="./pwa-192.png" alt="Project Cost Tracker" className="install-logo" width={48} height={48} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <strong>Add to home screen</strong>
           <p className="muted" style={{ margin: '4px 0 10px' }}>

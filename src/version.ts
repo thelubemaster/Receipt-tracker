@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.5'
+export const APP_VERSION = '1.24.6'
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +16,15 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.6',
+    date: '2026-07-30',
+    title: 'New Project Cost Tracker logo',
+    changes: [
+      'Replaced the school bus icon with a folder + receipt mark',
+      'Home-screen launcher, in-app logo, and PWA icons match the rebrand',
+    ],
+  },
   {
     version: '1.24.5',
     date: '2026-07-29',
