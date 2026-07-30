@@ -11,6 +11,13 @@ export type AiId =
   | 'hammer'
   | 'titan'
   | 'oracle'
+  | 'smolvlm'
+  | 'rolmocr'
+  | 'qwen25vl'
+  | 'qwen3vl'
+  | 'gotocr'
+  | 'internvl'
+  | 'deepseekocr'
   | 'ruler'
   | 'mosaic'
   | 'wedge'
@@ -25,7 +32,7 @@ export type AiId =
   | 'council'
   | 'seeker'
 
-export type AiKind = 'on-device' | 'free-web'
+export type AiKind = 'on-device' | 'free-web' | 'vision-cloud'
 
 export type AiTier = 'core' | 'standard' | 'heavy'
 
@@ -217,6 +224,112 @@ export const AI_ROSTER: AiProfile[] = [
       'Downloads a free vision model on first use (~200–400 MB), then caches. Slow on first scan; turn off on very old phones.',
   },
   {
+    id: 'smolvlm',
+    name: 'SmolVLM',
+    fullName: 'SmolVLM · Small vision-language',
+    kind: 'vision-cloud',
+    cost: 'free',
+    role: 'Smallest VLM family — reads the page with a free vision model (network). Lightest of the big VLMs.',
+    workingLine: 'SmolVLM is reading the receipt…',
+    engine: 'HuggingFaceTB/SmolVLM · free HF inference',
+    emoji: '🔬',
+    color: '#5c6bc0',
+    power: 8,
+    tier: 'heavy',
+    phoneWarning: 'Needs network. Still heavy on mid phones if forced fully local.',
+  },
+  {
+    id: 'rolmocr',
+    name: 'RolmOCR',
+    fullName: 'RolmOCR · Qwen OCR fine-tune',
+    kind: 'vision-cloud',
+    cost: 'free',
+    role: 'Lighter OCR-focused VLM (Qwen fine-tune) for document transcription.',
+    workingLine: 'RolmOCR is extracting receipt text…',
+    engine: 'reducto/RolmOCR · free HF inference',
+    emoji: '📜',
+    color: '#00897b',
+    power: 9,
+    tier: 'heavy',
+    phoneWarning: 'Needs network + GPU-backed free inference.',
+  },
+  {
+    id: 'qwen25vl',
+    name: 'Qwen2.5-VL',
+    fullName: 'Qwen2.5-VL · Top open VLM',
+    kind: 'vision-cloud',
+    cost: 'free',
+    role: 'Top OCR/doc scores among open VLMs. Multi-GB; runs via free cloud GPU inference.',
+    workingLine: 'Qwen2.5-VL is analyzing the receipt…',
+    engine: 'Qwen/Qwen2.5-VL · free HF inference',
+    emoji: '🧠',
+    color: '#1565c0',
+    power: 10,
+    tier: 'heavy',
+    phoneWarning: 'Needs network. Multi-GB model on remote GPU — can be slow or rate-limited.',
+  },
+  {
+    id: 'qwen3vl',
+    name: 'Qwen3-VL',
+    fullName: 'Qwen3-VL · Next-gen vision',
+    kind: 'vision-cloud',
+    cost: 'free',
+    role: 'Next-gen Qwen vision-language model for documents and receipts.',
+    workingLine: 'Qwen3-VL is reading the page…',
+    engine: 'Qwen/Qwen3-VL · free HF inference',
+    emoji: '🧬',
+    color: '#0d47a1',
+    power: 10,
+    tier: 'heavy',
+    phoneWarning: 'Needs network + remote GPU. Optional free HF token helps.',
+  },
+  {
+    id: 'gotocr',
+    name: 'GOT-OCR',
+    fullName: 'GOT-OCR 2.0 · General OCR VLM',
+    kind: 'vision-cloud',
+    cost: 'free',
+    role: 'Strong general OCR transformer for mixed documents and receipts.',
+    workingLine: 'GOT-OCR is scanning the document…',
+    engine: 'GOT-OCR 2.0 · free HF inference',
+    emoji: '🎯',
+    color: '#6a1b9a',
+    power: 9,
+    tier: 'heavy',
+    phoneWarning: 'Needs network. GPU-oriented for practical speed.',
+  },
+  {
+    id: 'internvl',
+    name: 'InternVL',
+    fullName: 'InternVL-1B · Compact multimodal',
+    kind: 'vision-cloud',
+    cost: 'free',
+    role: 'Small InternVL checkpoint — still heavy for mid phones; good document VQA.',
+    workingLine: 'InternVL is understanding the receipt…',
+    engine: 'OpenGVLab/InternVL · free HF inference',
+    emoji: '🌐',
+    color: '#ad1457',
+    power: 9,
+    tier: 'heavy',
+    phoneWarning: 'Needs network. ~1B+ multimodal — not for offline phones.',
+  },
+  {
+    id: 'deepseekocr',
+    name: 'DeepSeek-OCR',
+    fullName: 'DeepSeek-OCR · Document vision',
+    kind: 'vision-cloud',
+    cost: 'free',
+    role: 'Strong document OCR / optical compression. GPU-oriented free inference.',
+    workingLine: 'DeepSeek-OCR is reading the document…',
+    engine: 'deepseek-ai/DeepSeek-OCR · free HF inference',
+    emoji: '🛰️',
+    color: '#37474f',
+    power: 10,
+    tier: 'heavy',
+    phoneWarning:
+      'Needs network + remote GPU. Starts off by default — enable in Settings when on Wi‑Fi.',
+  },
+  {
     id: 'ledger',
     name: 'Ledger',
     fullName: 'Ledger · Line Items',
@@ -389,7 +502,10 @@ export function enabledAiIds(opts: {
   return AI_ROSTER.filter((a) => isAiEnabled(a.id, opts)).map((a) => a.id)
 }
 
-/** Default: nothing disabled — user turns off what their phone can’t handle. */
+/**
+ * Default disabled list for fresh installs.
+ * Empty = all free AIs on (user can disable heavy VLMs if needed).
+ */
 export function defaultDisabledAis(): AiId[] {
   return []
 }

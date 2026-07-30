@@ -1,7 +1,7 @@
 {
-  "version": "1.30.0",
+  "version": "1.31.0",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Oracle vision model — free on-device DocVQA that looks at the receipt page (not only Tesseract)",
+  "notes": "Vision VLMs: Qwen2.5-VL, Qwen3-VL, RolmOCR, GOT-OCR, SmolVLM, InternVL, DeepSeek-OCR",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

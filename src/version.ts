@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.30.0'
+export const APP_VERSION = '1.31.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.31.0',
+    date: '2026-07-30',
+    title: 'Big vision models for hard receipts',
+    changes: [
+      'Added free vision VLMs: Qwen2.5-VL, Qwen3-VL, RolmOCR, GOT-OCR 2.0, SmolVLM, InternVL, DeepSeek-OCR',
+      'They look at the receipt image (not only Tesseract) via free Hugging Face inference',
+      'Optional free HF token in Settings for better rate limits',
+      'Toggle each model on/off; light mode still skips heavy tier',
+    ],
+  },
   {
     version: '1.30.0',
     date: '2026-07-30',

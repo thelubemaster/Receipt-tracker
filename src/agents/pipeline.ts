@@ -195,6 +195,15 @@ function scoreParseCandidate(
   s += Math.min(10, (c.description?.length ?? 0) / 20)
   // Boost true vision-model paths over pure Tesseract dumps
   if (c.aisUsed?.includes('oracle')) s += 14
+  if (
+    c.aisUsed?.some((id) =>
+      ['smolvlm', 'rolmocr', 'qwen25vl', 'qwen3vl', 'gotocr', 'internvl', 'deepseekocr'].includes(
+        id,
+      ),
+    )
+  ) {
+    s += 18
+  }
   // Weight by historical reliability of AIs on this path
   if (reliability && c.aisUsed?.length) {
     const weights = c.aisUsed.map((id) => reliability[id] ?? 1)
@@ -474,6 +483,64 @@ export async function runMultiAgentReceiptPipeline(
     return lb - la
   })
 
+  // ── Free vision-language models (Qwen / RolmOCR / GOT / SmolVLM / InternVL / DeepSeek) ──
+  // Run before huddle so structured JSON + transcript join the vote.
+  const ban = rejected ? banFromRejected(rejected) : undefined
+  const earlyVlmParses: LocalAgentResult[] = []
+  const wantCloudVlm =
+    maxPower &&
+    typeof navigator !== 'undefined' &&
+    navigator.onLine !== false &&
+    (stillWeak ||
+      Boolean(rejected) ||
+      enabled('smolvlm') ||
+      enabled('rolmocr') ||
+      enabled('qwen25vl') ||
+      enabled('qwen3vl') ||
+      enabled('gotocr') ||
+      enabled('internvl') ||
+      enabled('deepseekocr'))
+
+  if (wantCloudVlm) {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.62,
+      message: 'Vision models (Qwen / RolmOCR / GOT / SmolVLM / …) reading the page…',
+      aiId: 'qwen25vl',
+      aiName: 'Qwen2.5-VL',
+    })
+    try {
+      const { runEnabledVlms, vlmResultToLocal } = await import('./vlmRunner')
+      const { results: vlmResults, notes: vlmNotes } = await runEnabledVlms(workBlob, {
+        enabled,
+        onProgress,
+        maxModels: rejected || stillWeak ? 3 : 2,
+      })
+      for (const note of vlmNotes) skipped.push(note)
+      for (const vr of vlmResults) {
+        if (!vr.ok) continue
+        const local = vlmResultToLocal(vr)
+        if (local) {
+          earlyVlmParses.push(local)
+          if (vr.text.trim()) {
+            usable.push({
+              label: `${vr.label} vision path`,
+              text: vr.text,
+              note: vr.message,
+              ais: [vr.aiId],
+            })
+          }
+        }
+      }
+      // Re-rank usable after VLM transcripts
+      usable.sort((a, b) => scoreOcrText(b.text) - scoreOcrText(a.text))
+    } catch (e) {
+      skipped.push(
+        `Vision VLMs skipped: ${e instanceof Error ? e.message.slice(0, 80) : 'error'}`,
+      )
+    }
+  }
+
   onProgress?.({
     stage: 'parse',
     progress: 0.68,
@@ -485,10 +552,11 @@ export async function runMultiAgentReceiptPipeline(
   // Individual parses (for diversify / reliability) + shared huddle
   // Only use top OCR paths — weak dumps pollute votes when merged.
   const topOcr = usable.slice(0, Math.min(4, usable.length))
-  const ban = rejected ? banFromRejected(rejected) : undefined
   const parses = topOcr.map((u) =>
     parseFromText(u.text, u.label, u.note, u.ais, enabled, ban),
   )
+  // Inject early VLM structured parses into the vote pool
+  for (const vp of earlyVlmParses) parses.push(vp)
   const bestScore = scoreOcrText(topOcr[0].text)
   // Merge only paths that are close in quality to the leader (not random garbage)
   const mergeable = topOcr.filter((u) => scoreOcrText(u.text) >= bestScore * 0.55)
@@ -749,6 +817,13 @@ export async function runMultiAgentReceiptPipeline(
     'hammer',
     'titan',
     'oracle',
+    'smolvlm',
+    'rolmocr',
+    'qwen25vl',
+    'qwen3vl',
+    'gotocr',
+    'internvl',
+    'deepseekocr',
     'sieve',
     'quorum',
     'council',
@@ -784,7 +859,7 @@ export async function runMultiAgentReceiptPipeline(
   }
 
   final.agentReport = [
-    'LOCAL: All OCR + parse AIs run on this phone. No paid API keys.',
+    'Free AIs: on-device OCR + optional free vision VLMs (Qwen/RolmOCR/GOT/SmolVLM/…). No paid API keys required.',
     `WHO ANSWERED: ${final.fieldSources.answerLabel}`,
     final.fieldSources.primary
       ? `Primary: ${getAiName(final.fieldSources.primary)} · Total: ${getAiName(final.fieldSources.total ?? 'cashier')} · Vendor: ${getAiName(final.fieldSources.vendor ?? 'clerk')} · Lines: ${getAiName(final.fieldSources.category ?? 'ledger')}`
@@ -965,6 +1040,35 @@ export async function runMultiAgentReceiptPipeline(
         },
         activeAiLabel: 'Oracle · vision document reader',
         confidence: Math.max(final.confidence ?? 0, oracleParse.confidence ?? 0),
+      }
+    }
+  }
+
+  // Prefer best early VLM parse if classic path is still weak
+  if (earlyVlmParses.length) {
+    const bestVlm = [...earlyVlmParses].sort((a, b) => scoreOf(b) - scoreOf(a))[0]
+    const ocrLooksThin =
+      scoreOcrText(councilText || final.rawText || '') < 75 ||
+      (final.amount == null && bestVlm.amount != null)
+    if (
+      ocrLooksThin ||
+      scoreOf(bestVlm) >= scoreOf(final) - 4 ||
+      ((bestVlm.confidence ?? 0) >= (final.confidence ?? 0) && bestVlm.amount != null)
+    ) {
+      final = {
+        ...bestVlm,
+        agentReport: [
+          final.agentReport,
+          '---',
+          `Preferred ${bestVlm.activeAiLabel} over classic OCR path`,
+          bestVlm.agentReport,
+        ].join('\n'),
+        confidence: Math.max(final.confidence ?? 0, bestVlm.confidence ?? 0),
+        fieldSources: {
+          ...final.fieldSources,
+          ...bestVlm.fieldSources,
+        },
+        activeAiLabel: bestVlm.activeAiLabel,
       }
     }
   }

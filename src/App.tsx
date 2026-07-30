@@ -3356,10 +3356,17 @@ function SettingsScreen(props: {
   const [stability, setStability] = useState<StabilitySuiteResult | null>(null)
   const [stabilityRunning, setStabilityRunning] = useState(false)
   const [stabilityStatus, setStabilityStatus] = useState('')
+  const [hfToken, setHfToken] = useState('')
+  const [hfTokenSaved, setHfTokenSaved] = useState(false)
 
   useEffect(() => {
     void getLeaderboard().then((b) => setBoard(normalizeLeaderboard(b)))
     void listRemoteDebugReports().then(setDebugReports)
+    void import('./agents/vlmRunner').then(({ getHfToken }) =>
+      getHfToken().then((t) => {
+        if (t) setHfToken(t)
+      }),
+    )
   }, [])
 
   const ranked = useMemo(() => rankLeaderboard(board), [board])
@@ -3484,9 +3491,47 @@ function SettingsScreen(props: {
         <OnDeviceMemoryCard />
 
         <div className="card settings-card">
+          <strong>Vision models (VLM)</strong>
+          <p className="muted" style={{ margin: '6px 0 10px' }}>
+            Free open vision models for hard receipts: Qwen2.5-VL, Qwen3-VL, RolmOCR,
+            GOT-OCR 2.0, SmolVLM, InternVL, DeepSeek-OCR. They run via free Hugging Face
+            inference (network). Optional free HF token improves rate limits.
+          </p>
+          <label className="field" style={{ display: 'block', marginBottom: 8 }}>
+            <span className="muted" style={{ fontSize: '0.85rem' }}>
+              Hugging Face token (optional, free)
+            </span>
+            <input
+              type="password"
+              autoComplete="off"
+              placeholder="hf_… from huggingface.co/settings/tokens"
+              value={hfToken}
+              onChange={(e) => {
+                setHfToken(e.target.value)
+                setHfTokenSaved(false)
+              }}
+              style={{ width: '100%', marginTop: 4 }}
+            />
+          </label>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ width: '100%' }}
+            onClick={() => {
+              void import('./agents/vlmRunner').then(({ setHfToken: save }) =>
+                save(hfToken).then(() => setHfTokenSaved(true)),
+              )
+            }}
+          >
+            {hfTokenSaved ? 'Token saved' : 'Save HF token'}
+          </button>
+        </div>
+
+        <div className="card settings-card">
           <strong>AIs</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Free and on-device. Turn off any that are slow on this phone.
+            Free AIs — on-device OCR plus optional free vision models. Turn off any that
+            are slow on this phone.
           </p>
           <div className="ai-toggle-list">
             {AI_ROSTER.map((ai) => {
