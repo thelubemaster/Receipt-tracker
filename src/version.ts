@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.29.2'
+export const APP_VERSION = '1.30.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.30.0',
+    date: '2026-07-30',
+    title: 'Oracle — real vision model reads the receipt',
+    changes: [
+      'New free on-device vision AI (Donut DocVQA) that looks at the whole page',
+      'Asks the image for store, total, date, tax, fees, and line items — not just Tesseract',
+      'First scan downloads the free model once, then caches offline',
+      'Falls back to classic OCR if the vision model cannot start on a device',
+    ],
+  },
   {
     version: '1.29.2',
     date: '2026-07-30',

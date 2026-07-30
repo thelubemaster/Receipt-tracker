@@ -121,9 +121,19 @@ function parseFromText(
   result.aisUsed = Array.from(new Set<AiId>(used))
   result.activeAiLabel = label
   const ocrAi = extraAis.find((id) =>
-    ['forge', 'lens', 'ruler', 'hammer', 'titan', 'scout', 'wedge', 'prism', 'bloom', 'mosaic'].includes(
-      id,
-    ),
+    [
+      'forge',
+      'lens',
+      'ruler',
+      'hammer',
+      'titan',
+      'oracle',
+      'scout',
+      'wedge',
+      'prism',
+      'bloom',
+      'mosaic',
+    ].includes(id),
   )
   if (ocrAi) {
     result.fieldSources = { ...(result.fieldSources ?? {}), ocr: ocrAi }
@@ -183,6 +193,8 @@ function scoreParseCandidate(
   if (c.vendor && !/^(visa|mastercard|amex|debit|chip|purchase)$/i.test(c.vendor.trim())) s += 3
   if (c.vendor && /^(visa|mastercard|amex|debit|chip)$/i.test(c.vendor.trim())) s -= 12
   s += Math.min(10, (c.description?.length ?? 0) / 20)
+  // Boost true vision-model paths over pure Tesseract dumps
+  if (c.aisUsed?.includes('oracle')) s += 14
   // Weight by historical reliability of AIs on this path
   if (reliability && c.aisUsed?.length) {
     const weights = c.aisUsed.map((id) => reliability[id] ?? 1)
@@ -353,7 +365,40 @@ export async function runMultiAgentReceiptPipeline(
       /\b(grand\s+)?t[o0]tal\b|\bamount\s+due\b/i.test(bestNow) &&
       (bestNow.match(/\d+[.,]\d{2}/g) || []).length >= 2
     )
-  if (stillWeak || (maxPower && rejected)) {
+  // ── Vision-language model (looks at the page — not Tesseract) ──
+  // Prefer when OCR looks weak, on retry, or always in max-power mode.
+  let oracleStructured: import('./oracleVlm').OracleResult | null = null
+  const wantOracle =
+    enabled('oracle') && (stillWeak || Boolean(rejected) || maxPower)
+  if (wantOracle) {
+    try {
+      const { runOracleVlm } = await import('./oracleVlm')
+      const oracle = await runOracleVlm(workBlob, onProgress)
+      if (!oracle.unavailable && oracle.text.trim()) {
+        oracleStructured = oracle
+        ocrTexts.push({
+          label: 'Oracle vision path',
+          text: oracle.text,
+          note: `Oracle DocVQA · ${oracle.answers.length} answers · conf ${Math.round(oracle.confidence * 100)}% · ${oracle.device}`,
+          ais: ['oracle'],
+        })
+      } else {
+        skipped.push(
+          oracle.reason
+            ? `Oracle off (${oracle.reason.slice(0, 80)})`
+            : 'Oracle produced no answers',
+        )
+      }
+    } catch (e) {
+      skipped.push(
+        `Oracle error: ${e instanceof Error ? e.message.slice(0, 60) : 'failed'}`,
+      )
+    }
+  } else if (!enabled('oracle')) {
+    skipped.push('Oracle off')
+  }
+
+  if (stillWeak || (maxPower && rejected) || Boolean(oracleStructured?.unavailable)) {
     await runOcrIfEnabled('bloom', 'Bloom upscale path', async () => {
       const { runBloomOcr } = await import('./bloomOcr')
       const bloom = await runBloomOcr(workBlob, onProgress)
@@ -388,7 +433,7 @@ export async function runMultiAgentReceiptPipeline(
       }
     })
   } else {
-    skipped.push('Heavy OCR (Hammer/Bloom/Mosaic/Titan) skipped — layout path was solid')
+    skipped.push('Heavy OCR (Hammer/Bloom/Mosaic/Titan) skipped — layout/Oracle path was solid')
   }
 
   // Drop near-empty / garbage OCR paths before voting (they pollute merge + consensus)
@@ -475,6 +520,52 @@ export async function runMultiAgentReceiptPipeline(
       ban,
     ),
   )
+
+  // Vision model structured answer (when Oracle actually read the page)
+  if (oracleStructured && !oracleStructured.unavailable) {
+    try {
+      const { oracleToLocalResult } = await import('./oracleVlm')
+      const or = oracleToLocalResult(oracleStructured)
+      if (or) {
+        // Engine polish on Oracle's synthetic dump can lock arithmetic
+        const engOnOracle = runReceiptEngine(oracleStructured.text, { ban })
+        if (
+          engOnOracle.amount != null &&
+          (engOnOracle.confidence ?? 0) >= (or.confidence ?? 0) - 0.1
+        ) {
+          parses.push({
+            ...or,
+            ...engOnOracle,
+            vendor: engOnOracle.vendor || or.vendor,
+            date: engOnOracle.date || or.date,
+            amount: engOnOracle.amount ?? or.amount,
+            lineItems:
+              (engOnOracle.lineItems?.length ?? 0) >= (or.lineItems?.length ?? 0)
+                ? engOnOracle.lineItems
+                : or.lineItems,
+            confidence: Math.max(or.confidence ?? 0, engOnOracle.confidence ?? 0) + 0.05,
+            aisUsed: ['oracle', 'ledger', 'cashier', 'clerk', 'arbiter'],
+            activeAiLabel: 'Oracle vision + receipt engine',
+            agentReport: [
+              or.agentReport,
+              '---',
+              engOnOracle.agentReport,
+            ].join('\n'),
+            fieldSources: {
+              ...or.fieldSources,
+              primary: 'oracle',
+              ocr: 'oracle',
+              answerLabel: 'Oracle vision + structured engine',
+            },
+          })
+        } else {
+          parses.push(or)
+        }
+      }
+    } catch {
+      /* oracle structured optional */
+    }
+  }
 
   // Council / smart-pass text: prefer best single path, enrich from near-peers only
   let councilText = topOcr[0].text
@@ -657,6 +748,7 @@ export async function runMultiAgentReceiptPipeline(
     'mosaic',
     'hammer',
     'titan',
+    'oracle',
     'sieve',
     'quorum',
     'council',
@@ -664,6 +756,7 @@ export async function runMultiAgentReceiptPipeline(
   ] as AiId[]) {
     if (enabled(id)) ranIds.add(id)
   }
+  if (oracleStructured && !oracleStructured.unavailable) ranIds.add('oracle')
   final.aisUsed = Array.from(ranIds)
   // Ensure field attribution + human-readable “who answered”
   const ocrLead = usable[0]?.ais[0]
@@ -838,6 +931,42 @@ export async function runMultiAgentReceiptPipeline(
       final.agentReport,
       `Consensus skipped: ${e instanceof Error ? e.message : 'error'}`,
     ].join('\n')
+  }
+
+  // Prefer strong Oracle vision answer when classic OCR still looks thin
+  if (oracleStructured && !oracleStructured.unavailable && oracleStructured.amount != null) {
+    const oracleParse = parses.find((p) => p.aisUsed?.includes('oracle') && p.amount != null)
+    const ocrLooksThin =
+      scoreOcrText(councilText || final.rawText || '') < 70 ||
+      !/\b(grand\s+)?t[o0]tal\b|\bamount\s+due\b/i.test(councilText || final.rawText || '')
+    const oracleStrong =
+      (oracleStructured.confidence ?? 0) >= 0.55 &&
+      (oracleParse?.confidence ?? oracleStructured.confidence) >= (final.confidence ?? 0) - 0.08
+    if (oracleParse && (ocrLooksThin || oracleStrong)) {
+      final = {
+        ...oracleParse,
+        // Keep any better product names from prior if Oracle items empty
+        lineItems:
+          (oracleParse.lineItems?.length ?? 0) > 0
+            ? oracleParse.lineItems
+            : final.lineItems,
+        agentReport: [
+          final.agentReport,
+          '---',
+          'Preferred Oracle vision read (model looked at the page, not only OCR text)',
+          oracleParse.agentReport,
+        ].join('\n'),
+        fieldSources: {
+          ...final.fieldSources,
+          ...oracleParse.fieldSources,
+          primary: 'oracle',
+          ocr: 'oracle',
+          answerLabel: 'Oracle vision document reader',
+        },
+        activeAiLabel: 'Oracle · vision document reader',
+        confidence: Math.max(final.confidence ?? 0, oracleParse.confidence ?? 0),
+      }
+    }
   }
 
   final.source = 'on-device'

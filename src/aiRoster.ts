@@ -10,6 +10,7 @@ export type AiId =
   | 'lens'
   | 'hammer'
   | 'titan'
+  | 'oracle'
   | 'ruler'
   | 'mosaic'
   | 'wedge'
@@ -198,6 +199,22 @@ export const AI_ROSTER: AiProfile[] = [
     tier: 'heavy',
     phoneWarning:
       'Uses ONNX on-device. If you see graph/session errors, turn Titan off — other free AIs still work.',
+  },
+  {
+    id: 'oracle',
+    name: 'Oracle',
+    fullName: 'Oracle · Vision document reader',
+    kind: 'on-device',
+    cost: 'free',
+    role: 'Real vision model that looks at the whole receipt and answers: store, total, date, items. Not Tesseract.',
+    workingLine: 'Oracle is reading the receipt with a vision model…',
+    engine: 'Transformers.js · Donut DocVQA (local ONNX)',
+    emoji: '👁️',
+    color: '#7e57c2',
+    power: 10,
+    tier: 'heavy',
+    phoneWarning:
+      'Downloads a free vision model on first use (~200–400 MB), then caches. Slow on first scan; turn off on very old phones.',
   },
   {
     id: 'ledger',

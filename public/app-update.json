@@ -1,7 +1,7 @@
 {
-  "version": "1.29.2",
+  "version": "1.30.0",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Unstick package download on build 27 — live % and native downloader no longer aborted early",
+  "notes": "Oracle vision model — free on-device DocVQA that looks at the receipt page (not only Tesseract)",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
