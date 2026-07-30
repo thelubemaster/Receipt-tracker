@@ -99,6 +99,7 @@ import {
 } from './appUpdate'
 import { isNativeCapacitorApp } from './installApp'
 import { UpdateCenter } from './UpdateCenter'
+import { VersionChip } from './VersionChip'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
@@ -628,22 +629,15 @@ export default function App() {
       )}
 
       {screen.name === 'home' && (
-        <>
-          {isNativeCapacitorApp() && <UpdateCenter compact />}
-          <ProjectsHome
-            onOpenProject={(id) => {
-              setError(null)
-              setScreen({ name: 'project', projectId: id })
-              void refresh(id)
-            }}
-            onNewProject={() => setScreen({ name: 'project-edit' })}
-            onSettings={() => setScreen({ name: 'settings' })}
-            onShowVersion={() => {
-              setWhatsNewMode('history')
-              setWhatsNew(CHANGELOG)
-            }}
-          />
-        </>
+        <ProjectsHome
+          onOpenProject={(id) => {
+            setError(null)
+            setScreen({ name: 'project', projectId: id })
+            void refresh(id)
+          }}
+          onNewProject={() => setScreen({ name: 'project-edit' })}
+          onSettings={() => setScreen({ name: 'settings' })}
+        />
       )}
 
       {screen.name === 'project-edit' && (
@@ -704,10 +698,6 @@ export default function App() {
           onSettings={() => setScreen({ name: 'settings' })}
           onExportCsv={() => downloadCsv(purchases, activeProject.name)}
           onExportPdf={() => downloadPdfSummary(purchases, activeProject.name)}
-          onShowVersion={() => {
-            setWhatsNewMode('history')
-            setWhatsNew(CHANGELOG)
-          }}
         />
       )}
 
@@ -1291,7 +1281,6 @@ function HomeScreen(props: {
   onSettings: () => void
   onExportCsv: () => void
   onExportPdf: () => void
-  onShowVersion: () => void
 }) {
   // Groups start expanded so the main screen shows receipts under each category
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
@@ -1343,6 +1332,10 @@ function HomeScreen(props: {
         </button>
         <BrandLockup title={props.project.name} subtitle={APP_NAME_SHORT} size={36} />
         <div className="topbar-actions">
+          <VersionChip
+            onClick={props.onSettings}
+            title="Version — open Settings for updates"
+          />
           <button
             type="button"
             className="icon-btn"
@@ -1497,13 +1490,6 @@ function HomeScreen(props: {
           })}
         </div>
       )}
-
-      <p className="app-version-foot">
-        Project Cost Tracker{' '}
-        <button type="button" className="version-link" onClick={props.onShowVersion}>
-          {formatVersionLabel()}
-        </button>
-      </p>
 
       <div className="fab-bar">
         <button type="button" className="btn btn-secondary" onClick={props.onAdd}>
@@ -3087,7 +3073,7 @@ function SettingsScreen(props: {
           ←
         </button>
         <h1>Settings</h1>
-        <span className="version-chip">{formatVersionLabel()}</span>
+        <VersionChip title="App version" />
       </header>
 
       <form

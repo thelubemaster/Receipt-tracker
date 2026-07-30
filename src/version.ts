@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.5'
+export const APP_VERSION = '1.25.6'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.6',
+    date: '2026-07-30',
+    title: 'Quiet home screen — updates only in Settings',
+    changes: [
+      'Main screens: only a tiny version pill in the top corner',
+      'Orange dot on the pill when an update is available',
+      'All update download/install UI lives in Settings only',
+    ],
+  },
   {
     version: '1.25.5',
     date: '2026-07-30',

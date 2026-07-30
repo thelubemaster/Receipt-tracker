@@ -2030,20 +2030,40 @@ code {
   flex-shrink: 0;
 }
 
+/* Tiny top-corner version label (updates live in Settings) */
 .version-chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  padding: 4px 10px;
+  min-height: 26px;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   color: var(--accent-bright);
   background: var(--accent-soft);
   border: 1px solid rgba(232, 165, 75, 0.35);
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.version-chip-update {
+  border-color: rgba(251, 146, 60, 0.55);
+}
+
+/* Tiny corner notification when an update is available */
+.version-chip-dot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fb923c;
+  box-shadow: 0 0 0 1.5px var(--bg, #0c0e13);
+  pointer-events: none;
 }
 
 .version-chip-lg {

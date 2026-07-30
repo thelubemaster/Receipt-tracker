@@ -1,7 +1,7 @@
 {
-  "version": "1.25.5",
+  "version": "1.25.6",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Version panel: see what you have and Get up to date",
+  "notes": "Quiet home: tiny version chip with update dot; full updates only in Settings",
   "apkVersion": "1.25.4",
   "apkVersionCode": 27,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.4/schoolie.apk"

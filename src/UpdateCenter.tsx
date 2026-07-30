@@ -14,12 +14,8 @@ import { isNativeCapacitorApp } from './installApp'
 import { readVersionSnapshot, type VersionSnapshot } from './versionProbe'
 import { APP_VERSION } from './version'
 
-type Props = {
-  /** Compact card for home screen */
-  compact?: boolean
-}
-
-export function UpdateCenter({ compact }: Props) {
+/** Full update panel — Settings only (main screens just show a tiny version chip). */
+export function UpdateCenter() {
   const [snap, setSnap] = useState<VersionSnapshot | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
@@ -141,7 +137,7 @@ export function UpdateCenter({ compact }: Props) {
 
   return (
     <div className="card settings-card update-center">
-      <strong>{compact ? 'Get up to date' : 'Updates & versions'}</strong>
+      <strong>Updates & versions</strong>
       <p className="muted" style={{ margin: '6px 0 12px' }}>
         {s?.summary || status || '…'}
       </p>
@@ -201,7 +197,7 @@ export function UpdateCenter({ compact }: Props) {
         </div>
       )}
 
-      {s && s.steps.length > 0 && !compact && (
+      {s && s.steps.length > 0 && (
         <ol className="update-steps">
           {s.steps.map((step) => (
             <li key={step}>{step}</li>
@@ -237,12 +233,10 @@ export function UpdateCenter({ compact }: Props) {
         </p>
       )}
 
-      {!compact && (
-        <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.78rem' }}>
-          Running UI build v{APP_VERSION}
-          {s?.shellVersionCode != null ? ` · package build ${s.shellVersionCode}` : ''}.
-        </p>
-      )}
+      <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.78rem' }}>
+        Running UI build v{APP_VERSION}
+        {s?.shellVersionCode != null ? ` · package build ${s.shellVersionCode}` : ''}.
+      </p>
     </div>
   )
 }

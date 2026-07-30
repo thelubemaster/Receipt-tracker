@@ -5,7 +5,7 @@ import { SafeImage } from './SafeImage'
 import { formatMoney } from './money'
 import { BrandLockup, LogoMark } from './Logo'
 import type { Project } from './types'
-import { formatVersionLabel } from './version'
+import { VersionChip } from './VersionChip'
 
 type Row = Project & { total: number; count: number; coverUrl: string | null }
 
@@ -13,7 +13,6 @@ export function ProjectsHome(props: {
   onOpenProject: (id: string) => void
   onNewProject: () => void
   onSettings: () => void
-  onShowVersion: () => void
 }) {
   const [rows, setRows] = useState<Row[] | null>(null)
 
@@ -52,14 +51,10 @@ export function ProjectsHome(props: {
       <header className="topbar">
         <BrandLockup title={APP_NAME} subtitle={APP_TAGLINE} />
         <div className="topbar-actions">
-          <button
-            type="button"
-            className="version-chip"
-            onClick={props.onShowVersion}
-            title="App version"
-          >
-            {formatVersionLabel()}
-          </button>
+          <VersionChip
+            onClick={props.onSettings}
+            title="Version — open Settings for updates"
+          />
           <button type="button" className="icon-btn" aria-label="Settings" onClick={props.onSettings}>
             ⚙
           </button>
