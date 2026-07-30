@@ -42,12 +42,26 @@ fi
 echo "Building web assets…"
 npm run build
 
+# Never package prior APKs/zips into the Android shell (they bloat the install to 700MB+)
+echo "Stripping download artifacts from dist before cap sync…"
+rm -rf dist/downloads
+mkdir -p dist/downloads
+# keep a tiny placeholder so folders exist
+: > dist/downloads/.gitkeep
+
 echo "Syncing Capacitor…"
 npx cap sync android
+
+# Also strip if public/ was mirrored with huge files
+rm -rf android/app/src/main/assets/public/downloads
+mkdir -p android/app/src/main/assets/public/downloads
+: > android/app/src/main/assets/public/downloads/.gitkeep
 
 echo "Building APK…"
 cd android
 chmod +x gradlew
+# More heap for asset compression
+export GRADLE_OPTS="${GRADLE_OPTS:-} -Xmx2g"
 ./gradlew assembleDebug --no-daemon
 
 APK="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
