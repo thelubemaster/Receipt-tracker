@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.7'
+export const APP_VERSION = '1.25.8'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.8',
+    date: '2026-07-30',
+    title: 'Receipt first, AI details last',
+    changes: [
+      'After a scan, store / total / lines show first so you can verify the read',
+      'AI credits, full report, and leaderboard are under “Scan details” at the bottom',
+      'Scan screen focuses on the photo — no AI roster list up front',
+    ],
+  },
   {
     version: '1.25.7',
     date: '2026-07-30',

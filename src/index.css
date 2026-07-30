@@ -2608,6 +2608,39 @@ code {
   display: block;
 }
 
+/* After-scan: receipt data first */
+.receipt-read-banner {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--accent-soft);
+}
+
+.receipt-read-banner strong {
+  font-size: 0.95rem;
+}
+
+.line-item-meta-row-end {
+  justify-content: flex-end;
+}
+
+.scan-details-card {
+  margin-top: 8px;
+}
+
+.scan-details-body {
+  margin-top: 12px;
+}
+
+.answer-credit-card-nested {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
 /* Theme picker (Settings) */
 .theme-grid {
   display: grid;

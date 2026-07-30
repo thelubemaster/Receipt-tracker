@@ -1530,26 +1530,11 @@ function ScanScreen(props: {
   onError: (msg: string) => void
 }) {
   const [busy, setBusy] = useState(Boolean(props.retryBlob && props.rejected))
-  const [status, setStatus] = useState<string | null>(
-    props.rejected
-      ? `Try again #${props.rejected.attempt}: telling the AIs the last answer was wrong…`
-      : null,
-  )
   const [progress, setProgress] = useState(0)
-  const [activeAi, setActiveAi] = useState<{ name: string; id?: AiId } | null>(null)
   const [scanError, setScanError] = useState<string | null>(null)
   const [heldBlob, setHeldBlob] = useState<Blob | null>(props.retryBlob ?? null)
   const [heldPreview, setHeldPreview] = useState<string | null>(props.retryPreviewUrl ?? null)
   const autoStarted = useRef(false)
-
-  const whoWillScan = useMemo(() => {
-    return AI_ROSTER.filter((a) =>
-      isAiEnabled(a.id, {
-        disabledAis: props.disabledAis,
-        maxPowerMode: props.rejected ? true : props.maxPowerMode,
-      }),
-    ).map((a) => a.name)
-  }, [props.maxPowerMode, props.disabledAis, props.rejected])
 
   async function runScan(
     blob: Blob,
@@ -1562,17 +1547,6 @@ function ScanScreen(props: {
     setBusy(true)
     setProgress(0.02)
     const isRetry = Boolean(rejected)
-    setActiveAi({
-      name: isRetry ? 'Arbiter' : props.maxPowerMode ? 'Hammer' : 'Forge',
-      id: isRetry ? 'arbiter' : props.maxPowerMode ? 'hammer' : 'forge',
-    })
-    setStatus(
-      isRetry
-        ? `Try again #${rejected!.attempt}: telling the AIs the last answer was wrong…`
-        : props.maxPowerMode
-          ? 'Hammer is spinning up parallel OCR workers…'
-          : 'Forge is deep-scanning the photo…',
-    )
     try {
       const board = normalizeLeaderboard(await getLeaderboard())
       const suggestion = await scanReceipt(blob, {
@@ -1582,8 +1556,6 @@ function ScanScreen(props: {
         reliability: reliabilityWeights(board),
         onProgress: (p) => {
           setProgress(p.progress)
-          setStatus(p.message)
-          if (p.aiName) setActiveAi({ name: p.aiName, id: p.aiId })
         },
       })
       props.onParsed(suggestion, blob, previewUrl)
@@ -1593,9 +1565,7 @@ function ScanScreen(props: {
       props.onError(msg)
     } finally {
       setBusy(false)
-      setStatus(null)
       setProgress(0)
-      setActiveAi(null)
     }
   }
 
@@ -1661,18 +1631,12 @@ function ScanScreen(props: {
             />
           )}
           <div className="spinner" />
-          <div className="status-title">{status}</div>
-          {activeAi && (
-            <div
-              className="ai-live-chip"
-              style={{
-                borderColor: activeAi.id ? getAi(activeAi.id).color : undefined,
-              }}
-            >
-              <span className="ai-live-dot" />
-              {activeAi.name} is working now
-            </div>
-          )}
+          <div className="status-title">
+            {progress < 0.95 ? 'Reading your receipt…' : 'Almost done…'}
+          </div>
+          <p className="muted" style={{ margin: '6px 0 0', textAlign: 'center' }}>
+            Extracting store, total, date, and line items
+          </p>
           <div className="progress-track">
             <div className="progress-fill" style={{ width: `${Math.round(progress * 100)}%` }} />
           </div>
@@ -1736,7 +1700,7 @@ function ScanScreen(props: {
           <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
           <strong className="scan-retry-title">Ready to scan again</strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
-            Re-run the free AIs on this photo, or pick a better shot.
+            Re-read this photo, or pick a clearer shot.
           </p>
           <div className="row-actions stack" style={{ marginTop: 14 }}>
             <button
@@ -1768,14 +1732,9 @@ function ScanScreen(props: {
         <div className="scan-drop">
           <div className="scan-icon">📷</div>
           <strong>Photograph or choose a receipt</strong>
-          <p className="muted">AIs that will run this scan:</p>
-          <div className="ai-chip-row">
-            {whoWillScan.map((n) => (
-              <span key={n} className="ai-chip">
-                {n}
-              </span>
-            ))}
-          </div>
+          <p className="muted" style={{ marginTop: 8 }}>
+            Get the full receipt in frame — totals and store name at the bottom count most.
+          </p>
           <div className="row-actions" style={{ marginTop: 16 }}>
             <label className="btn btn-primary">
               Take photo
@@ -1797,12 +1756,6 @@ function ScanScreen(props: {
               />
             </label>
           </div>
-          <p className="muted" style={{ marginTop: 16 }}>
-            Check device strength?{' '}
-            <button type="button" style={{ textDecoration: 'underline' }} onClick={props.onNeedSettings}>
-              Settings → Scan this device
-            </button>
-          </p>
         </div>
       )}
     </>
@@ -1927,7 +1880,8 @@ function PurchaseFormScreen(props: {
 }) {
   const [form, setForm] = useState(props.initial)
   const [saving, setSaving] = useState(false)
-  const [showAgentReport, setShowAgentReport] = useState(Boolean(props.initial.agentReport))
+  const [showAgentReport, setShowAgentReport] = useState(false)
+  const [showScanDetails, setShowScanDetails] = useState(false)
   const [reporting, setReporting] = useState(false)
   const [reportNote, setReportNote] = useState('')
   const [partMarks, setPartMarks] = useState<ScanPartMarks>(() => emptyPartMarks())
@@ -2104,9 +2058,8 @@ function PurchaseFormScreen(props: {
         key={li.id}
         className={`line-item-row${tone === 'shipping' ? ' line-item-row-shipping' : ''}${tone === 'fee' ? ' line-item-row-fee' : ''}${mark === 'wrong' ? ' line-item-marked-wrong' : ''}${mark === 'right' ? ' line-item-marked-right' : ''}`}
       >
-        <div className="line-item-meta-row">
-          <FromAiBadge aiId={sourceAi} fallback={fromScan ? 'Team' : undefined} />
-          {props.onTryAgain && (
+        {props.onTryAgain && (
+          <div className="line-item-meta-row line-item-meta-row-end">
             <MarkPair
               label={`Mark ${li.description || 'line'}`}
               value={mark}
@@ -2114,8 +2067,8 @@ function PurchaseFormScreen(props: {
               showAi={false}
               onChange={(m) => setLineMark(li.id, m)}
             />
-          )}
-        </div>
+          </div>
+        )}
         {longDesc ? (
           <div className="line-item-desc-wrap">
             <ExpandableBlock collapsedMax={56} className="line-expand">
@@ -2204,6 +2157,15 @@ function PurchaseFormScreen(props: {
     )
   }
 
+  const hasScanMeta =
+    fromScan &&
+    Boolean(
+      form.activeAiLabel ||
+        form.aisUsed.length > 0 ||
+        form.fieldSources?.primary ||
+        form.agentReport,
+    )
+
   return (
     <>
       <header className="topbar">
@@ -2222,135 +2184,18 @@ function PurchaseFormScreen(props: {
         />
       )}
 
-      {props.onTryAgain && fromScan && (
-        <div
-          className={`card scan-retry-card ${lowConfidence || looksThin || wrongCount > 0 ? 'scan-retry-card-warn' : ''}`}
-        >
-          <strong className="scan-retry-title">
-            {wrongCount > 0
-              ? `${wrongCount} part${wrongCount === 1 ? '' : 's'} marked wrong`
-              : lowConfidence || looksThin
-                ? 'Scan looks incomplete'
-                : 'Mark what’s right or wrong'}
-          </strong>
-          <p className="muted" style={{ margin: '6px 0 0' }}>
-            Tap <strong>✗</strong> only on what’s wrong. Anything you leave unmarked is treated as{' '}
-            <strong>correct</strong> and kept. Optional <strong>✓</strong> also locks a field.
+      {fromScan && (
+        <div className="receipt-read-banner">
+          <strong>Check the receipt</strong>
+          <p className="muted" style={{ margin: '4px 0 0' }}>
+            Review store, total, date, and lines below. Fix anything wrong before you save.
             {typeof form.confidence === 'number' ? (
               <>
                 {' '}
-                Confidence: <strong>{Math.round(form.confidence * 100)}%</strong>
+                Read confidence: <strong>{Math.round(form.confidence * 100)}%</strong>
               </>
             ) : null}
           </p>
-          <div className="row-actions" style={{ marginTop: 12 }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={requestTryAgain}
-              disabled={wrongCount === 0 && !hasAnyWrongMark(partMarks) && !reportNote.trim()}
-              title={
-                wrongCount === 0
-                  ? 'Mark at least one ✗ (or write a note) before re-scanning'
-                  : 'Re-scan focusing on marked-wrong parts'
-              }
-            >
-              {wrongCount > 0 ? 'Fix marked parts' : 'Mark ✗ then fix'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={requestTryAgain}
-            >
-              Retry all
-            </button>
-          </div>
-        </div>
-      )}
-
-      {(form.activeAiLabel || form.aisUsed.length > 0 || form.fieldSources?.primary) && (
-        <div className="card answer-credit-card">
-          <div className="answer-credit-head">
-            <span className="answer-credit-kicker">Who answered this scan</span>
-            {form.fieldSources?.primary ? (
-              <div className="answer-credit-primary">
-                <span className="answer-credit-emoji">{getAi(form.fieldSources.primary).emoji}</span>
-                <div>
-                  <strong>{getAi(form.fieldSources.primary).name}</strong>
-                  <div className="muted" style={{ fontSize: '0.8rem' }}>
-                    Primary credit · {getAi(form.fieldSources.primary).role}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <strong>{form.activeAiLabel || 'On-device team'}</strong>
-            )}
-          </div>
-          <p className="muted answer-credit-label">
-            {form.fieldSources?.answerLabel || form.activeAiLabel || 'Team huddle result'}
-          </p>
-          <div className="answer-credit-grid">
-            {form.fieldSources?.ocr && (
-              <div className="answer-credit-cell">
-                <span className="muted">OCR</span>
-                <FromAiBadge aiId={form.fieldSources.ocr} />
-              </div>
-            )}
-            {form.fieldSources?.total && (
-              <div className="answer-credit-cell">
-                <span className="muted">Total</span>
-                <FromAiBadge aiId={form.fieldSources.total} />
-              </div>
-            )}
-            {form.fieldSources?.vendor && (
-              <div className="answer-credit-cell">
-                <span className="muted">Vendor</span>
-                <FromAiBadge aiId={form.fieldSources.vendor} />
-              </div>
-            )}
-            {form.fieldSources?.category && (
-              <div className="answer-credit-cell">
-                <span className="muted">Category</span>
-                <FromAiBadge aiId={form.fieldSources.category} />
-              </div>
-            )}
-            {form.fieldSources?.shipping && (
-              <div className="answer-credit-cell">
-                <span className="muted">Shipping</span>
-                <FromAiBadge aiId={form.fieldSources.shipping} />
-              </div>
-            )}
-            {form.fieldSources?.fees && (
-              <div className="answer-credit-cell">
-                <span className="muted">Fees</span>
-                <FromAiBadge aiId={form.fieldSources.fees} />
-              </div>
-            )}
-          </div>
-          {form.aisUsed.length > 0 && (
-            <ExpandableBlock collapsedMax={52} className="answer-credit-team">
-              <div className="muted" style={{ fontSize: '0.78rem' }}>
-                Full team: {form.aisUsed.map((id) => `${getAi(id).emoji} ${getAi(id).name}`).join(' · ')}
-              </div>
-            </ExpandableBlock>
-          )}
-        </div>
-      )}
-
-      {form.agentReport && (
-        <div className="card agent-report-card">
-          <button
-            type="button"
-            className="agent-report-toggle"
-            onClick={() => setShowAgentReport((v) => !v)}
-          >
-            {showAgentReport ? '▼' : '▶'} Who scanned · full report
-          </button>
-          {showAgentReport && (
-            <ExpandableBlock collapsedMax={160} className="agent-report-expand">
-              <pre className="agent-report-body agent-report-body-in-expand">{form.agentReport}</pre>
-            </ExpandableBlock>
-          )}
         </div>
       )}
 
@@ -2364,32 +2209,100 @@ function PurchaseFormScreen(props: {
             .finally(() => setSaving(false))
         }}
       >
-        {form.aisUsed.length > 0 && (
-          <div className="field">
-            <label>Who scanned best? (leaderboard)</label>
-            <p className="muted" style={{ margin: '0 0 8px' }}>
-              Pick the AI that got closest — they get a win on the leaderboard.
-            </p>
-            <div className="ai-pick-grid">
-              {form.aisUsed.map((id) => {
-                const ai = getAi(id)
-                const selected = form.bestAiId === id
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`ai-pick ${selected ? 'ai-pick-selected' : ''}`}
-                    style={{ borderColor: selected ? ai.color : undefined }}
-                    onClick={() => update('bestAiId', selected ? null : id)}
-                  >
-                    <span className="ai-pick-emoji">{ai.emoji}</span>
-                    <span className="ai-pick-name">{ai.name}</span>
-                  </button>
-                )
-              })}
+        {/* —— Receipt data first —— */}
+        <div
+          className={`field${partMarks.vendor === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.vendor === 'right' ? ' field-marked-right' : ''}`}
+        >
+          <div className="field-label-row">
+            <label htmlFor="vendor">Store / vendor</label>
+            <div className="field-label-right">
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Vendor"
+                  value={partMarks.vendor}
+                  sourceAi={form.fieldSources?.vendor}
+                  showAi={false}
+                  onChange={(m) => setMark('vendor', m)}
+                />
+              )}
             </div>
           </div>
-        )}
+          {(form.vendor || '').length > 40 ? (
+            <ExpandableBlock collapsedMax={56}>
+              <textarea
+                id="vendor"
+                className="expandable-textarea"
+                value={form.vendor}
+                onChange={(e) => update('vendor', e.target.value)}
+                placeholder="Home Depot, Amazon…"
+                rows={2}
+              />
+            </ExpandableBlock>
+          ) : (
+            <input
+              id="vendor"
+              value={form.vendor}
+              onChange={(e) => update('vendor', e.target.value)}
+              placeholder="Home Depot, Amazon…"
+            />
+          )}
+        </div>
+
+        <div
+          className={`field${partMarks.date === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.date === 'right' ? ' field-marked-right' : ''}`}
+        >
+          <div className="field-label-row">
+            <label htmlFor="date">Date</label>
+            <div className="field-label-right">
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Date"
+                  value={partMarks.date}
+                  sourceAi={form.fieldSources?.date}
+                  showAi={false}
+                  onChange={(m) => setMark('date', m)}
+                />
+              )}
+            </div>
+          </div>
+          <input
+            id="date"
+            type="date"
+            value={form.date}
+            onChange={(e) => update('date', e.target.value)}
+            required
+          />
+        </div>
+
+        <div
+          className={`field${partMarks.total === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.total === 'right' ? ' field-marked-right' : ''}`}
+        >
+          <div className="field-label-row">
+            <label htmlFor="amount">Amount (total paid)</label>
+            <div className="field-label-right">
+              {props.onTryAgain && (
+                <MarkPair
+                  label="Total"
+                  value={partMarks.total}
+                  sourceAi={form.fieldSources?.total}
+                  showAi={false}
+                  onChange={(m) => setMark('total', m)}
+                />
+              )}
+            </div>
+          </div>
+          <input
+            id="amount"
+            type="text"
+            inputMode="decimal"
+            enterKeyHint="done"
+            autoComplete="off"
+            placeholder="0.00"
+            value={form.amount}
+            onChange={(e) => update('amount', sanitizeMoneyTyping(e.target.value))}
+            required
+          />
+        </div>
 
         {form.lineItems.length > 0 && (
           <div className="field">
@@ -2405,7 +2318,7 @@ function PurchaseFormScreen(props: {
             </div>
             {props.onTryAgain && (
               <p className="muted mark-hint">
-                ✗ on “missing products” = list is incomplete. ✗ on a row = that line is wrong.
+                Tap ✗ on a line if it&apos;s wrong. ✗ on “missing products” if the list is incomplete.
               </p>
             )}
 
@@ -2429,6 +2342,7 @@ function PurchaseFormScreen(props: {
                       label="Shipping section"
                       value={partMarks.shipping}
                       sourceAi={form.fieldSources?.shipping}
+                      showAi={false}
                       onChange={(m) => setMark('shipping', m)}
                     />
                   )}
@@ -2454,6 +2368,7 @@ function PurchaseFormScreen(props: {
                     <MarkPair
                       label="Fees section"
                       value={partMarks.fees}
+                      showAi={false}
                       onChange={(m) => setMark('fees', m)}
                     />
                   )}
@@ -2470,7 +2385,6 @@ function PurchaseFormScreen(props: {
               ) : null}
             </div>
 
-            {/* Fallback if partitions empty but items exist (manual edge cases) */}
             {productLines.length === 0 &&
               shippingLines.length === 0 &&
               feeLines.length === 0 && (
@@ -2556,6 +2470,7 @@ function PurchaseFormScreen(props: {
                 <MarkPair
                   label="Missing products"
                   value={partMarks.missingItems}
+                  showAi={false}
                   onChange={(m) => setMark('missingItems', m)}
                 />
               )}
@@ -2566,34 +2481,31 @@ function PurchaseFormScreen(props: {
           </div>
         )}
 
-        <div className={`field${partMarks.total === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.total === 'right' ? ' field-marked-right' : ''}`}>
+        <div
+          className={`field${partMarks.category === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.category === 'right' ? ' field-marked-right' : ''}`}
+        >
           <div className="field-label-row">
-            <label htmlFor="amount">Amount (total paid)</label>
+            <label htmlFor="category">Category</label>
             <div className="field-label-right">
-              <FromAiBadge aiId={form.fieldSources?.total} fallback={fromScan ? 'Cashier' : undefined} />
               {props.onTryAgain && (
                 <MarkPair
-                  label="Total"
-                  value={partMarks.total}
-                  sourceAi={form.fieldSources?.total}
+                  label="Category"
+                  value={partMarks.category}
+                  sourceAi={form.fieldSources?.category}
                   showAi={false}
-                  onChange={(m) => setMark('total', m)}
+                  onChange={(m) => setMark('category', m)}
                 />
               )}
             </div>
           </div>
-          <input
-            id="amount"
-            type="text"
-            inputMode="decimal"
-            enterKeyHint="done"
-            autoComplete="off"
-            placeholder="0.00"
-            value={form.amount}
-            onChange={(e) => update('amount', sanitizeMoneyTyping(e.target.value))}
-            required
+          <CategoryField
+            id="category"
+            value={form.categoryId}
+            categories={props.categories}
+            onChange={(id) => update('categoryId', id)}
           />
         </div>
+
         <div className="field">
           <label htmlFor="description">Summary</label>
           {(form.description || '').length > 60 ? (
@@ -2616,89 +2528,7 @@ function PurchaseFormScreen(props: {
             />
           )}
         </div>
-        <div className={`field${partMarks.category === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.category === 'right' ? ' field-marked-right' : ''}`}>
-          <div className="field-label-row">
-            <label htmlFor="category">Category</label>
-            <div className="field-label-right">
-              <FromAiBadge aiId={form.fieldSources?.category} fallback={fromScan ? 'Ledger' : undefined} />
-              {props.onTryAgain && (
-                <MarkPair
-                  label="Category"
-                  value={partMarks.category}
-                  sourceAi={form.fieldSources?.category}
-                  showAi={false}
-                  onChange={(m) => setMark('category', m)}
-                />
-              )}
-            </div>
-          </div>
-          <CategoryField
-            id="category"
-            value={form.categoryId}
-            categories={props.categories}
-            onChange={(id) => update('categoryId', id)}
-          />
-        </div>
-        <div className={`field${partMarks.vendor === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.vendor === 'right' ? ' field-marked-right' : ''}`}>
-          <div className="field-label-row">
-            <label htmlFor="vendor">Store / vendor</label>
-            <div className="field-label-right">
-              <FromAiBadge aiId={form.fieldSources?.vendor} fallback={fromScan ? 'Clerk' : undefined} />
-              {props.onTryAgain && (
-                <MarkPair
-                  label="Vendor"
-                  value={partMarks.vendor}
-                  sourceAi={form.fieldSources?.vendor}
-                  showAi={false}
-                  onChange={(m) => setMark('vendor', m)}
-                />
-              )}
-            </div>
-          </div>
-          {(form.vendor || '').length > 40 ? (
-            <ExpandableBlock collapsedMax={56}>
-              <textarea
-                id="vendor"
-                className="expandable-textarea"
-                value={form.vendor}
-                onChange={(e) => update('vendor', e.target.value)}
-                placeholder="Home Depot, Amazon…"
-                rows={2}
-              />
-            </ExpandableBlock>
-          ) : (
-            <input
-              id="vendor"
-              value={form.vendor}
-              onChange={(e) => update('vendor', e.target.value)}
-              placeholder="Home Depot, Amazon…"
-            />
-          )}
-        </div>
-        <div className={`field${partMarks.date === 'wrong' ? ' field-marked-wrong' : ''}${partMarks.date === 'right' ? ' field-marked-right' : ''}`}>
-          <div className="field-label-row">
-            <label htmlFor="date">Date</label>
-            <div className="field-label-right">
-              <FromAiBadge aiId={form.fieldSources?.date} fallback={fromScan ? 'Clerk' : undefined} />
-              {props.onTryAgain && (
-                <MarkPair
-                  label="Date"
-                  value={partMarks.date}
-                  sourceAi={form.fieldSources?.date}
-                  showAi={false}
-                  onChange={(m) => setMark('date', m)}
-                />
-              )}
-            </div>
-          </div>
-          <input
-            id="date"
-            type="date"
-            value={form.date}
-            onChange={(e) => update('date', e.target.value)}
-            required
-          />
-        </div>
+
         <div className="field">
           <label htmlFor="notes">Notes</label>
           <ExpandableBlock collapsedMax={88}>
@@ -2712,6 +2542,43 @@ function PurchaseFormScreen(props: {
             />
           </ExpandableBlock>
         </div>
+
+        {props.onTryAgain && fromScan && (
+          <div
+            className={`card scan-retry-card ${lowConfidence || looksThin || wrongCount > 0 ? 'scan-retry-card-warn' : ''}`}
+          >
+            <strong className="scan-retry-title">
+              {wrongCount > 0
+                ? `${wrongCount} part${wrongCount === 1 ? '' : 's'} marked wrong`
+                : lowConfidence || looksThin
+                  ? 'Something may be incomplete'
+                  : 'Looks good? Save — or fix mistakes'}
+            </strong>
+            <p className="muted" style={{ margin: '6px 0 0' }}>
+              Mark <strong>✗</strong> only on wrong fields above, then fix. Unmarked fields are kept
+              as correct.
+            </p>
+            <div className="row-actions" style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={requestTryAgain}
+                disabled={wrongCount === 0 && !hasAnyWrongMark(partMarks) && !reportNote.trim()}
+                title={
+                  wrongCount === 0
+                    ? 'Mark at least one ✗ (or write a note) before re-scanning'
+                    : 'Re-scan focusing on marked-wrong parts'
+                }
+              >
+                {wrongCount > 0 ? 'Fix marked parts' : 'Mark ✗ then fix'}
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={requestTryAgain}>
+                Retry all
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="row-actions">
           <button type="button" className="btn btn-secondary" onClick={props.onBack}>
             Cancel
@@ -2721,42 +2588,167 @@ function PurchaseFormScreen(props: {
           </button>
         </div>
 
-        {(props.receiptBlob || props.receiptPreviewUrl) && (
-          <div className="card settings-card debug-report-card">
-            <strong>Still wrong after a retry?</strong>
-            <p className="muted" style={{ margin: '6px 0 10px' }}>
-              Report this scan so the coding agent can see the receipt photo, OCR text, and what each
-              AI produced.
-            </p>
-            {props.onTryAgain && (
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ width: '100%', marginBottom: 12 }}
-                onClick={requestTryAgain}
-              >
-                {wrongCount > 0
-                  ? `Fix ${wrongCount} marked part${wrongCount === 1 ? '' : 's'}`
-                  : 'Retry scan (or mark ✗ above first)'}
-              </button>
-            )}
-            <div className="field">
-              <label htmlFor="debugNote">What went wrong? (optional note)</label>
-              <textarea
-                id="debugNote"
-                value={reportNote}
-                onChange={(e) => setReportNote(e.target.value)}
-                placeholder="e.g. Missed the $26.75 filter, shipping should be $9.95…"
-              />
-            </div>
+        {/* —— AI / scan details last (collapsed) —— */}
+        {(hasScanMeta || props.receiptBlob || props.receiptPreviewUrl) && (
+          <div className="card settings-card scan-details-card">
             <button
               type="button"
-              className="btn btn-secondary"
-              disabled={reporting}
-              onClick={() => void handleReportBadScan()}
+              className="agent-report-toggle"
+              onClick={() => setShowScanDetails((v) => !v)}
             >
-              {reporting ? 'Reporting…' : 'Report bad scan for debugging'}
+              {showScanDetails ? '▼' : '▶'} Scan details &amp; AI info
             </button>
+            {showScanDetails && (
+              <div className="scan-details-body">
+                {(form.activeAiLabel || form.aisUsed.length > 0 || form.fieldSources?.primary) && (
+                  <div className="answer-credit-card answer-credit-card-nested">
+                    <div className="answer-credit-head">
+                      <span className="answer-credit-kicker">Who answered this scan</span>
+                      {form.fieldSources?.primary ? (
+                        <div className="answer-credit-primary">
+                          <span className="answer-credit-emoji">
+                            {getAi(form.fieldSources.primary).emoji}
+                          </span>
+                          <div>
+                            <strong>{getAi(form.fieldSources.primary).name}</strong>
+                            <div className="muted" style={{ fontSize: '0.8rem' }}>
+                              Primary credit · {getAi(form.fieldSources.primary).role}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <strong>{form.activeAiLabel || 'On-device team'}</strong>
+                      )}
+                    </div>
+                    <p className="muted answer-credit-label">
+                      {form.fieldSources?.answerLabel ||
+                        form.activeAiLabel ||
+                        'Team huddle result'}
+                    </p>
+                    <div className="answer-credit-grid">
+                      {form.fieldSources?.ocr && (
+                        <div className="answer-credit-cell">
+                          <span className="muted">OCR</span>
+                          <FromAiBadge aiId={form.fieldSources.ocr} />
+                        </div>
+                      )}
+                      {form.fieldSources?.total && (
+                        <div className="answer-credit-cell">
+                          <span className="muted">Total</span>
+                          <FromAiBadge aiId={form.fieldSources.total} />
+                        </div>
+                      )}
+                      {form.fieldSources?.vendor && (
+                        <div className="answer-credit-cell">
+                          <span className="muted">Vendor</span>
+                          <FromAiBadge aiId={form.fieldSources.vendor} />
+                        </div>
+                      )}
+                      {form.fieldSources?.category && (
+                        <div className="answer-credit-cell">
+                          <span className="muted">Category</span>
+                          <FromAiBadge aiId={form.fieldSources.category} />
+                        </div>
+                      )}
+                      {form.fieldSources?.shipping && (
+                        <div className="answer-credit-cell">
+                          <span className="muted">Shipping</span>
+                          <FromAiBadge aiId={form.fieldSources.shipping} />
+                        </div>
+                      )}
+                      {form.fieldSources?.fees && (
+                        <div className="answer-credit-cell">
+                          <span className="muted">Fees</span>
+                          <FromAiBadge aiId={form.fieldSources.fees} />
+                        </div>
+                      )}
+                    </div>
+                    {form.aisUsed.length > 0 && (
+                      <ExpandableBlock collapsedMax={52} className="answer-credit-team">
+                        <div className="muted" style={{ fontSize: '0.78rem' }}>
+                          Full team:{' '}
+                          {form.aisUsed
+                            .map((id) => `${getAi(id).emoji} ${getAi(id).name}`)
+                            .join(' · ')}
+                        </div>
+                      </ExpandableBlock>
+                    )}
+                  </div>
+                )}
+
+                {form.aisUsed.length > 0 && (
+                  <div className="field" style={{ marginTop: 12 }}>
+                    <label>Who scanned best? (leaderboard)</label>
+                    <p className="muted" style={{ margin: '0 0 8px' }}>
+                      Optional — pick who got closest for the leaderboard.
+                    </p>
+                    <div className="ai-pick-grid">
+                      {form.aisUsed.map((id) => {
+                        const ai = getAi(id)
+                        const selected = form.bestAiId === id
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            className={`ai-pick ${selected ? 'ai-pick-selected' : ''}`}
+                            style={{ borderColor: selected ? ai.color : undefined }}
+                            onClick={() => update('bestAiId', selected ? null : id)}
+                          >
+                            <span className="ai-pick-emoji">{ai.emoji}</span>
+                            <span className="ai-pick-name">{ai.name}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {form.agentReport && (
+                  <div className="agent-report-card" style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="agent-report-toggle"
+                      onClick={() => setShowAgentReport((v) => !v)}
+                    >
+                      {showAgentReport ? '▼' : '▶'} Full scan report
+                    </button>
+                    {showAgentReport && (
+                      <ExpandableBlock collapsedMax={160} className="agent-report-expand">
+                        <pre className="agent-report-body agent-report-body-in-expand">
+                          {form.agentReport}
+                        </pre>
+                      </ExpandableBlock>
+                    )}
+                  </div>
+                )}
+
+                {(props.receiptBlob || props.receiptPreviewUrl) && (
+                  <div className="debug-report-card" style={{ marginTop: 12 }}>
+                    <strong>Still wrong after a retry?</strong>
+                    <p className="muted" style={{ margin: '6px 0 10px' }}>
+                      Report this scan so a developer can inspect the photo and results.
+                    </p>
+                    <div className="field">
+                      <label htmlFor="debugNote">What went wrong? (optional)</label>
+                      <textarea
+                        id="debugNote"
+                        value={reportNote}
+                        onChange={(e) => setReportNote(e.target.value)}
+                        placeholder="e.g. Missed the $26.75 filter, shipping should be $9.95…"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={reporting}
+                      onClick={() => void handleReportBadScan()}
+                    >
+                      {reporting ? 'Reporting…' : 'Report bad scan for debugging'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </form>
