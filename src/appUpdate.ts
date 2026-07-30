@@ -2,11 +2,14 @@
  * Over-the-air updates for the installed Android app.
  *
  * Default source: GitHub Releases (thelubemaster/Receipt-tracker).
- * Optional: LAN PC (npm run start:android) if you paste that address.
  *
- * No full APK reinstall needed for most web/feature changes.
+ * Two layers (both run from inside the app — no browser reinstall dance):
+ * 1) Web OTA (Capgo) — UI, features, bugfixes via web-update.zip
+ * 2) APK update — launcher icon, plugins, permissions via schoolie.apk
+ *    (downloaded with Android DownloadManager, then system Install prompt)
  */
 import {
+  GITHUB_APK_LATEST,
   GITHUB_PAGES_BASE,
   GITHUB_RELEASES_LATEST,
   GITHUB_REPO_URL,
@@ -14,6 +17,7 @@ import {
 } from './githubConfig'
 
 export { GITHUB_PAGES_BASE } from './githubConfig'
+import { downloadAndInstallApk } from './apkInstaller'
 import { APP_VERSION } from './version'
 import { isNativeCapacitorApp } from './installApp'
 
@@ -29,6 +33,11 @@ export type UpdateManifest = {
   url: string
   notes?: string
   source?: string
+  /** Native shell version name (when APK should be installed) */
+  apkVersion?: string
+  /** Android versionCode of the published APK */
+  apkVersionCode?: number
+  apkUrl?: string
 }
 
 export type UpdateCheckResult =
@@ -36,6 +45,18 @@ export type UpdateCheckResult =
   | { status: 'available'; manifest: UpdateManifest }
   | { status: 'error'; message: string }
   | { status: 'skipped'; message: string }
+
+export type FullUpdateResult = {
+  web: UpdateCheckResult
+  apk:
+    | { status: 'current'; versionCode: number; versionName: string }
+    | { status: 'available'; versionCode: number; versionName: string; url: string }
+    | { status: 'error'; message: string }
+    | { status: 'skipped'; message: string }
+  appliedWeb?: boolean
+  appliedApk?: boolean
+  message: string
+}
 
 function normalizeBase(url: string): string {
   return url.trim().replace(/\/+$/, '')
@@ -192,6 +213,33 @@ async function fetchJson(url: string): Promise<unknown | null> {
   }
 }
 
+function parseManifest(
+  raw: Partial<UpdateManifest>,
+  sourceLabel: string,
+  base?: string,
+): UpdateManifest | null {
+  if (!raw.version || !raw.url) return null
+  const url = base ? resolveManifestUrl(base, String(raw.url)) : String(raw.url)
+  return {
+    version: String(raw.version).replace(/^v/i, ''),
+    url,
+    notes: raw.notes,
+    source: sourceLabel,
+    apkVersion: raw.apkVersion ? String(raw.apkVersion).replace(/^v/i, '') : undefined,
+    apkVersionCode:
+      typeof raw.apkVersionCode === 'number'
+        ? raw.apkVersionCode
+        : raw.apkVersionCode != null
+          ? parseInt(String(raw.apkVersionCode), 10) || undefined
+          : undefined,
+    apkUrl: raw.apkUrl
+      ? base
+        ? resolveManifestUrl(base, String(raw.apkUrl))
+        : String(raw.apkUrl)
+      : undefined,
+  }
+}
+
 /** Try LAN API then static app-update.json on the same base. */
 async function loadManifestFromBase(
   base: string,
@@ -200,27 +248,12 @@ async function loadManifestFromBase(
   const b = normalizeBase(base)
   const api = await fetchJson(`${b}/api/app-update`)
   if (api && typeof api === 'object') {
-    const m = api as Partial<UpdateManifest>
-    if (m.version && m.url) {
-      return {
-        version: String(m.version).replace(/^v/i, ''),
-        url: resolveManifestUrl(b, String(m.url)),
-        notes: m.notes,
-        source: sourceLabel,
-      }
-    }
+    const m = parseManifest(api as Partial<UpdateManifest>, sourceLabel, b)
+    if (m) return m
   }
   const file = await fetchJson(`${b}/${UPDATE_MANIFEST_PATH}`)
   if (file && typeof file === 'object') {
-    const m = file as Partial<UpdateManifest>
-    if (m.version && m.url) {
-      return {
-        version: String(m.version).replace(/^v/i, ''),
-        url: resolveManifestUrl(b, String(m.url)),
-        notes: m.notes,
-        source: sourceLabel,
-      }
-    }
+    return parseManifest(file as Partial<UpdateManifest>, sourceLabel, b)
   }
   return null
 }
@@ -262,11 +295,109 @@ async function loadManifestFromGitHubReleases(): Promise<UpdateManifest | null> 
     assets.find((a) => a.name === 'schoolie-web-update.zip') ||
     assets.find((a) => (a.name || '').endsWith('.zip') && (a.name || '').includes('update'))
   const url = zip?.browser_download_url || GITHUB_WEB_UPDATE_ZIP
+  const apkAsset =
+    assets.find((a) => a.name === 'schoolie.apk') ||
+    assets.find((a) => (a.name || '').endsWith('.apk'))
   return {
     version,
     url,
     notes: rel.body?.slice(0, 200) || `Release from ${GITHUB_REPO_URL}`,
     source: 'github-releases',
+    apkVersion: version,
+    apkUrl: apkAsset?.browser_download_url || GITHUB_APK_LATEST,
+  }
+}
+
+/** Native shell info (versionCode / versionName from the installed APK). */
+export async function getNativeAppInfo(): Promise<{
+  versionName: string
+  versionCode: number
+} | null> {
+  if (!isNativeCapacitorApp()) return null
+  try {
+    const { App } = await import('@capacitor/app')
+    const info = await App.getInfo()
+    const versionCode = parseInt(String(info.build || '0'), 10) || 0
+    return {
+      versionName: info.version || '0',
+      versionCode,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Is a published APK newer than the shell this install was built with?
+ * Launcher icon / native plugins only update via APK.
+ */
+export async function checkForApkUpdate(
+  manifest?: UpdateManifest | null,
+): Promise<FullUpdateResult['apk']> {
+  if (!isNativeCapacitorApp()) {
+    return { status: 'skipped', message: 'Not the installed Android app' }
+  }
+  const native = await getNativeAppInfo()
+  if (!native) {
+    return { status: 'error', message: 'Could not read installed app version' }
+  }
+
+  let remoteCode = manifest?.apkVersionCode
+  let remoteName = manifest?.apkVersion || manifest?.version
+  let apkUrl = manifest?.apkUrl || GITHUB_APK_LATEST
+
+  // Prefer explicit fields from app-update.json on Releases
+  if (remoteCode == null) {
+    try {
+      const file = await fetchJson(
+        `${GITHUB_REPO_URL}/releases/latest/download/app-update.json`,
+      )
+      if (file && typeof file === 'object') {
+        const m = file as Partial<UpdateManifest>
+        if (typeof m.apkVersionCode === 'number') remoteCode = m.apkVersionCode
+        else if (m.apkVersionCode != null) {
+          remoteCode = parseInt(String(m.apkVersionCode), 10) || undefined
+        }
+        if (m.apkVersion) remoteName = String(m.apkVersion).replace(/^v/i, '')
+        if (m.apkUrl) apkUrl = String(m.apkUrl)
+        if (!remoteName && m.version) remoteName = String(m.version).replace(/^v/i, '')
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Fall back: compare version names if no versionCode published
+  if (remoteCode == null && remoteName) {
+    if (compareVersions(remoteName, native.versionName) > 0) {
+      // Treat as available using a synthetic code so install still runs
+      remoteCode = native.versionCode + 1
+    } else {
+      remoteCode = native.versionCode
+    }
+  }
+
+  if (remoteCode == null) {
+    return {
+      status: 'current',
+      versionCode: native.versionCode,
+      versionName: native.versionName,
+    }
+  }
+
+  if (remoteCode > native.versionCode) {
+    return {
+      status: 'available',
+      versionCode: remoteCode,
+      versionName: remoteName || String(remoteCode),
+      url: apkUrl,
+    }
+  }
+
+  return {
+    status: 'current',
+    versionCode: native.versionCode,
+    versionName: native.versionName,
   }
 }
 
@@ -395,9 +526,104 @@ export async function notifyNativeAppReady(): Promise<void> {
 }
 
 /**
+ * One-shot update from inside the app:
+ * 1) Web OTA if a newer web-update.zip exists
+ * 2) APK download+install if native versionCode is behind (icon, plugins, …)
+ */
+export async function runInAppUpdate(
+  onStatus?: (msg: string) => void,
+): Promise<FullUpdateResult> {
+  const web = await checkForAppBundleUpdate()
+  let appliedWeb = false
+  let appliedApk = false
+  const parts: string[] = []
+
+  let manifest: UpdateManifest | null =
+    web.status === 'available' ? web.manifest : web.status === 'current' ? null : null
+
+  // Still load manifest metadata for APK fields when web is current
+  if (!manifest || manifest.apkVersionCode == null) {
+    try {
+      const fromGh = await loadManifestFromGitHubReleases()
+      if (fromGh) {
+        manifest = manifest
+          ? {
+              ...manifest,
+              apkVersion: manifest.apkVersion || fromGh.apkVersion,
+              apkVersionCode: manifest.apkVersionCode ?? fromGh.apkVersionCode,
+              apkUrl: manifest.apkUrl || fromGh.apkUrl,
+            }
+          : fromGh
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const file = await fetchJson(
+        `${GITHUB_REPO_URL}/releases/latest/download/app-update.json`,
+      )
+      if (file && typeof file === 'object') {
+        const m = parseManifest(file as Partial<UpdateManifest>, 'github-asset')
+        if (m) {
+          manifest = manifest
+            ? {
+                ...manifest,
+                apkVersion: m.apkVersion || manifest.apkVersion,
+                apkVersionCode: m.apkVersionCode ?? manifest.apkVersionCode,
+                apkUrl: m.apkUrl || manifest.apkUrl,
+              }
+            : m
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (web.status === 'available') {
+    onStatus?.(`Updating app content to v${web.manifest.version}…`)
+    const applied = await applyAppBundleUpdate(web.manifest, onStatus)
+    appliedWeb = applied.ok
+    parts.push(
+      applied.ok
+        ? `Content updated to v${web.manifest.version}`
+        : `Content update failed: ${applied.message}`,
+    )
+  } else if (web.status === 'current') {
+    parts.push(`Content up to date (v${web.version})`)
+  } else if (web.status === 'error') {
+    parts.push(web.message)
+  }
+
+  const apk = await checkForApkUpdate(manifest)
+  if (apk.status === 'available') {
+    onStatus?.(
+      `Installing full app v${apk.versionName} (home screen icon & native fixes)…`,
+    )
+    const r = await downloadAndInstallApk(apk.url, onStatus)
+    appliedApk = r.ok
+    parts.push(
+      r.ok
+        ? 'Full app download started — tap Install when Android asks'
+        : `Full app update failed: ${r.message}`,
+    )
+  } else if (apk.status === 'current') {
+    parts.push(`Native shell v${apk.versionName} (${apk.versionCode})`)
+  }
+
+  return {
+    web,
+    apk,
+    appliedWeb,
+    appliedApk,
+    message: parts.join(' · ') || 'No updates found',
+  }
+}
+
+/**
  * Silent update on app open:
- * - force GitHub as source (forget old LAN PC addresses)
- * - if a newer web-update.zip is on Releases, download & apply
+ * - web OTA when available
+ * - if native APK is behind, start in-app APK download (user taps Install once)
  */
 export async function autoUpdateIfAvailable(
   onStatus?: (msg: string) => void,
@@ -409,8 +635,5 @@ export async function autoUpdateIfAvailable(
     /* ignore */
   }
   if (!(await getAutoUpdate())) return
-  const check = await checkForAppBundleUpdate()
-  if (check.status !== 'available') return
-  onStatus?.(`Updating to v${check.manifest.version}…`)
-  await applyAppBundleUpdate(check.manifest, onStatus)
+  await runInAppUpdate(onStatus)
 }

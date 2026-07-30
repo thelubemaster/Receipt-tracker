@@ -94,8 +94,7 @@ import {
   shouldShowAndroidInstaller,
 } from './AndroidInstaller'
 import {
-  applyAppBundleUpdate,
-  checkForAppBundleUpdate,
+  runInAppUpdate,
   setAutoUpdate,
   useGitHubUpdates,
 } from './appUpdate'
@@ -3086,19 +3085,8 @@ function SettingsScreen(props: {
     try {
       await useGitHubUpdates()
       await setAutoUpdate(true)
-      const result = await checkForAppBundleUpdate()
-      if (result.status === 'current') {
-        setOtaStatus(`Up to date (v${result.version}). Updates install automatically.`)
-      } else if (result.status === 'available') {
-        setOtaStatus(`Downloading v${result.manifest.version}…`)
-        const applied = await applyAppBundleUpdate(result.manifest, (m) => setOtaStatus(m))
-        if (!applied.ok) setOtaStatus(applied.message)
-        else setOtaStatus(`Updated to v${result.manifest.version}. Restarting…`)
-      } else if (result.status === 'skipped') {
-        setOtaStatus(result.message)
-      } else {
-        setOtaStatus(result.message)
-      }
+      const result = await runInAppUpdate((m) => setOtaStatus(m))
+      setOtaStatus(result.message)
     } finally {
       setOtaBusy(false)
     }
@@ -3134,7 +3122,8 @@ function SettingsScreen(props: {
           <div className="card settings-card">
             <strong>Updates</strong>
             <p className="muted" style={{ margin: '6px 0 12px' }}>
-              Auto-updates from GitHub when you open the app.
+              Updates install inside the app when you open it. Features use a quick download;
+              icon/native fixes download the full app and ask you to tap Install once.
             </p>
             <button
               type="button"
@@ -3143,7 +3132,7 @@ function SettingsScreen(props: {
               disabled={otaBusy}
               onClick={() => void handleOtaCheck()}
             >
-              {otaBusy ? 'Checking…' : 'Check now'}
+              {otaBusy ? 'Updating…' : 'Check for updates'}
             </button>
             {otaStatus && (
               <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.88rem' }}>

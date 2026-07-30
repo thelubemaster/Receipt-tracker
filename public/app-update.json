@@ -1,5 +1,8 @@
 {
-  "version": "1.24.6",
+  "version": "1.24.7",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Automatic updates from GitHub Releases"
+  "notes": "In-app updates: web OTA + full APK when the home-screen icon or native shell needs a bump",
+  "apkVersion": "1.24.7",
+  "apkVersionCode": 7,
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
 }

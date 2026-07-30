@@ -30,6 +30,15 @@ fi
 
 echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
+# Keep Android versionName / versionCode aligned with package.json + app-update.json
+PKG_VER="$(node -p "require('./package.json').version")"
+APK_CODE="$(node -p "const fs=require('fs');const j=JSON.parse(fs.readFileSync('public/app-update.json','utf8'));j.apkVersionCode||0")"
+if [[ -n "$PKG_VER" && "$APK_CODE" != "0" ]]; then
+  echo "Syncing Android versionName=$PKG_VER versionCode=$APK_CODE"
+  sed -i "s/versionCode [0-9]*/versionCode $APK_CODE/" android/app/build.gradle
+  sed -i "s/versionName \"[^\"]*\"/versionName \"$PKG_VER\"/" android/app/build.gradle
+fi
+
 echo "Building web assets…"
 npm run build
 

@@ -5,7 +5,10 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.6'
+export const APP_VERSION = '1.24.7'
+
+/** Android versionCode shipped with this release (launcher / native shell). */
+export const APK_VERSION_CODE = 7
 
 export type ChangelogEntry = {
   version: string
@@ -16,6 +19,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.7',
+    date: '2026-07-30',
+    title: 'Update everything from inside the app',
+    changes: [
+      'Check for updates installs web fixes and full app (icon) updates in-app',
+      'No browser reinstall needed — tap Install when Android asks for the full app',
+      'New folder + receipt home-screen logo (replaces school bus)',
+    ],
+  },
   {
     version: '1.24.6',
     date: '2026-07-30',
