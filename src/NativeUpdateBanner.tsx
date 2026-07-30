@@ -1,9 +1,10 @@
 /**
- * Prompts to update the *native* shell (home-screen icon).
+ * Home-screen logo update card — works after web OTA without reinstalling first.
+ * Opens system download/Install immediately (no hanging native wait).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { checkForApkUpdate, getNativeAppInfo } from './appUpdate'
-import { downloadAndInstallApk } from './apkInstaller'
+import { downloadAndInstallApk, openSystemApkUrl } from './apkInstaller'
 import { githubApkForTag } from './githubConfig'
 import { isNativeCapacitorApp } from './installApp'
 import { APK_RELEASE_TAG, APK_VERSION_CODE, APP_VERSION } from './version'
@@ -42,17 +43,22 @@ export function NativeUpdateBanner() {
           versionName: APP_VERSION,
           url: githubApkForTag(APK_RELEASE_TAG),
         })
+      } else if (!native) {
+        // Still offer — better than silent fail
+        setApk({
+          versionCode: APK_VERSION_CODE,
+          versionName: APP_VERSION,
+          url: githubApkForTag(APK_RELEASE_TAG),
+        })
       } else {
         setApk(null)
       }
-    } catch (e) {
-      // Still offer update if native probe fails
+    } catch {
       setApk({
         versionCode: APK_VERSION_CODE,
         versionName: APP_VERSION,
         url: githubApkForTag(APK_RELEASE_TAG),
       })
-      setStatus(e instanceof Error ? e.message : 'Could not read app version')
     }
   }, [])
 
@@ -68,20 +74,26 @@ export function NativeUpdateBanner() {
   async function startUpdate() {
     const url = apk?.url || githubApkForTag(APK_RELEASE_TAG)
     setBusy(true)
-    setStatus('Starting…')
+    setStatus('Opening download…')
     try {
+      // Fire system open immediately so something visible happens in <1s
+      openSystemApkUrl(url)
       const result = await downloadAndInstallApk(url, (m) => setStatus(m))
       if (result.ok) {
         setStatus(
-          (prev) =>
-            prev ||
-            'When Android shows Install, tap it. Then open Cost Tracker from the home screen.',
+          'If Install did not appear: swipe down notifications → tap the APK download → Install. Then open Cost Tracker from the home screen.',
         )
       } else {
         setStatus(result.message)
       }
     } catch (e) {
-      setStatus(e instanceof Error ? e.message : 'Update failed')
+      // Still try system open
+      openSystemApkUrl(url)
+      setStatus(
+        e instanceof Error
+          ? e.message
+          : 'Tap your notification shade for the download, then Install.',
+      )
     } finally {
       setBusy(false)
     }
@@ -102,11 +114,13 @@ export function NativeUpdateBanner() {
         <div className="native-update-copy">
           <strong>Update home-screen logo</strong>
           <p className="muted" style={{ margin: '4px 0 0' }}>
-            Tap once. The app downloads the package and opens Install. Allow “Install unknown apps”
-            for Cost Tracker if Android asks.
+            Tap the button. Android will download the package (~15&nbsp;MB) and ask to{' '}
+            <em>Install</em>. That is required for the home-screen icon — there is no way around
+            it on Android.
           </p>
           <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.8rem' }}>
-            Your package: {nativeLabel || '…'} → need build {apk.versionCode}
+            {nativeLabel ? `Installed: ${nativeLabel} → ` : ''}
+            need build {apk.versionCode}
           </p>
         </div>
       </div>
@@ -117,8 +131,30 @@ export function NativeUpdateBanner() {
         disabled={busy}
         onClick={() => void startUpdate()}
       >
-        {busy ? 'Working…' : 'Update home-screen logo now'}
+        {busy ? 'Opening download…' : 'Update home-screen logo now'}
       </button>
+      {/* Visible link so user can also open download if WebView blocks intents */}
+      <a
+        className="btn btn-secondary"
+        style={{
+          width: '100%',
+          marginTop: 10,
+          minHeight: 44,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          textDecoration: 'none',
+        }}
+        href={apk.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={() => {
+          openSystemApkUrl(apk.url)
+          setStatus('Opened download link. Tap Install when Android asks.')
+        }}
+      >
+        Open download link
+      </a>
       {status && (
         <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.88rem' }} role="status">
           {status}

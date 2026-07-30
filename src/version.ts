@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.2'
+export const APP_VERSION = '1.25.3'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -14,7 +14,7 @@ export const APP_VERSION = '1.25.2'
  */
 export const APK_VERSION_CODE = 26
 
-/** GitHub release tag that always hosts schoolie.apk for this shell. */
+/** GitHub release tag that hosts schoolie.apk (keep in sync when shipping a new shell). */
 export const APK_RELEASE_TAG = 'v1.25.2'
 
 export type ChangelogEntry = {
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.3',
+    date: '2026-07-30',
+    title: 'In-app installer no longer freezes',
+    changes: [
+      'Update home-screen logo opens the system download immediately (no endless spinner)',
+      'Does not wait on broken native DownloadManager bridge',
+      'Extra “Open download link” button if the first tap is blocked',
+    ],
+  },
   {
     version: '1.25.2',
     date: '2026-07-30',

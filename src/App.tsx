@@ -3101,9 +3101,9 @@ function SettingsScreen(props: {
                 web: { status: 'error', message: 'Update check timed out' },
                 apk: { status: 'error', message: 'timed out' },
                 message:
-                  'Still working in the background, or timed out. Use “Update home-screen logo” below, or try again on Wi‑Fi.',
+                  'Timed out. Use “Update home-screen logo” on the home screen (opens download immediately).',
               }),
-            90_000,
+            25_000,
           ),
         ),
       ])

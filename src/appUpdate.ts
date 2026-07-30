@@ -583,6 +583,25 @@ export async function runInAppUpdate(
     }
   }
 
+  // Prefer shell/logo update first so “Updating…” is never stuck on Capgo
+  const apk = await checkForApkUpdate(manifest)
+  if (apk.status === 'available') {
+    onStatus?.(`Opening home-screen logo update (v${apk.versionName})…`)
+    try {
+      const r = await downloadAndInstallApk(apk.url, onStatus)
+      appliedApk = r.ok
+      parts.push(
+        r.ok
+          ? 'Logo package download opened — tap Install, then open the app again'
+          : `Logo package update failed: ${r.message}`,
+      )
+    } catch (e) {
+      parts.push(e instanceof Error ? e.message : 'Logo package update failed')
+    }
+  } else if (apk.status === 'current') {
+    parts.push(`Native shell v${apk.versionName} (${apk.versionCode})`)
+  }
+
   if (web.status === 'available') {
     onStatus?.(`Updating app content to v${web.manifest.version}…`)
     try {
@@ -590,8 +609,12 @@ export async function runInAppUpdate(
         applyAppBundleUpdate(web.manifest, onStatus),
         new Promise<{ ok: false; message: string }>((resolve) =>
           setTimeout(
-            () => resolve({ ok: false, message: 'Content update timed out (network)' }),
-            60_000,
+            () =>
+              resolve({
+                ok: false,
+                message: 'Content update timed out — try again on Wi‑Fi',
+              }),
+            45_000,
           ),
         ),
       ])
@@ -599,7 +622,7 @@ export async function runInAppUpdate(
       parts.push(
         applied.ok
           ? `Content updated to v${web.manifest.version}`
-          : `Content update failed: ${applied.message}`,
+          : `Content update: ${applied.message}`,
       )
     } catch (e) {
       parts.push(e instanceof Error ? e.message : 'Content update failed')
@@ -608,26 +631,6 @@ export async function runInAppUpdate(
     parts.push(`Content up to date (v${web.version})`)
   } else if (web.status === 'error') {
     parts.push(web.message)
-  }
-
-  const apk = await checkForApkUpdate(manifest)
-  if (apk.status === 'available') {
-    onStatus?.(
-      `Updating full app v${apk.versionName} (home-screen logo)…`,
-    )
-    try {
-      const r = await downloadAndInstallApk(apk.url, onStatus)
-      appliedApk = r.ok
-      parts.push(
-        r.ok
-          ? 'Full app download started — tap Install when Android asks'
-          : `Full app update failed: ${r.message}`,
-      )
-    } catch (e) {
-      parts.push(e instanceof Error ? e.message : 'Full app update failed')
-    }
-  } else if (apk.status === 'current') {
-    parts.push(`Native shell v${apk.versionName} (${apk.versionCode})`)
   }
 
   return {

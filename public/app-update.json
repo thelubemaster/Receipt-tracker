@@ -1,7 +1,7 @@
 {
-  "version": "1.25.2",
+  "version": "1.25.3",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Fix stuck Updating\u2026 \u2014 APK download with progress + Install",
+  "notes": "In-app installer no longer freezes \u2014 opens system download immediately",
   "apkVersion": "1.25.2",
   "apkVersionCode": 26,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.2/schoolie.apk"
