@@ -5,17 +5,17 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.28.0'
+export const APP_VERSION = '1.28.1'
 
 /**
  * Android versionCode for the launcher/shell APK.
  * Bump this whenever the home-screen icon or native plugins change.
  * In-app “Update home-screen logo” compares this to the installed package.
  */
-export const APK_VERSION_CODE = 27
+export const APK_VERSION_CODE = 28
 
 /** GitHub release tag that hosts schoolie.apk (keep in sync when shipping a new shell). */
-export const APK_RELEASE_TAG = 'v1.25.4'
+export const APK_RELEASE_TAG = 'v1.28.1'
 
 export type ChangelogEntry = {
   version: string
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.28.1',
+    date: '2026-07-30',
+    title: 'New cost-peak logo',
+    changes: [
+      'Redesigned mark: ascending bars + rising trajectory into a hard peak',
+      'In-app logo and PWA icons refreshed',
+      'Home-screen launcher icon updates with the new package build',
+    ],
+  },
   {
     version: '1.28.0',
     date: '2026-07-30',
