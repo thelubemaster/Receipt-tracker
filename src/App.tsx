@@ -1104,9 +1104,13 @@ function ProjectEditScreen(props: {
   const [description, setDescription] = useState('')
   const [coverId, setCoverId] = useState<string | null>(null)
   const [coverPreview, setCoverPreview] = useState<string | null>(null)
+  const [pickingCover, setPickingCover] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
+  /** Only revoke blob: previews we created — never on StrictMode effect re-run of the active URL */
+  const coverBlobRef = useRef<string | null>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!props.projectId) return
@@ -1122,7 +1126,11 @@ function ProjectEditScreen(props: {
       setCoverId(p.coverImageId)
       if (p.coverImageId) {
         const url = await getImageUrl(p.coverImageId)
-        if (url && !cancelled) setCoverPreview(url)
+        if (url && !cancelled) {
+          // Stored images: data: preferred; don't track for revoke unless blob:
+          if (url.startsWith('blob:')) coverBlobRef.current = url
+          setCoverPreview(url)
+        }
       }
     })()
     return () => {
@@ -1130,23 +1138,56 @@ function ProjectEditScreen(props: {
     }
   }, [props.projectId])
 
+  // Revoke only on leave this screen
   useEffect(() => {
     return () => {
-      if (coverPreview?.startsWith('blob:')) URL.revokeObjectURL(coverPreview)
+      revokePreviewUrl(coverBlobRef.current)
+      coverBlobRef.current = null
     }
-  }, [coverPreview])
+  }, [])
 
-  async function onPickCover(file: File | null) {
-    if (!file) return
-    try {
-      const normalized = await normalizePickedImage(file)
-      const id = await saveImage(normalized.blob)
-      setCoverId(id)
-      revokePreviewUrl(coverPreview)
-      setCoverPreview(normalized.previewUrl)
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : 'Could not open that photo.')
+  function setCoverPreviewSafe(url: string | null) {
+    if (coverBlobRef.current && coverBlobRef.current !== url) {
+      revokePreviewUrl(coverBlobRef.current)
+      coverBlobRef.current = null
     }
+    if (url?.startsWith('blob:')) coverBlobRef.current = url
+    setCoverPreview(url)
+  }
+
+  async function onPickCover(file: File | null, inputEl?: HTMLInputElement | null) {
+    // Always clear so picking the same photo again still fires change
+    if (inputEl) inputEl.value = ''
+    if (!file) return
+    setPickingCover(true)
+    setLoadError(null)
+    try {
+      const normalized = await normalizePickedImage(file, {
+        name: file instanceof File ? file.name : 'cover.jpg',
+      })
+      const id = await saveImage(normalized.blob)
+      // Prefer data: preview (survives re-renders; no revoke issues)
+      const preview = normalized.dataUrl || normalized.previewUrl
+      if (normalized.dataUrl && normalized.previewUrl.startsWith('blob:')) {
+        revokePreviewUrl(normalized.previewUrl)
+      }
+      setCoverId(id)
+      setCoverPreviewSafe(preview)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not open that photo.'
+      setLoadError(
+        msg.includes('receipt')
+          ? 'Could not open that photo. Try Take photo or pick a JPEG from Gallery.'
+          : msg,
+      )
+    } finally {
+      setPickingCover(false)
+    }
+  }
+
+  function clearCover() {
+    setCoverId(null)
+    setCoverPreviewSafe(null)
   }
 
   async function save() {
@@ -1169,6 +1210,11 @@ function ProjectEditScreen(props: {
         updatedAt: now,
       }
       await saveProject(project)
+      // Confirm it stuck (localStorage / idb)
+      const check = await getProject(project.id)
+      if (coverId && check && check.coverImageId !== coverId) {
+        throw new Error('Cover photo did not save. Try again.')
+      }
       props.onSaved(project.id)
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not save project')
@@ -1212,24 +1258,66 @@ function ProjectEditScreen(props: {
           </div>
         )}
 
-        <button
-          type="button"
-          className="project-cover-picker"
-          onClick={() => fileRef.current?.click()}
-        >
-          {coverPreview ? (
-            <SafeImage src={coverPreview} alt="Cover" className="project-cover-img" />
-          ) : (
-            <span className="muted">Tap to add a cover photo</span>
+        <div className="field">
+          <label>Cover photo</label>
+          <div className="project-cover-picker" aria-live="polite">
+            {pickingCover ? (
+              <span className="muted">
+                <span className="spinner" style={{ width: 28, height: 28 }} /> Adding photo…
+              </span>
+            ) : coverPreview ? (
+              <SafeImage
+                src={coverPreview}
+                alt="Cover"
+                className="project-cover-img"
+                missingText="Photo failed to show — pick again"
+              />
+            ) : (
+              <span className="muted">No cover yet — add one below</span>
+            )}
+          </div>
+          {/* Labels (not programmatic .click on display:none) — reliable on Android WebView */}
+          <div className="row-actions" style={{ marginTop: 10 }}>
+            <label className="btn btn-primary" style={{ flex: 1, textAlign: 'center' }}>
+              {pickingCover ? '…' : 'Take photo'}
+              <input
+                ref={cameraInputRef}
+                className="hidden-input"
+                type="file"
+                accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                capture="environment"
+                disabled={pickingCover}
+                onChange={(e) =>
+                  void onPickCover(e.target.files?.[0] ?? null, e.currentTarget)
+                }
+              />
+            </label>
+            <label className="btn btn-secondary" style={{ flex: 1, textAlign: 'center' }}>
+              {pickingCover ? '…' : 'Gallery'}
+              <input
+                ref={galleryInputRef}
+                className="hidden-input"
+                type="file"
+                accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                disabled={pickingCover}
+                onChange={(e) =>
+                  void onPickCover(e.target.files?.[0] ?? null, e.currentTarget)
+                }
+              />
+            </label>
+          </div>
+          {coverPreview && (
+            <button
+              type="button"
+              className="version-link"
+              style={{ marginTop: 8 }}
+              disabled={pickingCover}
+              onClick={clearCover}
+            >
+              Remove cover photo
+            </button>
           )}
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
-          hidden
-          onChange={(e) => void onPickCover(e.target.files?.[0] ?? null)}
-        />
+        </div>
 
         <div className="field">
           <label htmlFor="proj-name">What is this project?</label>
@@ -1256,7 +1344,7 @@ function ProjectEditScreen(props: {
           type="button"
           className="btn btn-primary"
           style={{ width: '100%' }}
-          disabled={saving}
+          disabled={saving || pickingCover}
           onClick={() => void save()}
         >
           {saving ? 'Saving…' : isNew ? 'Create project' : 'Save project'}
@@ -1300,25 +1388,42 @@ function HomeScreen(props: {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [regroupBusy, setRegroupBusy] = useState(false)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  const coverBlobRef = useRef<string | null>(null)
 
   useEffect(() => {
-    let revoked: string | null = null
     let cancelled = false
     void (async () => {
       if (!props.project.coverImageId) {
+        if (coverBlobRef.current) {
+          revokePreviewUrl(coverBlobRef.current)
+          coverBlobRef.current = null
+        }
         setCoverUrl(null)
         return
       }
       const url = await getImageUrl(props.project.coverImageId)
-      if (cancelled || !url) return
-      revoked = url.startsWith('blob:') ? url : null
-      setCoverUrl(url)
+      if (cancelled) {
+        if (url?.startsWith('blob:')) revokePreviewUrl(url)
+        return
+      }
+      if (coverBlobRef.current) {
+        revokePreviewUrl(coverBlobRef.current)
+        coverBlobRef.current = null
+      }
+      if (url?.startsWith('blob:')) coverBlobRef.current = url
+      setCoverUrl(url ?? null)
     })()
     return () => {
       cancelled = true
-      if (revoked) URL.revokeObjectURL(revoked)
     }
   }, [props.project.coverImageId])
+
+  useEffect(() => {
+    return () => {
+      revokePreviewUrl(coverBlobRef.current)
+      coverBlobRef.current = null
+    }
+  }, [])
 
   const isOpen = (id: string) => openGroups[id] !== false
 

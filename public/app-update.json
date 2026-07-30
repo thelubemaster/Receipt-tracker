@@ -1,7 +1,7 @@
 {
-  "version": "1.25.8",
+  "version": "1.25.9",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "After scan: receipt data first; AI details collapsed at the bottom",
+  "notes": "Fix project cover photos (Take photo / Gallery on Android)",
   "apkVersion": "1.25.4",
   "apkVersionCode": 27,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.4/schoolie.apk"

@@ -2591,15 +2591,15 @@ code {
   min-height: 160px;
   border-radius: var(--radius);
   border: 1px dashed var(--border-strong);
-  background: rgba(255, 255, 255, 0.03);
-  margin-bottom: 16px;
+  background: var(--bg-elevated);
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
   color: inherit;
-  cursor: pointer;
   padding: 0;
+  gap: 10px;
+  flex-direction: column;
 }
 .project-cover-img {
   width: 100%;

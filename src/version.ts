@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.25.8'
+export const APP_VERSION = '1.25.9'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.25.9',
+    date: '2026-07-30',
+    title: 'Fix project cover photos',
+    changes: [
+      'Cover photo: Take photo / Gallery buttons that work on Android',
+      'Preview no longer goes blank after picking a cover',
+      'Cover is saved with the project and shows on the home list',
+    ],
+  },
   {
     version: '1.25.8',
     date: '2026-07-30',

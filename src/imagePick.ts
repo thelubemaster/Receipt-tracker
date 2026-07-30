@@ -319,7 +319,7 @@ export async function normalizePickedImage(
   const name = opts?.name || (file instanceof File ? file.name : '') || ''
 
   if (!looksLikeImageFile(file, name)) {
-    throw new Error('Please choose a photo of the receipt.')
+    throw new Error('Please choose a photo (JPEG or PNG).')
   }
   if (file.size <= 0) {
     throw new Error(

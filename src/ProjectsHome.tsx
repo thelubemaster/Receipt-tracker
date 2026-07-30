@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { APP_NAME, APP_TAGLINE } from './brand'
 import { getImageUrl, listProjects, listPurchases } from './db'
+import { revokePreviewUrl } from './imagePick'
 import { SafeImage } from './SafeImage'
 import { formatMoney } from './money'
 import { BrandLockup, LogoMark } from './Logo'
@@ -15,36 +16,45 @@ export function ProjectsHome(props: {
   onSettings: () => void
 }) {
   const [rows, setRows] = useState<Row[] | null>(null)
+  /** Blob URLs we created — revoke only on unmount (not StrictMode mid-load). */
+  const blobUrlsRef = useRef<string[]>([])
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       const projects = await listProjects()
       const enriched: Row[] = []
+      const blobs: string[] = []
       for (const p of projects) {
         const purchases = await listPurchases(p.id)
         const total = purchases.reduce((s, x) => s + (Number(x.amount) || 0), 0)
         let coverUrl: string | null = null
         if (p.coverImageId) {
           coverUrl = (await getImageUrl(p.coverImageId)) ?? null
+          if (coverUrl?.startsWith('blob:')) blobs.push(coverUrl)
         }
         enriched.push({ ...p, total, count: purchases.length, coverUrl })
       }
-      if (!cancelled) setRows(enriched)
+      if (cancelled) {
+        for (const u of blobs) revokePreviewUrl(u)
+        return
+      }
+      // Drop previous list blobs if reloading
+      for (const u of blobUrlsRef.current) revokePreviewUrl(u)
+      blobUrlsRef.current = blobs
+      setRows(enriched)
     })()
     return () => {
       cancelled = true
     }
   }, [])
 
-  // Revoke blob: URLs only (data: URLs must not be revoked)
   useEffect(() => {
     return () => {
-      for (const r of rows || []) {
-        if (r.coverUrl?.startsWith('blob:')) URL.revokeObjectURL(r.coverUrl)
-      }
+      for (const u of blobUrlsRef.current) revokePreviewUrl(u)
+      blobUrlsRef.current = []
     }
-  }, [rows])
+  }, [])
 
   return (
     <>
