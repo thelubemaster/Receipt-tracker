@@ -1,7 +1,7 @@
 {
-  "version": "1.27.0",
+  "version": "1.28.0",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Better receipt scanning: proper image prep, Forge OCR, cleaner totals",
+  "notes": "Upload PDF invoices via Files — digital PDFs parse text, scans use OCR",
   "apkVersion": "1.25.4",
   "apkVersionCode": 27,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.25.4/schoolie.apk"

@@ -49,6 +49,7 @@ import {
 } from './db'
 import { APP_NAME_SHORT } from './brand'
 import { normalizePickedImage, revokePreviewUrl } from './imagePick'
+import { normalizePickedDocument } from './documentPick'
 import { ProjectsHome } from './ProjectsHome'
 import { SafeImage } from './SafeImage'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
@@ -109,7 +110,7 @@ import {
 } from './themes'
 import { ThemePicker } from './ThemePicker'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
-import { scanReceipt, type ScanResult } from './receiptAi'
+import { scanInvoiceFromText, scanReceipt, type ScanResult } from './receiptAi'
 import { regroupAllPurchases } from './regroup'
 import { categoryBreakdown, groupPurchasesByCategory, totalSpent } from './stats'
 import type {
@@ -1779,7 +1780,7 @@ function ScanScreen(props: {
   }, [])
 
   async function handleFile(file: File | null, inputEl?: HTMLInputElement | null) {
-    // Always clear so the same photo can be re-picked later if needed
+    // Always clear so the same file can be re-picked later if needed
     if (inputEl) inputEl.value = ''
     if (!file) return
     // Already opening or scanning — ignore second pick
@@ -1790,33 +1791,59 @@ function ScanScreen(props: {
     setBusy(true)
     setWorkPhase('opening')
     setProgress(0)
-    // Drop previous held photo immediately so we never show the pick screen again
+    // Drop previous held file immediately so we never show the pick screen again
     setHeldBlob(null)
     setHeldPreview(null)
 
     try {
-      // Android "Recent" often has empty MIME / HEIC / partial streams — normalize first
-      const normalized = await normalizePickedImage(file)
-      setHeldBlob(normalized.blob)
-      setHeldPreview(normalized.previewUrl)
+      // Photos, gallery, or Files (PDF invoices / images from Downloads)
+      const doc = await normalizePickedDocument(file, {
+        name: file instanceof File ? file.name : undefined,
+      })
+      setHeldBlob(doc.blob)
+      setHeldPreview(doc.previewUrl)
       setWorkPhase('scanning')
       setProgress(0.02)
 
-      const board = normalizeLeaderboard(await getLeaderboard())
-      const suggestion = await scanReceipt(normalized.blob, {
-        maxPower: props.maxPowerMode,
-        disabledAis: props.disabledAis,
-        reliability: reliabilityWeights(board),
-        onProgress: (p) => {
-          setProgress(p.progress)
-        },
-      })
-      props.onParsed(suggestion, normalized.blob, normalized.previewUrl)
+      let suggestion: ScanResult
+      if (doc.kind === 'pdf-text' && doc.embeddedText) {
+        // Digital PDF: parse embedded text (accurate for email/accounting invoices)
+        suggestion = await scanInvoiceFromText(doc.embeddedText, {
+          fileName: doc.fileName,
+          onProgress: (p) => {
+            setProgress(p.progress)
+          },
+        })
+      } else {
+        // Photo or scan-style PDF page image(s) → OCR team
+        const board = normalizeLeaderboard(await getLeaderboard())
+        suggestion = await scanReceipt(doc.blob, {
+          maxPower: props.maxPowerMode,
+          disabledAis: props.disabledAis,
+          reliability: reliabilityWeights(board),
+          onProgress: (p) => {
+            setProgress(p.progress)
+          },
+        })
+        if (doc.kind === 'pdf-scan' && doc.pageCount && doc.pageCount > 1) {
+          suggestion = {
+            ...suggestion,
+            activeAiLabel: `${suggestion.activeAiLabel || 'Scan'} · PDF ${doc.pageCount} pages`,
+            agentReport: [
+              suggestion.agentReport,
+              `Source: PDF (${doc.pageCount} pages rendered for OCR).`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          }
+        }
+      }
+      props.onParsed(suggestion, doc.blob, doc.previewUrl)
     } catch (e) {
       const msg =
         e instanceof Error
           ? e.message
-          : 'Could not open that photo. Try another album or Take photo.'
+          : 'Could not open that file. Try a photo, gallery image, or PDF invoice.'
       setScanError(msg)
       props.onError(msg)
     } finally {
@@ -1873,14 +1900,14 @@ function ScanScreen(props: {
           <div className="spinner" />
           <div className="status-title">
             {workPhase === 'opening'
-              ? 'Opening photo…'
+              ? 'Opening file…'
               : progress < 0.95
                 ? 'Reading your receipt…'
                 : 'Almost done…'}
           </div>
           <p className="muted" style={{ margin: '6px 0 0', textAlign: 'center' }}>
             {workPhase === 'opening'
-              ? 'Please wait — don’t pick another photo'
+              ? 'Please wait — don’t pick another file'
               : 'Extracting store, total, date, and line items'}
           </p>
           {workPhase === 'scanning' && (
@@ -1904,12 +1931,12 @@ function ScanScreen(props: {
             {scanError}
           </div>
           <strong className="scan-retry-title">
-            {heldBlob ? "Scan didn't work" : "Couldn't open that photo"}
+            {heldBlob ? "Scan didn't work" : "Couldn't open that file"}
           </strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
             {heldBlob
-              ? 'Try the same photo again, take a clearer shot, or type the purchase in.'
-              : 'Pick another photo, or take a new one with the camera.'}
+              ? 'Try again, pick a clearer photo, or upload a PDF invoice.'
+              : 'Pick a photo, gallery image, or PDF invoice from Files.'}
           </p>
           <div className="row-actions stack" style={{ marginTop: 14 }}>
             {heldBlob && (
@@ -1952,6 +1979,17 @@ function ScanScreen(props: {
                 }}
               />
             </label>
+            <label className="btn btn-secondary">
+              Files
+              <input
+                className="hidden-input"
+                type="file"
+                accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                onChange={(e) => {
+                  void handleFile(e.target.files?.[0] ?? null, e.currentTarget)
+                }}
+              />
+            </label>
             {heldBlob && (
               <button
                 type="button"
@@ -1974,7 +2012,7 @@ function ScanScreen(props: {
           <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
           <strong className="scan-retry-title">Ready to scan again</strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
-            Re-read this photo, or pick a clearer shot.
+            Re-read this file, or pick a clearer photo / PDF.
           </p>
           <div className="row-actions stack" style={{ marginTop: 14 }}>
             <button
@@ -1996,6 +2034,17 @@ function ScanScreen(props: {
                 }}
               />
             </label>
+            <label className="btn btn-secondary">
+              Files
+              <input
+                className="hidden-input"
+                type="file"
+                accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp"
+                onChange={(e) => {
+                  void handleFile(e.target.files?.[0] ?? null, e.currentTarget)
+                }}
+              />
+            </label>
             <button type="button" className="btn btn-secondary" onClick={clearHeldPhoto}>
               Cancel
             </button>
@@ -2004,11 +2053,12 @@ function ScanScreen(props: {
       ) : (
         <div className="scan-drop">
           <div className="scan-icon">📷</div>
-          <strong>Photograph or choose a receipt</strong>
+          <strong>Photo, gallery, or invoice file</strong>
           <p className="muted" style={{ marginTop: 8 }}>
-            Get the full receipt in frame — totals and store name at the bottom count most.
+            Take a picture, pick from Gallery, or upload a PDF invoice from Files /
+            Downloads / email.
           </p>
-          <div className="row-actions" style={{ marginTop: 16 }}>
+          <div className="row-actions" style={{ marginTop: 16, flexWrap: 'wrap' }}>
             <label className={`btn btn-primary${working ? ' btn-disabled' : ''}`}>
               Take photo
               <input
@@ -2026,6 +2076,16 @@ function ScanScreen(props: {
                 className="hidden-input"
                 type="file"
                 accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                disabled={working}
+                onChange={(e) => void handleFile(e.target.files?.[0] ?? null, e.currentTarget)}
+              />
+            </label>
+            <label className={`btn btn-secondary${working ? ' btn-disabled' : ''}`}>
+              Files
+              <input
+                className="hidden-input"
+                type="file"
+                accept="image/*,application/pdf,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 disabled={working}
                 onChange={(e) => void handleFile(e.target.files?.[0] ?? null, e.currentTarget)}
               />

@@ -1,11 +1,13 @@
 import type { AiId } from './aiRoster'
 import type { RejectedScanSnapshot } from './agents/retryFeedback'
 import {
+  parseReceiptText,
   runOnDeviceReceiptAgent,
   type AgentProgress,
   type LocalAgentResult,
 } from './localAgent'
 import type { ReceiptSuggestion } from './types'
+import { getReceiptMemory } from './db'
 
 export type ScanResult = ReceiptSuggestion & {
   source: 'on-device'
@@ -94,5 +96,77 @@ export async function scanReceipt(
     activeAiLabel:
       local.activeAiLabel ??
       (rejected ? `Retry #${rejected.attempt}` : 'Max-power free team'),
+  }
+}
+
+/**
+ * Parse a digital invoice from embedded PDF text (no camera OCR).
+ * Much more accurate for email / accounting PDFs than photo OCR.
+ */
+export async function scanInvoiceFromText(
+  rawText: string,
+  options: {
+    onProgress?: ScanOptions['onProgress']
+    fileName?: string
+  } = {},
+): Promise<ScanResult> {
+  const { onProgress, fileName } = options
+  onProgress?.({
+    stage: 'parse',
+    progress: 0.2,
+    message: fileName
+      ? `Reading invoice text from ${fileName}…`
+      : 'Reading invoice text from PDF…',
+    engine: 'on-device',
+    aiId: 'ledger',
+    aiName: 'Ledger',
+  })
+
+  let memory = null
+  try {
+    memory = await getReceiptMemory()
+  } catch {
+    memory = null
+  }
+
+  onProgress?.({
+    stage: 'parse',
+    progress: 0.55,
+    message: 'Extracting store, totals, and line items…',
+    engine: 'on-device',
+    aiId: 'cashier',
+    aiName: 'Cashier',
+  })
+
+  const local: LocalAgentResult = parseReceiptText(rawText, memory)
+  local.activeAiLabel = fileName
+    ? `PDF invoice · ${fileName}`
+    : 'PDF invoice · embedded text'
+  local.agentReport = [
+    'Source: digital PDF text layer (no photo OCR).',
+    fileName ? `File: ${fileName}` : null,
+    local.agentReport,
+  ]
+    .filter(Boolean)
+    .join('\n')
+  local.fieldSources = {
+    ...(local.fieldSources ?? {}),
+    primary: 'ledger',
+    answerLabel: local.activeAiLabel,
+  }
+
+  onProgress?.({
+    stage: 'done',
+    progress: 1,
+    message: 'Invoice ready for review…',
+    engine: 'on-device',
+    aiId: 'arbiter',
+    aiName: 'Arbiter',
+  })
+
+  return {
+    ...local,
+    source: 'on-device',
+    aisUsed: local.aisUsed ?? ['ledger', 'sieve', 'cashier', 'clerk', 'arbiter'],
   }
 }

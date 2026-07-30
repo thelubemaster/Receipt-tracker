@@ -1,7 +1,7 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.27.0",
+  "version": "1.28.0",
   "description": "Project Cost Tracker — free on-device receipts by project",
   "author": "Schoolie",
   "repository": {
@@ -41,6 +41,7 @@
     "@huggingface/transformers": "^4.2.0",
     "idb": "^8.0.3",
     "jspdf": "^4.2.1",
+    "pdfjs-dist": "^4.10.38",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tesseract.js": "^7.0.0"

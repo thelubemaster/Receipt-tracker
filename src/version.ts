@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.27.0'
+export const APP_VERSION = '1.28.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.28.0',
+    date: '2026-07-30',
+    title: 'Upload PDF invoices and files',
+    changes: [
+      'Scan screen: new Files button for PDFs and images from Downloads / email',
+      'Digital PDF invoices use embedded text (more accurate than photo OCR)',
+      'Scanned PDFs are rendered to pages then read with the OCR team',
+      'Supports multi-page invoices (up to 4 pages stitched)',
+    ],
+  },
   {
     version: '1.27.0',
     date: '2026-07-30',
