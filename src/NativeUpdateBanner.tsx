@@ -80,8 +80,7 @@ export function NativeUpdateBanner() {
       if (result.ok) {
         setPercent(100)
         setStatus(
-          result.message ||
-            'Confirm Install on the system screen, then open Cost Tracker from the home screen.',
+          'Confirm Install on the system screen, then open Cost Tracker from the home screen.',
         )
       } else {
         setStatus(result.message)
