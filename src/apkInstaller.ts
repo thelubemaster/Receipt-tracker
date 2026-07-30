@@ -1,6 +1,7 @@
 /**
- * In-app APK install (native Capacitor plugin).
- * Downloads the new APK via Android DownloadManager and opens the system installer.
+ * In-app APK install.
+ * Android will not change the home-screen icon without a package install —
+ * this starts that install from inside the app (DownloadManager or WebView download).
  */
 import { isNativeCapacitorApp } from './installApp'
 
@@ -18,7 +19,9 @@ async function getPlugin(): Promise<ApkPlugin | null> {
   if (!isNativeCapacitorApp()) return null
   try {
     const { registerPlugin } = await import('@capacitor/core')
-    return registerPlugin<ApkPlugin>('ApkInstaller')
+    // Probe: if plugin isn't in this APK, calls will reject
+    const plugin = registerPlugin<ApkPlugin>('ApkInstaller')
+    return plugin
   } catch {
     return null
   }
@@ -38,65 +41,97 @@ export async function canInstallApkPackages(): Promise<boolean> {
 export async function openApkInstallPermissionSettings(): Promise<void> {
   const p = await getPlugin()
   if (!p) return
-  await p.openInstallPermissionSettings()
+  try {
+    await p.openInstallPermissionSettings()
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
- * Download APK from url and open the Android package installer.
- * First run may open Settings so the user can allow installs from this app.
+ * Start APK download from *inside* the app and open Android's Install screen.
+ *
+ * Android does not allow changing the home-screen icon via web OTA alone.
+ * This is the package update that changes the icon — launched from the app UI
+ * so you never open a browser or hunt for files on GitHub.
  */
 export async function downloadAndInstallApk(
   url: string,
   onProgress?: (msg: string) => void,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   const p = await getPlugin()
-  if (!p) {
-    // Older APK without the installer plugin — still open download from inside the app
+  if (p) {
     try {
-      onProgress?.('Opening download inside the app…')
+      // Detect missing native plugin (registerPlugin succeeds; call fails)
       try {
-        const { App } = await import('@capacitor/app')
-        // Capacitor 7: openUrl launches the system handler for the APK link
-        await (App as unknown as { openUrl?: (o: { url: string }) => Promise<void> }).openUrl?.({
-          url,
-        })
+        await p.canInstallPackages()
       } catch {
-        /* fall through */
+        // Plugin not in this APK build — use WebView download path below
+        throw new Error('PLUGIN_MISSING')
       }
-      // Always also try window / anchor — works in WebView for https APK URLs
-      const a = document.createElement('a')
-      a.href = url
-      a.target = '_blank'
-      a.rel = 'noopener'
-      a.download = 'schoolie.apk'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
+
+      const allowed = await canInstallApkPackages()
+      if (!allowed) {
+        onProgress?.(
+          'Allow “Install unknown apps” for Cost Tracker, then tap the button again…',
+        )
+        await p.openInstallPermissionSettings()
+      }
+      onProgress?.('Downloading in the background… (check the notification shade)')
+      await p.downloadAndInstall({
+        url,
+        fileName: 'schoolie-update.apk',
+      })
+      onProgress?.('Tap Install when Android asks — then open Cost Tracker again.')
       return { ok: true }
     } catch (e) {
-      return {
-        ok: false,
-        message: e instanceof Error ? e.message : 'Could not open download',
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg !== 'PLUGIN_MISSING') {
+        onProgress?.(`Installer issue (${msg}). Trying built-in download…`)
       }
+      /* fall through */
     }
   }
+
+  // Older APKs without ApkInstaller — still stay inside the app WebView
   try {
-    const allowed = await canInstallApkPackages()
-    if (!allowed) {
-      onProgress?.('Allow “Install unknown apps” for Cost Tracker, then try again…')
-      await p.openInstallPermissionSettings()
-    }
-    onProgress?.('Downloading update… (see the notification for progress)')
-    await p.downloadAndInstall({
-      url,
-      fileName: 'schoolie-update.apk',
-    })
-    onProgress?.('Opening installer — tap Install when prompted.')
+    onProgress?.('Starting download from inside the app…')
+    const iframe = document.createElement('iframe')
+    iframe.style.display = 'none'
+    iframe.src = url
+    document.body.appendChild(iframe)
+    setTimeout(() => {
+      try {
+        iframe.remove()
+      } catch {
+        /* ignore */
+      }
+    }, 60_000)
+
+    const a = document.createElement('a')
+    a.href = url
+    a.setAttribute('download', 'schoolie-update.apk')
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+
+    setTimeout(() => {
+      try {
+        window.location.href = url
+      } catch {
+        /* ignore */
+      }
+    }, 500)
+
+    onProgress?.(
+      'Download started. Open the notification or Downloads, tap the APK, then Install. After that the home-screen logo updates.',
+    )
     return { ok: true }
   } catch (e) {
     return {
       ok: false,
-      message: e instanceof Error ? e.message : 'APK update failed',
+      message: e instanceof Error ? e.message : 'Could not start APK download',
     }
   }
 }

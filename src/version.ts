@@ -5,10 +5,10 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.24.8'
+export const APP_VERSION = '1.24.9'
 
 /** Android versionCode shipped with this release (launcher / native shell). */
-export const APK_VERSION_CODE = 8
+export const APK_VERSION_CODE = 9
 
 export type ChangelogEntry = {
   version: string
@@ -19,6 +19,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.24.9',
+    date: '2026-07-30',
+    title: 'Update home-screen logo from the app',
+    changes: [
+      'Big “Update home-screen logo” card on the home screen when the package is behind',
+      'Settings → Update home-screen logo downloads the package inside the app',
+      'Android still needs one Install tap (system rule) — no browser or GitHub hunt',
+    ],
+  },
   {
     version: '1.24.8',
     date: '2026-07-30',

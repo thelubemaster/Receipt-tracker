@@ -932,6 +932,45 @@ a {
   line-height: 1.45;
 }
 
+/* Home-screen / native shell update (APK install from inside the app) */
+.native-update-card {
+  background: linear-gradient(145deg, rgba(45, 212, 191, 0.12), rgba(251, 146, 60, 0.08));
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-soft);
+}
+.native-update-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.native-update-preview {
+  border-radius: 14px;
+  flex-shrink: 0;
+  background: #0a0e16;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.native-update-copy {
+  min-width: 0;
+}
+.native-update-copy strong {
+  font-size: 1.05rem;
+}
+.native-update-later {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-decoration: underline;
+  padding: 8px 0 0;
+  cursor: pointer;
+}
+
 .banner-error {
   background: rgba(224, 90, 79, 0.12);
   border: 1px solid rgba(224, 90, 79, 0.35);

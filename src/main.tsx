@@ -23,14 +23,16 @@ async function setupNativeChrome() {
   }
 }
 
-// Native APK: status bar + Capgo ready + silent OTA
+// Native APK: status bar + Capgo ready + silent OTA (+ home-icon package if needed)
 void (async () => {
   await setupNativeChrome()
   await notifyNativeAppReady()
   // Small delay so the UI mounts first
   setTimeout(() => {
-    void autoUpdateIfAvailable()
-  }, 2500)
+    void autoUpdateIfAvailable((msg) => {
+      console.info('[update]', msg)
+    })
+  }, 2000)
 })()
 
 createRoot(document.getElementById('root')!).render(
