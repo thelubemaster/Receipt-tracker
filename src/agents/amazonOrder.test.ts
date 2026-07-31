@@ -95,3 +95,5 @@ describe('Amazon order PDF scan (user debug 2026-07-31)', () => {
     expect(r.lineItems.every((i) => i.amount < 500)).toBe(true)
   })
 })
+
+// Reasoner multi-item expansion is covered in receiptReasoner.test.ts

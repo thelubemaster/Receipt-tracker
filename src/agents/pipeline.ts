@@ -1118,8 +1118,18 @@ export async function runMultiAgentReceiptPipeline(
       aiName: 'Arbiter',
     })
     const { reasonAboutReceipt } = await import('./receiptReasoner')
+    // Reasoner is free + local. Optional free LLM only if user enabled a cloud vision AI
+    // (or set an HF token) — never required for a good scan.
+    const allowOptionalFreeLlm =
+      enabled('smolvlm') ||
+      enabled('rolmocr') ||
+      enabled('qwen25vl') ||
+      enabled('qwen3vl') ||
+      enabled('gotocr') ||
+      enabled('internvl') ||
+      enabled('deepseekocr')
     const reasoned = await reasonAboutReceipt(final, councilText || final.rawText || '', {
-      allowLlm: true,
+      allowLlm: allowOptionalFreeLlm,
       onProgress: (msg) =>
         onProgress?.({
           stage: 'arbitrate',

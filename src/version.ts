@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.32.0'
+export const APP_VERSION = '1.32.2'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -27,14 +27,37 @@ export type ChangelogEntry = {
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.32.2',
+    date: '2026-07-31',
+    title: 'Reasoner lists all products on multi-item Amazon PDFs',
+    changes: [
+      'When OCR shows several Brand – Product rows but no unit prices, list each product (not one $93 bundle)',
+      'Ignores marketing blurbs and multi-page duplicate OCR so you get real SKUs only',
+      'Splits subtotal evenly across those lines so totals still close',
+      'Still fully free & on-device — reasoner self-checks without Grok or paid APIs',
+    ],
+  },
+  {
+    version: '1.32.1',
+    date: '2026-07-31',
+    title: 'Fully free & local by default + multi-product reasoner',
+    changes: [
+      'Default path: 100% on this phone — no Grok, no paid cloud, no HF required',
+      'Cloud vision models (Qwen, RolmOCR, etc.) stay OFF until you opt in',
+      'On-device reasoner self-checks and re-solves bad parses without any network',
+      'If OCR names several products but unit prices are unreadable, still create one line per product',
+      'Splits the order subtotal across those lines so math still closes',
+    ],
+  },
+  {
     version: '1.32.0',
     date: '2026-07-31',
     title: 'Reasoner — scan self-checks and re-solves',
     changes: [
       'After every scan, Arbiter critiques whether the answer is *possible*',
       'Impossible math (product ≫ total, fee=total, tax=total, garbage vendor) triggers a re-solve from OCR',
-      'Optional free language model repair when online (HF) if constraints alone are not enough',
-      'Goal: the team figures out broken parses — not one-off hardcodes per store',
+      'Optional free language model repair only if you enabled cloud vision models',
+      'Goal: the team on your phone figures out broken parses — not Grok at scan time',
     ],
   },
   {
@@ -52,10 +75,10 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     version: '1.31.2',
     date: '2026-07-30',
-    title: 'Copy scan debug text for chat',
+    title: 'Copy scan debug text',
     changes: [
       'After a scan: one tap copies OCR text, who ran, totals, line items, and the full agent report',
-      'Paste that text into chat so Grok can see exactly how the scan went wrong',
+      'Use for your own notes or when reporting a bug offline — the app does not need chat to scan',
       'Optional “what went wrong” note is included in the copy',
     ],
   },

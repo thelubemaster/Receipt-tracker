@@ -1,7 +1,7 @@
 {
-  "version": "1.32.0",
+  "version": "1.32.2",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Reasoner self-check: if the answer is impossible, re-solve from OCR (optional free LLM)",
+  "notes": "Reasoner lists all products on multi-item PDFs when unit prices are missing (free/local)",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

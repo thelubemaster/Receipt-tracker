@@ -1,7 +1,9 @@
 /**
- * Free, keyless AIs — OCR + parsers run fully on-device on your phone.
- * Seeker is optional free web (no key) and can be disabled.
- * Higher power = more CPU/GPU/RAM. Users can disable any non-core AI in Settings.
+ * Free, keyless AIs.
+ *
+ * Default path is 100% on-device (no API keys, no paid cloud, no developer chat).
+ * Optional “vision-cloud” models (Qwen, etc.) are OFF by default — free HF inference
+ * when the user explicitly enables them, never required.
  */
 
 export type AiId =
@@ -503,9 +505,15 @@ export function enabledAiIds(opts: {
 }
 
 /**
- * Default disabled list for fresh installs.
- * Empty = all free AIs on (user can disable heavy VLMs if needed).
+ * Fresh installs: cloud vision models OFF so the app stays fully free & local.
+ * User can enable any of them later (still no paid key required).
  */
 export function defaultDisabledAis(): AiId[] {
-  return []
+  return AI_ROSTER.filter((a) => a.kind === 'vision-cloud').map((a) => a.id)
+}
+
+/** True if this AI needs network / remote inference. */
+export function isCloudAi(id: AiId): boolean {
+  const k = getAi(id).kind
+  return k === 'vision-cloud' || k === 'free-web'
 }

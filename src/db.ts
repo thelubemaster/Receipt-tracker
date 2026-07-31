@@ -1087,9 +1087,15 @@ function parseSettingsRow(
     projectName: row?.projectName ?? 'My project',
     lastSeenVersion: row?.lastSeenVersion ?? '',
     maxPowerMode: row?.maxPowerMode !== false,
-    disabledAis: sanitizeDisabledAis(
-      (row as { disabledAis?: unknown } | undefined)?.disabledAis,
-    ),
+    disabledAis: (() => {
+      const raw = (row as { disabledAis?: unknown } | undefined)?.disabledAis
+      // First install / never saved → cloud VLMs off (fully free local default)
+      if (raw === undefined || raw === null) {
+        const { defaultDisabledAis } = require('./aiRoster') as typeof import('./aiRoster')
+        return sanitizeDisabledAis(defaultDisabledAis())
+      }
+      return sanitizeDisabledAis(raw)
+    })(),
     customCategories,
     themeId: typeof themeRaw === 'string' && themeRaw.trim() ? themeRaw.trim() : 'midnight-teal',
   }

@@ -3611,10 +3611,11 @@ function SettingsScreen(props: {
         <OnDeviceMemoryCard />
 
         <div className="card settings-card">
-          <strong>Vision models (VLM)</strong>
+          <strong>Optional vision models (OFF by default)</strong>
           <p className="muted" style={{ margin: '6px 0 10px' }}>
-            Free open vision models for hard receipts: Qwen2.5-VL, Qwen3-VL, RolmOCR,
-            GOT-OCR 2.0, SmolVLM, InternVL, DeepSeek-OCR. They run via free Hugging Face
+            Normal scans stay 100% on this phone — free, no account, nothing sent to Grok
+            or any paid AI. These optional open models (Qwen, RolmOCR, GOT-OCR, SmolVLM,
+            InternVL, DeepSeek-OCR) only run if you turn them on; they use free Hugging Face
             inference (network). Optional free HF token improves rate limits.
           </p>
           <label className="field" style={{ display: 'block', marginBottom: 8 }}>
@@ -3650,8 +3651,9 @@ function SettingsScreen(props: {
         <div className="card settings-card">
           <strong>AIs</strong>
           <p className="muted" style={{ margin: '6px 0 12px' }}>
-            Free AIs — on-device OCR plus optional free vision models. Turn off any that
-            are slow on this phone.
+            All free. Default team is on-device only (OCR + reasoner that self-checks and
+            re-solves). Cloud vision models start OFF. Nothing runs through Grok or a paid API.
+            Turn off any engine that is slow on this phone.
           </p>
           <div className="ai-toggle-list">
             {AI_ROSTER.map((ai) => {

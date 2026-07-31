@@ -184,6 +184,18 @@ export function critiqueParse(
     })
   }
 
+  // Many named products in OCR but only 0–1 line items → incomplete catalog
+  const named = extractProductNamesFromOcr(ocr)
+  if (named.length >= 3 && prods.length <= 1) {
+    issues.push({
+      code: 'missing-line-items',
+      severity: 'fatal',
+      message: `OCR lists ~${named.length} products (${named
+        .slice(0, 3)
+        .join('; ')}${named.length > 3 ? '…' : ''}) but parse only has ${prods.length} line(s)`,
+    })
+  }
+
   // Built total from parts should roughly close when we have subtotal
   if (total != null && sub != null) {
     const built = roundMoney(sub + (tax ?? 0) + fee + ship)
@@ -209,6 +221,167 @@ export function critiqueParse(
     score,
     issues,
   }
+}
+
+/** Header / boilerplate / marketing — never a product title. */
+const PRODUCT_LINE_SKIP =
+  /\b(order\s*summary|order\s*placed|order\s*#|ship\s*to|shipped|payment\s*method|mastercard|visa|amex|subtotal|grand\s*total|total\s*before|estimated\s*tax|shipping|handling|delivered|retu[rmn]+\s*window|sold\s*by|package\s*was|bangor|united\s*states|items?\)?\s*subtotal|bradley|little\s*creek|front\s*door|porch)\b/i
+
+/** Continuation / blurb lines that look like products but are not SKUs. */
+const PRODUCT_MARKETING =
+  /^(supplement|capsule|tablet|softgel|serving|servings|healthy|supports|function|ingredients|third[-\s]?party|gluten|dairy|soy|nsf\b|clinically|highly\s*absorb|lung\s*function|bone\s*density|health\b|incron|suoplement|suopiement)/i
+
+/**
+ * Stable identity for fuzzy dedupe across OCR typos and multi-page repeats.
+ * Generic families (magnesium, vitamin d/k, zinc…) — not store-specific.
+ */
+export function productIdentityKey(name: string): string {
+  const s = name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const brand = (s.match(/^[a-z]{3,16}/) || ['x'])[0]
+  if (/magnes|citramate|citrate.*malate|malate.*citrate/.test(s)) return `${brand}:magnesium`
+  if (/\bvitamin\s*d\b|\bd\s*3\b|\bd3\b|\b5\s*000\b|\b5000\b/.test(s)) return `${brand}:vitd`
+  if (/\bvitamin\s*k\b|\bmk\s*[47]\b|\bk1\b|\bk2\b/.test(s)) return `${brand}:vitk`
+  if (/\bzinc\b|bisglyc|bisgyc|bisgly/.test(s)) return `${brand}:zinc`
+  if (/\bomega\b|\bfish\s*oil\b/.test(s)) return `${brand}:omega`
+  if (/\bprobiotic/.test(s)) return `${brand}:probiotic`
+  if (/\bcollagen\b/.test(s)) return `${brand}:collagen`
+  // brand + first 2 content words of the product half
+  const after = s.replace(new RegExp(`^${brand}\\s*`), '')
+  const words = after
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !/^(and|the|for|with|from)$/.test(w))
+    .slice(0, 2)
+  return `${brand}:${words.join(' ') || s.slice(0, 24)}`
+}
+
+/** Strip marketing tail; keep "Brand - Product" short title. */
+function cleanBrandProductTitle(brand: string, productRaw: string): string {
+  let p = productRaw.replace(/\s+/g, ' ').trim()
+  // Cut at common Amazon marketing dashes
+  p = p.replace(
+    /\s*[-–]\s*(Supports|Highly|Plus|Clinically|Third[-\s]?Party|NSF|Gluten|Contains|Capsule\s+Supplement|Vitamin\s+D3\s+Supplement)\b.*$/i,
+    '',
+  )
+  // "Magnesium CitraMate - Magnesium Citrate & Malate" → keep first clause if long
+  const clauses = p.split(/\s*[-–]\s*/)
+  if (clauses.length >= 2 && clauses[0].length >= 6) {
+    // Keep "Vitamin D-5,000" style: first clause short + second is dose/synonym
+    if (clauses[0].length <= 12 && /^(vitamin|[a-z])$/i.test(clauses[0].split(/\s+/).pop() || '')) {
+      p = clauses.slice(0, 2).join(' - ')
+    } else if (clauses[0].length >= 8) {
+      p = clauses[0]
+    } else {
+      p = clauses.slice(0, 2).join(' - ')
+    }
+  }
+  p = p.replace(/\s*[-–]\s*$/g, '').trim().slice(0, 72)
+  if (p.length < 3) return ''
+  if (PRODUCT_MARKETING.test(p)) return ''
+  return `${brand} - ${p}`
+}
+
+/**
+ * Find product *names* in OCR even when unit prices are missing/garbled.
+ * Generic: "BRAND - Product title …" lines, not store-specific.
+ * Prefers real catalog rows; ignores marketing blurbs and multi-page duplicates.
+ */
+export function extractProductNamesFromOcr(ocrText: string): string[] {
+  const text = normalizeOcrText(ocrText || '')
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) =>
+      l
+        // OCR crumbs before brand: "= ", "sw ", "m=", "~~ ", "ae "
+        .replace(/^[\s=\-~•·|*~]+/, '')
+        .replace(/^[a-z]{1,3}[=:\s]+/i, '')
+        .replace(/^m=/i, '')
+        .replace(/[\s=\-~•·|*]+$/, '')
+        .trim(),
+    )
+    .filter((l) => l.length >= 8)
+
+  const names: string[] = []
+  const seenIds = new Set<string>()
+
+  const pushName = (raw: string) => {
+    let n = raw.replace(/\s+/g, ' ').trim()
+    if (n.length < 8 || n.length > 100) return
+    if (PRODUCT_LINE_SKIP.test(n)) return
+    if (!/[A-Za-z]{4,}/.test(n)) return
+    // Must look like Brand - Product (reject pure marketing sentences)
+    if (!/\s[-–]\s|[A-Z]{3,16}\s*[-–]\s*[A-Za-z]/.test(n) && !/^[A-Z]{3,16}\s+/.test(n)) return
+    const id = productIdentityKey(n)
+    if (!id || seenIds.has(id)) return
+    // Prefer longer / cleaner title when we already have a weaker spelling? first wins (cleaner OCR is usually first page)
+    seenIds.add(id)
+    names.push(n.slice(0, 90))
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (PRODUCT_LINE_SKIP.test(line)) continue
+    if (PRODUCT_MARKETING.test(line)) continue
+
+    // Pattern A: BRAND - Product (hyphen optional spaces; allow dose hyphens in product)
+    const brandDash = line.match(
+      /^([A-Z][A-Za-z0-9&.']{2,24})\s*[-–]\s*([A-Za-z0-9][\w\s,&'/\-+.%()]{2,90})/,
+    )
+    if (brandDash) {
+      const brand = brandDash[1]
+      if (/^(ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED|RETURN|RETUM|SOLD|YOUR|UNITED|PACKAGE)$/i.test(brand)) {
+        continue
+      }
+      const cleaned = cleanBrandProductTitle(brand, brandDash[2])
+      if (cleaned) pushName(cleaned)
+      continue
+    }
+
+    // Pattern B: BRAND Product… (space, no dash) — all-caps brand token
+    const brandSpace = line.match(
+      /^([A-Z]{3,16})\s+([A-Z][A-Za-z0-9][\w\s,&'/\-+.%()]{6,70})/,
+    )
+    if (
+      brandSpace &&
+      !/ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED/i.test(brandSpace[1]) &&
+      !PRODUCT_MARKETING.test(brandSpace[2])
+    ) {
+      const cleaned = cleanBrandProductTitle(brandSpace[1], brandSpace[2])
+      if (cleaned) pushName(cleaned)
+    }
+  }
+
+  return names.slice(0, 12)
+}
+
+/**
+ * When we know product *names* but not reliable unit prices, still list each item.
+ * Split subtotal/total evenly (last line absorbs rounding) so math still closes.
+ */
+export function itemsFromNamesWithSplit(
+  names: string[],
+  budget: number,
+): ReceiptLineItem[] {
+  if (!names.length || budget <= 0) return []
+  const n = names.length
+  const base = roundMoney(Math.floor((budget * 100) / n) / 100)
+  const items: ReceiptLineItem[] = []
+  let allocated = 0
+  for (let i = 0; i < n; i++) {
+    const amount = i === n - 1 ? roundMoney(budget - allocated) : base
+    allocated = roundMoney(allocated + amount)
+    const { categoryId } = categorizeText(names[i])
+    items.push({
+      id: `reason-name-${i}`,
+      description: names[i],
+      amount,
+      categoryId,
+    })
+  }
+  return items
 }
 
 /**
@@ -280,7 +453,7 @@ export function resolveFromOcrConstraints(
   if (tax == null && /\btax[\s\S]{0,40}\$0\.00/i.test(text)) tax = 0
   if (shipping == null && /\bshipping[\s\S]{0,40}\$0\.00/i.test(text)) shipping = 0
 
-  // 3) Products: only amounts that fit under total; prefer Thorne-like multi-word names
+  // 3) Products: only amounts that fit under total
   const engine = runReceiptEngine(text)
   let products = productsOf(engine.lineItems || []).filter(
     (p) =>
@@ -298,20 +471,40 @@ export function resolveFromOcrConstraints(
     }
   }
 
-  // If we still have no products but OCR has product-ish brand lines, keep names with $0? Better: one bucket line
-  if (!products.length && total != null && subtotal != null && nearly(subtotal, total, 1)) {
-    // Single “order contents” line when multi-item prices are unreadable
-    const brands = text.match(/\bTHORNE\b|\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}\s*-\s*[A-Za-z]/g)
+  // 3b) Named products without reliable unit prices (common on Amazon PDF OCR)
+  const productNames = extractProductNamesFromOcr(text)
+  const budget = subtotal ?? total
+  const needNameExpand =
+    productNames.length >= 2 &&
+    budget != null &&
+    budget > 0 &&
+    (products.length === 0 ||
+      products.length === 1 ||
+      (products.length === 1 && total != null && nearly(products[0].amount, total)))
+
+  if (needNameExpand) {
+    products = itemsFromNamesWithSplit(productNames, budget)
+  } else if (
+    products.length === 0 &&
+    total != null &&
+    productNames.length === 1 &&
+    budget != null
+  ) {
+    const { categoryId } = categorizeText(productNames[0])
+    products = [
+      {
+        id: 'reason-one',
+        description: productNames[0],
+        amount: budget,
+        categoryId,
+      },
+    ]
+  } else if (!products.length && total != null) {
+    // Last resort single bucket
     const desc =
-      brands && brands.length
-        ? brands
-            .slice(0, 4)
-            .map((b) => b.replace(/\s+/g, ' ').trim())
-            .join('; ')
-            .slice(0, 140)
-        : draft?.description && !/shipping|fee/i.test(draft.description)
-          ? draft.description.slice(0, 140)
-          : 'Order items'
+      draft?.description && !/shipping|fee/i.test(draft.description)
+        ? draft.description.slice(0, 140)
+        : 'Order items'
     const { categoryId } = categorizeText(desc)
     products = [
       {

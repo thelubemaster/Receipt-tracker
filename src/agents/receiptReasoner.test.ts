@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { LocalAgentResult } from './pipeline'
 import {
   critiqueParse,
+  extractProductNamesFromOcr,
   reasonAboutReceipt,
   resolveFromOcrConstraints,
   vendorQuality,
@@ -15,10 +16,20 @@ SHIPPING & HANDLING:          $0.00
 TOTAL before TAX:                  $93.00
 Estimated TAX to be.               $0.00
 GRAND TOTAL:                      $93.00
-THORNE - Magnesium CitraMate
-THORNE - Vitamin D-5,000
-THORNE - Vitamin K
-THORNE - Zinc Bisglycinate 30 mg
+Delivered May 28
+= THORNE - Magnesium CitraMate - Magnesium Citrate & Malate
+Supplement - Supports Heart Health
+Sold by: Pattern.
+Return window closed on June 27, 2026.
+== THORNE - Vitamin D-5,000 - Vitamin D3 Supplement - Supports
+Healthy Bones, Teeth & Muscles
+Sold by: Pattern.
+sw THORNE - Vitamin K - Vitamins K1 and K2 (as MK-4 and MK-7)
+Capsule Supplement - Supports Strong Bones
+Sold by: Pattern.
+m= THORNE - Zinc Bisglycinate 30 mg - Highly Absorbable Zinc
+Supplement - Supports Immune System
+Sold by: Pattern.
 S000
 `
 
@@ -85,5 +96,49 @@ describe('receipt reasoner (figure it out)', () => {
     expect(result.amount).toBeCloseTo(93, 1)
     expect(result.lineItems.every((i) => i.amount < 500)).toBe(true)
     expect(critique.issues.filter((i) => i.code === 'product-oversize').length).toBe(0)
+  })
+
+  it('finds all four Thorne product names without needing unit prices', () => {
+    const names = extractProductNamesFromOcr(AMAZON_OCR)
+    expect(names.length).toBe(4)
+    const blob = names.join(' ').toLowerCase()
+    expect(blob).toMatch(/magnesium|citramate/)
+    expect(blob).toMatch(/vitamin\s*d/)
+    expect(blob).toMatch(/vitamin\s*k/)
+    expect(blob).toMatch(/zinc/)
+    // Must not treat marketing blurbs as products
+    expect(blob).not.toMatch(/lung function|return window|healthy bones, teeth/)
+  })
+
+  it('lists each product as its own line when prices are missing', () => {
+    const fixed = resolveFromOcrConstraints(AMAZON_OCR, badDraft())
+    const products = fixed.lineItems.filter(
+      (i) => !/shipping|fee/i.test(i.description),
+    )
+    expect(products.length).toBe(4)
+    const sum = products.reduce((s, i) => s + i.amount, 0)
+    expect(sum).toBeCloseTo(93, 1)
+    expect(products.every((i) => i.amount > 0 && i.amount < 93)).toBe(true)
+    // Even split of $93 → ~$23.25 each
+    expect(products.every((i) => i.amount >= 23 && i.amount <= 24)).toBe(true)
+  })
+
+  it('flags single-line collapse when OCR has many products', () => {
+    const collapsed: LocalAgentResult = {
+      ...badDraft(),
+      vendor: 'Amazon',
+      tax: 0,
+      lineItems: [
+        {
+          id: '1',
+          description: 'THORNE bundle',
+          amount: 93,
+          categoryId: 'misc',
+        },
+      ],
+    }
+    const c = critiqueParse(collapsed, AMAZON_OCR)
+    expect(c.ok).toBe(false)
+    expect(c.issues.some((i) => i.code === 'missing-line-items')).toBe(true)
   })
 })
