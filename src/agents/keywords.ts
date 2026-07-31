@@ -322,6 +322,7 @@ export const VENDOR_HINTS = [
   'rockauto',
   'summit racing',
   'diesel power products',
+  'thorne',
 ]
 
 function scoreWords(lower: string, words: string[]): number {

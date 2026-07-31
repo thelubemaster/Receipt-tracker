@@ -15,7 +15,12 @@ import {
   primaryCategoryFromItems,
 } from './lineItemsAgent'
 import { materializeLines, type LayoutLine } from './layoutText'
-import { parseMoneyTokens, roundMoney } from './moneyParse'
+import {
+  isImplausibleMoney,
+  moneyAfterLabel,
+  parseMoneyTokens,
+  roundMoney,
+} from './moneyParse'
 import { normalizeOcrText } from './normalizeOcrText'
 import { extractDate, extractVendor } from './merchantAgent'
 import type { LocalAgentResult } from './pipeline'
@@ -71,15 +76,64 @@ type LabeledMoney = {
 }
 
 function classifyLabel(line: string): LabeledMoney['kind'] | null {
-  if (/\bsub[\s\-]*t[o0]tal\b/i.test(line)) return 'subtotal'
-  if (/\b(sales\s*)?tax\b|\bvat\b|\bgst\b|\bhst\b/i.test(line) && !/\bpre-?tax\b/i.test(line))
+  // Amazon / multi-column: "TOTAL before TAX: $93" is NOT a tax line
+  if (/\bbefore\s*t[a4]x\b|\bpre-?t[a4]x\b|\btaxable\b/i.test(line)) {
+    if (/\bsub[\s\-]*t[o0]tal\b/i.test(line)) return 'subtotal'
+    if (/\bt[o0]tal\b/i.test(line)) return 'total'
+    return null
+  }
+  if (/\bsub[\s\-]*t[o0]tal\b|\bitems?\)?\s*subtotal\b/i.test(line)) return 'subtotal'
+  if (
+    /\b(estimated\s*)?(sales\s*)?t[a4]x\b|\bvat\b|\bgst\b|\bhst\b/i.test(line) &&
+    !/\bbefore\s*t[a4]x\b|\bpre-?t[a4]x\b|\btotal\s+before\b/i.test(line)
+  ) {
     return 'tax'
-  if (SHIP.test(line) && !/\bship\s*to\b/i.test(line)) return 'shipping'
-  if (FEE.test(line)) return 'fee'
+  }
+  if (
+    (SHIP.test(line) || /\bshipping\s*&\s*handling\b|\bhandl(?:ing|e)\b/i.test(line)) &&
+    !/\bship\s*to\b|\bshipped\s*to\b/i.test(line)
+  ) {
+    // "SHIPPING & HANDLING" is shipping, not a convenience fee
+    if (/\bshipping\b|\bfreight\b|\bdelivery\b|\bpostage\b|\bhandling\b/i.test(line)) {
+      return 'shipping'
+    }
+  }
+  // Convenience / service fee — not "shipping & handling"
+  if (FEE.test(line) && !/\bshipping\b|\bfreight\b|\bdelivery\b/i.test(line)) return 'fee'
   if (/\bgrand\s*t[o0]tal\b|\bamount\s*due\b|\bbalance\s*due\b/i.test(line)) return 'total'
-  if (/\bt[o0]tal\b/i.test(line) && !/\bsub\b/i.test(line) && !/\bitem\s*total\b/i.test(line))
+  if (
+    /\bt[o0]tal\b/i.test(line) &&
+    !/\bsub\b/i.test(line) &&
+    !/\bitem\s*total\b/i.test(line) &&
+    !/\bbefore\s*t[a4]x\b/i.test(line)
+  ) {
     return 'total'
+  }
   return null
+}
+
+function amountForLabel(line: string, next: string, kind: LabeledMoney['kind']): number | null {
+  // Multi-column PDF: pick money right after the keyword, not the last $ on the line
+  const labelRes: Record<LabeledMoney['kind'], RegExp> = {
+    total: /\b(grand\s*)?t[o0]tal\b|\bamount\s*due\b|\bbalance\s*due\b/i,
+    subtotal: /\bsub[\s\-]*t[o0]tal\b|\bitems?\)?\s*subtotal\b/i,
+    tax: /\b(estimated\s*)?(sales\s*)?t[a4]x\b|\bvat\b|\bgst\b/i,
+    shipping: /\bshipping(?:\s*&\s*handling)?\b|\bfreight\b|\bdelivery\b|\bhandl(?:ing|e)\b/i,
+    fee: /\b(convenience|service\s*fee|processing|cc\s*fee|surcharge)\b/i,
+    other: /$a/, // never
+  }
+  const near = moneyAfterLabel(line, labelRes[kind])
+  if (near != null) return near
+  let amounts = parseMoneyTokens(line)
+  if (!amounts.length) amounts = parseMoneyTokens(next)
+  if (!amounts.length) return null
+  // For tax/shipping/fee prefer the *smallest* amount on a multi-money line
+  // (the big number is usually the total from the next column)
+  if ((kind === 'tax' || kind === 'shipping' || kind === 'fee') && amounts.length > 1) {
+    return roundMoney(Math.min(...amounts))
+  }
+  // Totals: last amount is usually the final value
+  return roundMoney(amounts[amounts.length - 1])
 }
 
 function harvestLabeledMoney(lines: string[], ban?: EngineBan): LabeledMoney[] {
@@ -88,20 +142,15 @@ function harvestLabeledMoney(lines: string[], ban?: EngineBan): LabeledMoney[] {
     const line = lines[i]
     const next = lines[i + 1] || ''
     const kind = classifyLabel(line) || (classifyLabel(`${line} ${next}`) as LabeledMoney['kind'] | null)
-    if (!kind) continue
-    let amounts = parseMoneyTokens(line)
-    if (!amounts.length) amounts = parseMoneyTokens(next)
-    if (!amounts.length) continue
-    // Prefer last money on line (running totals print earlier amounts first)
-    const amount = roundMoney(amounts[amounts.length - 1])
-    if (amount <= 0 || amount >= 100000) continue
+    if (!kind || kind === 'other') continue
+    const amount = amountForLabel(line, next, kind)
+    if (amount == null || amount < 0 || amount >= 100000) continue
     if (bannedAmount(amount, ban) && kind === 'total') continue
 
     let weight = 5
     if (kind === 'total') {
       if (/\bgrand\b|\bamount\s*due\b|\bbalance\s*due\b/i.test(line)) weight = 14
       else weight = 12
-      // Totals near the bottom of the document are more trustworthy
       weight += Math.min(4, Math.floor((i / Math.max(1, lines.length)) * 4))
     } else if (kind === 'subtotal') weight = 10
     else if (kind === 'tax') weight = 9
@@ -186,7 +235,7 @@ function extractProducts(lines: string[], ban?: EngineBan): ReceiptLineItem[] {
       continue
     }
 
-    if (amount <= 0 || amount > 50000) {
+    if (amount <= 0 || amount > 50000 || isImplausibleMoney(amount)) {
       buffer = []
       continue
     }
@@ -277,8 +326,44 @@ function reconcile(input: {
   // (common OCR: "TOTAL 134.19" also scraped as a product)
   if (total != null) {
     const before = products.length
-    products = products.filter((i) => !nearly(i.amount, total!))
-    if (products.length < before) notes.push('Engine: dropped product row that cloned grand total')
+    products = products.filter(
+      (i) =>
+        !nearly(i.amount, total!) &&
+        !isImplausibleMoney(i.amount, { grandTotal: total }),
+    )
+    if (products.length < before) {
+      notes.push('Engine: dropped product rows that cloned total or looked like order-id ghosts')
+    }
+  }
+
+  // Tax / fee must not equal grand total (common multi-column PDF bug)
+  if (total != null && tax != null && nearly(tax, total) && (subtotal == null || nearly(subtotal, total))) {
+    // Real tax equal to total only if subtotal is 0 — otherwise tax was misread
+    if (subtotal != null && nearly(subtotal, total)) {
+      notes.push('Engine: tax equaled total with same subtotal — treating tax as $0')
+      tax = 0
+    }
+  }
+  if (total != null && fee != null && nearly(fee, total)) {
+    notes.push('Engine: fee equaled grand total — clearing bogus fee')
+    fee = null
+  }
+  if (total != null && shipping != null && shipping > total * 1.1) {
+    notes.push('Engine: shipping larger than total — clearing')
+    shipping = null
+  }
+  // Amazon-style: shipping $0 on label but OCR also saw a junk amount
+  if (shipping != null && shipping > 0 && total != null) {
+    // if products already ≈ total, shipping should be 0
+    const p = pSum()
+    if (p > 0 && nearly(p, total, 0.5) && shipping > 1) {
+      // keep shipping only if math needs it
+      const withoutShip = roundMoney(p + (tax ?? 0) + (fee ?? 0))
+      if (nearly(withoutShip, total, 0.5)) {
+        notes.push('Engine: products already close total — dropping extra shipping')
+        shipping = 0
+      }
+    }
   }
 
   // If products sum to subtotal, great

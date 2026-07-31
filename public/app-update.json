@@ -1,7 +1,7 @@
 {
-  "version": "1.31.2",
+  "version": "1.31.3",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Copy scan debug text — paste OCR + who ran + agent report into chat",
+  "notes": "Amazon PDF fix — no order-ID prices, tax not equal to total, vendor Amazon, order-placed date",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

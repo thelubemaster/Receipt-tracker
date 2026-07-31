@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.31.2'
+export const APP_VERSION = '1.31.3'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,18 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.31.3',
+    date: '2026-07-31',
+    title: 'Fix Amazon PDF order scans',
+    changes: [
+      'Stop treating Amazon order numbers (113-0548166-9548225) as $48,166 product prices',
+      '“TOTAL before TAX” no longer sets tax equal to the order total',
+      'Detect Amazon order summaries as vendor (not OCR crumbs like S000)',
+      'Prefer “Order placed” date over “Return window closed”',
+      'Drop bogus shipping/fee lines that clone the grand total on multi-column PDFs',
+    ],
+  },
   {
     version: '1.31.2',
     date: '2026-07-30',

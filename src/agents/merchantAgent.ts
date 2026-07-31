@@ -9,51 +9,88 @@ export type MerchantAgentResult = {
   notes: string[]
 }
 
-export function extractDate(text: string): string | null {
-  const patterns: RegExp[] = [
-    /\b(20\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/,
-    /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2})\b/,
-    /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2})\b/,
-    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(20\d{2})\b/i,
-  ]
+const MONTHS: Record<string, string> = {
+  jan: '01',
+  feb: '02',
+  mar: '03',
+  apr: '04',
+  may: '05',
+  jun: '06',
+  jul: '07',
+  aug: '08',
+  sep: '09',
+  oct: '10',
+  nov: '11',
+  dec: '12',
+}
 
-  for (let i = 0; i < patterns.length; i++) {
-    const re = patterns[i]
-    const m = text.match(re)
-    if (!m) continue
-    try {
-      if (i === 0) {
-        return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
-      }
-      if (i === 1) {
-        return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`
-      }
-      if (i === 2) {
-        return `20${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`
-      }
-      if (i === 3) {
-        const months: Record<string, string> = {
-          jan: '01',
-          feb: '02',
-          mar: '03',
-          apr: '04',
-          may: '05',
-          jun: '06',
-          jul: '07',
-          aug: '08',
-          sep: '09',
-          oct: '10',
-          nov: '11',
-          dec: '12',
-        }
-        const mo = months[m[1].slice(0, 3).toLowerCase()]
-        return `${m[3]}-${mo}-${m[2].padStart(2, '0')}`
-      }
-    } catch {
-      /* continue */
+function parseMonthNameDate(m: RegExpMatchArray): string | null {
+  const mo = MONTHS[m[1].slice(0, 3).toLowerCase()]
+  if (!mo) return null
+  return `${m[3]}-${mo}-${m[2].padStart(2, '0')}`
+}
+
+export function extractDate(text: string): string | null {
+  // Prefer "Order placed May 27,2026" / "Delivered May 28" over "Return window closed June 27"
+  // Allow missing space after comma (common OCR: "May 27,2026")
+  const preferred =
+    text.match(
+      /\b(?:order\s*placed|ordered|order\s*date|purchase\s*date|invoice\s*date|delivered)\s*:?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s*(20\d{2})\b/i,
+    ) ||
+    text.match(
+      /\b(?:order\s*placed|ordered|order\s*date|purchase\s*date|invoice\s*date)\s*:?\s*(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2})\b/i,
+    )
+  if (preferred) {
+    if (preferred.length >= 4 && /[a-z]/i.test(preferred[1])) {
+      const d = parseMonthNameDate(preferred)
+      if (d) return d
+    }
+    if (preferred.length >= 4 && /^\d/.test(preferred[1])) {
+      return `${preferred[3]}-${preferred[1].padStart(2, '0')}-${preferred[2].padStart(2, '0')}`
     }
   }
-  return null
+
+  // Score all date hits; demote return-window lines
+  const patterns: { re: RegExp; kind: 'ymd' | 'mdy' | 'mdy2' | 'mon' }[] = [
+    { re: /\b(20\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/g, kind: 'ymd' },
+    { re: /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2})\b/g, kind: 'mdy' },
+    { re: /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2})\b/g, kind: 'mdy2' },
+    {
+      re: /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s*(20\d{2})\b/gi,
+      kind: 'mon',
+    },
+  ]
+
+  const candidates: { date: string; score: number }[] = []
+  for (const { re, kind } of patterns) {
+    re.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(text)) !== null) {
+      try {
+        let date = ''
+        if (kind === 'ymd') date = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+        else if (kind === 'mdy')
+          date = `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`
+        else if (kind === 'mdy2')
+          date = `20${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`
+        else {
+          const d = parseMonthNameDate(m)
+          if (!d) continue
+          date = d
+        }
+        const ctx = text.slice(Math.max(0, m.index - 40), m.index + m[0].length + 20)
+        let score = 1
+        if (/\border\s*placed\b|\bordered\b|\binvoice\b|\bpurchase\b/i.test(ctx)) score += 10
+        if (/\bdelivered\b|\bshipped\b/i.test(ctx)) score += 4
+        if (/\breturn\s*window\b|\brefund\b|\bclosed\s*on\b/i.test(ctx)) score -= 8
+        candidates.push({ date, score })
+      } catch {
+        /* continue */
+      }
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates[0]?.date ?? null
 }
 
 function titleCaseVendor(s: string): string {
@@ -70,6 +107,18 @@ const PAYMENT_VENDOR_NOISE =
 export function extractVendor(text: string): string {
   text = normalizeOcrText(text)
   const lower = text.toLowerCase()
+
+  // 0a) Amazon order summary / marketplace emails
+  if (
+    (/\border\s*summary\b/i.test(text) || /\border\s*#\s*\d{3}-/i.test(text)) &&
+    (/\border\s*placed\b/i.test(text) ||
+      /\bship\s*to\b/i.test(text) ||
+      /\bgrand\s*total\b/i.test(text) ||
+      /\bpayment\s*method\b/i.test(text))
+  ) {
+    return 'Amazon'
+  }
+  if (/\bamazon\.com\b|\bamazon\.ca\b|\bamzn\b/i.test(text)) return 'Amazon'
 
   // 0) "Payment details for Company Name" / invoice headers
   const payFor = text.match(/payment details for\s*\n?\s*([A-Za-z0-9][A-Za-z0-9 .,&'-]{3,60})/i)
@@ -143,6 +192,9 @@ export function extractVendor(text: string): string {
     if (totalNoise(line)) continue
     if (PAYMENT_VENDOR_NOISE.test(line)) continue
     if (/^payer$|^bradley$|^payment/i.test(line.trim())) continue
+    // Skip OCR crumbs like S000, S200, su:
+    if (/^[A-Z]?\d{2,5}$/i.test(line.trim())) continue
+    if (/^s\d{2,5}$/i.test(line.trim())) continue
     if (/\d{2,}[\/\-]\d/.test(line)) continue
     if (/\$/.test(line)) continue
     const letters = (line.match(/[A-Za-z]/g) || []).length

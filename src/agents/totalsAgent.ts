@@ -63,8 +63,23 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
       fee = roundMoney(amount)
       continue
     }
-    if (/\b(sales\s*)?tax\b|\bvat\b|\bgst\b|\bhst\b/i.test(line) && !/\bpre-?tax\b/i.test(line)) {
-      tax = roundMoney(amount)
+    // "TOTAL before TAX: $93" is NOT tax — it's a total
+    if (/\bbefore\s*t[a4]x\b|\bpre-?t[a4]x\b/i.test(line)) {
+      if (/\bt[o0]tal\b/i.test(line) && !/\bsub\b/i.test(line)) {
+        votes.push({
+          label: 'total-before-tax-line',
+          total: roundMoney(amounts[amounts.length - 1]),
+          weight: 11,
+        })
+      }
+      continue
+    }
+    if (
+      /\b(sales\s*)?tax\b|\bvat\b|\bgst\b|\bhst\b/i.test(line) &&
+      !/\bpre-?tax\b|\bbefore\s*tax\b/i.test(line)
+    ) {
+      // Multi-column: prefer smallest amount (0.00 tax next to $93 total)
+      tax = roundMoney(amounts.length > 1 ? Math.min(...amounts) : amount)
       continue
     }
 

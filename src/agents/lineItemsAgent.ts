@@ -1,6 +1,12 @@
 import type { CategoryId, ReceiptLineItem } from '../types'
 import { categorizeText } from './keywords'
-import { lastMoneyOnLine, parseMoneyTokens, roundMoney } from './moneyParse'
+import {
+  isImplausibleMoney,
+  lastMoneyOnLine,
+  parseMoneyTokens,
+  roundMoney,
+  stripOrderIds,
+} from './moneyParse'
 import { normalizeOcrText } from './normalizeOcrText'
 
 /** Not product rows — totals/chrome (shipping + fees handled as their own sections) */
@@ -317,7 +323,7 @@ export function dedupeItemsByAmount(
 }
 
 export function runLineItemsAgent(text: string): LineItemsAgentResult {
-  text = normalizeOcrText(text)
+  text = normalizeOcrText(stripOrderIds(text))
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -330,15 +336,30 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
   let fee: number | null = null
   let feeLabel = 'Convenience fee'
   let pendingFeeLabel: string | null = null
+  // Track grand total early if present (for ghost-amount filtering)
+  let knownTotal: number | null = null
+  for (const l of lines) {
+    if (/\bgrand\s*t[o0]tal\b/i.test(l)) {
+      const a = parseMoneyTokens(l)
+      if (a.length) knownTotal = a[a.length - 1]
+    }
+  }
 
   const flushBuffer = () => {
     buffer = []
   }
 
+  const pickAmount = (amounts: number[], preferSmall = false): number | null => {
+    if (!amounts.length) return null
+    const n = preferSmall && amounts.length > 1 ? Math.min(...amounts) : amounts[amounts.length - 1]
+    if (isImplausibleMoney(n, { grandTotal: knownTotal })) return null
+    return n
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const amounts = parseMoneyTokens(line)
-    const amount = amounts.length ? amounts[amounts.length - 1] : null
+    const amounts = parseMoneyTokens(line, { grandTotal: knownTotal })
+    const amount = pickAmount(amounts, false)
 
     // Label-only fee/meta lines (amount may be next)
     if (amount == null && (isFeeOrMetaLabel(line) || NON_SHIP_FEE.test(line) || SHIPPING_LINE.test(line))) {
@@ -370,13 +391,21 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
     pendingFeeLabel = null
 
     if (amount != null && SHIPPING_LINE.test(line)) {
-      shipping = captureShipping(line, amount, shipping)
+      // Multi-column: "SHIPPING $0.00 … TOTAL $93" — use smallest amount
+      const shipAmt = pickAmount(amounts, true) ?? amount
+      shipping = captureShipping(line, shipAmt, shipping)
       flushBuffer()
       continue
     }
 
-    if (amount != null && NON_SHIP_FEE.test(line)) {
-      fee = roundMoney(amount)
+    if (amount != null && NON_SHIP_FEE.test(line) && !SHIPPING_LINE.test(line)) {
+      const feeAmt = pickAmount(amounts, true) ?? amount
+      // Never treat grand total as a "convenience fee"
+      if (knownTotal != null && Math.abs(feeAmt - knownTotal) < 0.05) {
+        flushBuffer()
+        continue
+      }
+      fee = roundMoney(feeAmt)
       feeLabel = line
       flushBuffer()
       continue
@@ -421,7 +450,11 @@ export function runLineItemsAgent(text: string): LineItemsAgentResult {
 
     let itemAmount = roundMoney(amount)
     if (amounts.length >= 2) itemAmount = roundMoney(amounts[amounts.length - 1])
-    if (itemAmount <= 0 || itemAmount > 50000) {
+    if (
+      itemAmount <= 0 ||
+      itemAmount > 50000 ||
+      isImplausibleMoney(itemAmount, { grandTotal: knownTotal })
+    ) {
       flushBuffer()
       continue
     }
