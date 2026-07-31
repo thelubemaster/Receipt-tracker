@@ -27,6 +27,8 @@ export type ScanOptions = {
   rejected?: RejectedScanSnapshot
   /** From user ✓/✗ history — boosts trusted free AIs in voting */
   reliability?: Partial<Record<AiId, number>>
+  /** Multi-page PDF: one image per page (full page res) */
+  pageBlobs?: Blob[]
   onProgress?: (
     p: AgentProgress & {
       engine: 'on-device'
@@ -45,16 +47,25 @@ export async function scanReceipt(
   imageBlob: Blob,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  const { onProgress, maxPower = true, disabledAis = [], rejected, reliability } = options
+  const {
+    onProgress,
+    maxPower = true,
+    disabledAis = [],
+    rejected,
+    reliability,
+    pageBlobs,
+  } = options
 
   onProgress?.({
     stage: 'prepare',
     progress: 0.02,
     message: rejected
       ? `Try again #${rejected.attempt}: AIs know the last result was wrong…`
-      : maxPower
-        ? 'Starting free AI team…'
-        : 'Starting free AI team (light mode)…',
+      : pageBlobs && pageBlobs.length > 1
+        ? `Starting free AI team (${pageBlobs.length} PDF pages)…`
+        : maxPower
+          ? 'Starting free AI team…'
+          : 'Starting free AI team (light mode)…',
     engine: 'on-device',
     aiId: rejected ? 'arbiter' : 'forge',
     aiName: rejected ? 'Arbiter' : 'Forge',
@@ -63,7 +74,13 @@ export async function scanReceipt(
   const local: LocalAgentResult = await runOnDeviceReceiptAgent(
     imageBlob,
     (p) => onProgress?.({ ...p, engine: 'on-device', aiId: p.aiId, aiName: p.aiName }),
-    { maxPower: rejected ? true : maxPower, disabledAis, rejected, reliability },
+    {
+      maxPower: rejected ? true : maxPower,
+      disabledAis,
+      rejected,
+      reliability,
+      pageBlobs,
+    },
   )
 
   onProgress?.({

@@ -166,6 +166,11 @@ export type PipelineOptions = {
    * When omitted, pipeline loads from IndexedDB if available.
    */
   memory?: ReceiptMemory | null
+  /**
+   * Multi-page PDF: one image per page at full page resolution.
+   * OCR runs per page then merges so page 2 prices are not crushed/lost.
+   */
+  pageBlobs?: Blob[]
 }
 
 function scoreParseCandidate(
@@ -274,6 +279,56 @@ export async function runMultiAgentReceiptPipeline(
   /** Only AIs that actually ran work this scan (never "all enabled"). */
   const actuallyRan = new Set<AiId>()
 
+  // ── Multi-page PDF: OCR each page at full page res, then merge ──
+  const pageBlobs = (options.pageBlobs || []).filter(Boolean)
+  if (pageBlobs.length > 1) {
+    onProgress?.({
+      stage: 'ocr',
+      progress: 0.08,
+      message: `Reading PDF page-by-page (${pageBlobs.length} pages)…`,
+      aiId: 'forge',
+      aiName: 'Forge',
+    })
+    const pageParts: string[] = []
+    for (let i = 0; i < pageBlobs.length; i++) {
+      try {
+        let pageBlob = pageBlobs[i]
+        try {
+          pageBlob = await prepareImageForOcr(pageBlob, {
+            maxEdge: 2200,
+            minEdge: 1400,
+          })
+        } catch {
+          /* keep page as-is */
+        }
+        const forge = await runForgeOcr(pageBlob, (p) =>
+          onProgress?.({
+            ...p,
+            progress: 0.08 + ((i + (p.progress || 0)) / pageBlobs.length) * 0.25,
+            message: `Page ${i + 1}/${pageBlobs.length}: ${p.message || 'OCR…'}`,
+          }),
+        )
+        if (forge.text.trim()) {
+          pageParts.push(`--- PDF page ${i + 1} ---\n${forge.text.trim()}`)
+        }
+      } catch (e) {
+        skipped.push(
+          `Page ${i + 1} OCR: ${e instanceof Error ? e.message.slice(0, 50) : 'error'}`,
+        )
+      }
+    }
+    if (pageParts.length) {
+      const multi = pageParts.join('\n\n')
+      ocrTexts.push({
+        label: 'Multi-page PDF path',
+        text: multi,
+        note: `Per-page OCR · ${pageParts.length}/${pageBlobs.length} pages · full page res`,
+        ais: ['forge'],
+      })
+      actuallyRan.add('forge')
+    }
+  }
+
   async function runOcrIfEnabled(
     id: AiId,
     label: string,
@@ -351,9 +406,21 @@ export async function runMultiAgentReceiptPipeline(
   const hasTotalLabel =
     /\b(grand\s+)?t[o0]tal\b|\bamount\s+due\b/i.test(bestPhase1Text) &&
     (bestPhase1Text.match(/\d+[.,]\d{2}/g) || []).length >= 2
+  // Many product titles but only order-total money amounts → need tile OCR for unit prices
+  const moneyTokens = bestPhase1Text.match(/\d+[.,]\d{2}/g) || []
+  const uniqueMoney = new Set(moneyTokens.map((m) => m.replace(',', '.')))
+  const brandProductLines = (
+    bestPhase1Text.match(/^[A-Z][A-Za-z0-9&.']{2,20}\s*[-–]\s*[A-Za-z]/gm) || []
+  ).length
+  const missingUnitPrices =
+    brandProductLines >= 2 && uniqueMoney.size > 0 && uniqueMoney.size <= 4
+
   // Require real receipt structure — not just "some letters"
   const strongEnough =
-    q >= 72 && layoutish(bestPhase1Text) >= 3 && hasTotalLabel
+    q >= 72 &&
+    layoutish(bestPhase1Text) >= 3 &&
+    hasTotalLabel &&
+    !missingUnitPrices
   const needMore = !strongEnough || Boolean(rejected)
 
   if (needMore) {
@@ -375,12 +442,19 @@ export async function runMultiAgentReceiptPipeline(
   const bestNow = ocrTexts.length
     ? [...ocrTexts].sort((a, b) => scoreOcrText(b.text) - scoreOcrText(a.text))[0].text
     : ''
+  const moneyNow = bestNow.match(/\d+[.,]\d{2}/g) || []
+  const uniqueMoneyNow = new Set(moneyNow.map((m) => m.replace(',', '.')))
+  const brandNow = (bestNow.match(/^[A-Z][A-Za-z0-9&.']{2,20}\s*[-–]\s*[A-Za-z]/gm) || [])
+    .length
+  const stillMissingPrices =
+    brandNow >= 2 && uniqueMoneyNow.size > 0 && uniqueMoneyNow.size <= 4
   const stillWeak =
     q < 90 ||
     layoutish(bestNow) < 3 ||
+    stillMissingPrices ||
     !(
       /\b(grand\s+)?t[o0]tal\b|\bamount\s+due\b/i.test(bestNow) &&
-      (bestNow.match(/\d+[.,]\d{2}/g) || []).length >= 2
+      moneyNow.length >= 2
     )
   // ── Vision-language model (looks at the page — not Tesseract) ──
   // Prefer when OCR looks weak, on retry, or always in max-power mode.

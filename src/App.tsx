@@ -1824,6 +1824,7 @@ function ScanScreen(props: {
           maxPower: props.maxPowerMode,
           disabledAis: props.disabledAis,
           reliability: reliabilityWeights(board),
+          pageBlobs: doc.pageBlobs,
           onProgress: (p) => {
             setProgress(p.progress)
           },
@@ -1928,11 +1929,13 @@ function ScanScreen(props: {
       {working ? (
         <div className="card agent-status" aria-busy="true" aria-live="polite">
           {heldPreview && (
-            <SafeImage
-              className="receipt-preview receipt-preview-sm"
-              src={heldPreview}
-              alt="Scanning"
-            />
+            <div className="receipt-preview-scroll" style={{ maxHeight: 160 }}>
+              <SafeImage
+                className="receipt-preview receipt-preview-sm"
+                src={heldPreview}
+                alt="Scanning"
+              />
+            </div>
           )}
           <div className="spinner" />
           <div className="status-title">
@@ -1962,7 +1965,9 @@ function ScanScreen(props: {
       ) : scanError ? (
         <div className="card scan-retry-card">
           {heldPreview && (
-            <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+            <div className="receipt-preview-scroll">
+              <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+            </div>
           )}
           <div className="banner banner-error" role="alert" style={{ margin: 0 }}>
             {scanError}
@@ -2046,7 +2051,12 @@ function ScanScreen(props: {
         </div>
       ) : heldBlob && heldPreview && !props.rejected ? (
         <div className="card scan-retry-card">
-          <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+          <div className="receipt-preview-scroll">
+            <SafeImage className="receipt-preview" src={heldPreview} alt="Receipt preview" />
+          </div>
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: '0.85rem' }}>
+            Scroll the preview to see every PDF page before scanning.
+          </p>
           <strong className="scan-retry-title">Ready to scan again</strong>
           <p className="muted" style={{ margin: '6px 0 0' }}>
             Re-read this file, or pick a clearer photo / PDF.

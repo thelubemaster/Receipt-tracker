@@ -1,7 +1,7 @@
 {
-  "version": "1.32.3",
+  "version": "1.32.4",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Real unit prices when OCR has them; honest even-split when not",
+  "notes": "Full multi-page PDF preview + per-page OCR",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

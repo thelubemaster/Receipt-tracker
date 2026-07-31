@@ -6,7 +6,6 @@
  *   otherwise rasterize page(s) and OCR like a photo
  */
 import {
-  DISPLAY_MAX_EDGE,
   JPEG_QUALITY,
   SAFE_DATA_URL_CHARS,
   blobToDataUrl,
@@ -29,13 +28,23 @@ export type NormalizedDocument = NormalizedPick & {
   layoutLines?: LayoutLine[]
   /** How many PDF pages were used */
   pageCount?: number
+  /**
+   * One JPEG per PDF page at OCR-friendly resolution.
+   * Pipeline OCRs each page separately then merges — avoids crushing a tall
+   * multi-page stitch (and cutting off prices on page 2).
+   */
+  pageBlobs?: Blob[]
   fileName?: string
 }
 
 const PDF_EXT = /\.pdf$/i
 const MAX_PDF_PAGES = 4
 /** Scale for PDF→canvas (≈ 144–192 dpi-ish for letter width) */
-const PDF_RENDER_SCALE = 2
+const PDF_RENDER_SCALE = 2.25
+/** Per-page long edge for OCR (do not crush multi-page into 1600px total height) */
+const PDF_PAGE_OCR_MAX_EDGE = 2200
+/** Preview stitch long edge — full document, user can scroll */
+const PDF_PREVIEW_MAX_EDGE = 2000
 
 export function looksLikePdfFile(file: File | Blob, nameHint = ''): boolean {
   const type = (file.type || '').toLowerCase()
@@ -101,11 +110,12 @@ async function openPdfDocument(
 ): Promise<{
   embeddedText: string
   layoutLines: LayoutLine[]
-  pageImages: Blob[]
+  pageBlobs: Blob[]
   pageCount: number
   width: number
   height: number
   previewBlob: Blob
+  ocrPrimary: Blob
 }> {
   const pdfjs = await loadPdfJs()
   const data = await readFileAsArrayBuffer(file)
@@ -189,10 +199,29 @@ async function openPdfDocument(
     totalH += canvas.height
   }
 
-  // Stitch pages top-to-bottom for multi-page invoices
+  // Per-page JPEG for OCR (high res each page — prices live in the right column)
+  async function canvasToPageOcrBlob(c: HTMLCanvasElement): Promise<Blob> {
+    const long = Math.max(c.width, c.height)
+    if (long <= PDF_PAGE_OCR_MAX_EDGE) return canvasToJpegBlob(c)
+    const scale = PDF_PAGE_OCR_MAX_EDGE / long
+    const resized = document.createElement('canvas')
+    resized.width = Math.max(1, Math.round(c.width * scale))
+    resized.height = Math.max(1, Math.round(c.height * scale))
+    const rctx = resized.getContext('2d')
+    if (!rctx) return canvasToJpegBlob(c)
+    rctx.imageSmoothingEnabled = true
+    rctx.imageSmoothingQuality = 'high'
+    rctx.drawImage(c, 0, 0, resized.width, resized.height)
+    return canvasToJpegBlob(resized)
+  }
+  const pageBlobs: Blob[] = []
+  for (const c of pageCanvases) {
+    pageBlobs.push(await canvasToPageOcrBlob(c))
+  }
+
+  // Full-document stitch for preview + single-blob fallback (user must see ALL pages)
   const stitch = document.createElement('canvas')
-  // Cap extreme multi-page height for WebView memory
-  const maxStitchH = 8000
+  const maxStitchH = 12_000
   const scaleDown = totalH > maxStitchH ? maxStitchH / totalH : 1
   stitch.width = Math.max(1, Math.round(maxW * scaleDown))
   stitch.height = Math.max(1, Math.round(totalH * scaleDown))
@@ -208,11 +237,10 @@ async function openPdfDocument(
     y += dh
   }
 
-  // Optionally downscale long edge for OCR pipeline consistency
-  let outCanvas = stitch
+  let previewCanvas = stitch
   const long = Math.max(stitch.width, stitch.height)
-  if (long > DISPLAY_MAX_EDGE * 1.25) {
-    const scale = DISPLAY_MAX_EDGE / long
+  if (long > PDF_PREVIEW_MAX_EDGE) {
+    const scale = PDF_PREVIEW_MAX_EDGE / long
     const resized = document.createElement('canvas')
     resized.width = Math.max(1, Math.round(stitch.width * scale))
     resized.height = Math.max(1, Math.round(stitch.height * scale))
@@ -221,16 +249,13 @@ async function openPdfDocument(
       rctx.imageSmoothingEnabled = true
       rctx.imageSmoothingQuality = 'high'
       rctx.drawImage(stitch, 0, 0, resized.width, resized.height)
-      outCanvas = resized
+      previewCanvas = resized
     }
   }
 
-  const previewBlob = await canvasToJpegBlob(outCanvas)
-  // First page alone for a lighter preview when multi-page
-  let firstPageBlob = previewBlob
-  if (pageCanvases[0]) {
-    firstPageBlob = await canvasToJpegBlob(pageCanvases[0])
-  }
+  const previewBlob = await canvasToJpegBlob(previewCanvas)
+  // OCR blob = first page (pipeline also gets pageBlobs for multi-page merge)
+  const ocrPrimary = pageBlobs[0] || previewBlob
 
   void name
   const layoutLines = allGlyphs.length ? linesFromGlyphs(allGlyphs, 4) : []
@@ -243,11 +268,12 @@ async function openPdfDocument(
   return {
     embeddedText,
     layoutLines,
-    pageImages: [previewBlob],
+    pageBlobs,
     pageCount,
-    width: outCanvas.width,
-    height: outCanvas.height,
-    previewBlob: firstPageBlob,
+    width: previewCanvas.width,
+    height: previewCanvas.height,
+    previewBlob,
+    ocrPrimary,
   }
 }
 
@@ -275,7 +301,8 @@ export async function normalizePickedDocument(
     try {
       const pdf = await openPdfDocument(file, name)
       const usefulText = isEmbeddedTextUseful(pdf.embeddedText)
-      const imageBlob = pdf.pageImages[0] || pdf.previewBlob
+      // OCR blob = first page; multi-page goes through pageBlobs in the pipeline
+      const imageBlob = pdf.ocrPrimary || pdf.pageBlobs[0] || pdf.previewBlob
       let dataUrl: string | undefined
       try {
         const du = await blobToDataUrl(pdf.previewBlob)
@@ -296,6 +323,7 @@ export async function normalizePickedDocument(
         embeddedText: pdf.embeddedText?.trim() ? pdf.embeddedText : undefined,
         layoutLines: pdf.layoutLines?.length ? pdf.layoutLines : undefined,
         pageCount: pdf.pageCount,
+        pageBlobs: pdf.pageBlobs.length > 1 ? pdf.pageBlobs : undefined,
         fileName: name,
       }
     } catch (e) {

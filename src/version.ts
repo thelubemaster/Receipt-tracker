@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.32.3'
+export const APP_VERSION = '1.32.4'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.32.4',
+    date: '2026-07-31',
+    title: 'Full multi-page PDF preview + per-page OCR (no more cut-off)',
+    changes: [
+      'Preview shows the entire PDF stitch (scroll to see page 2+) — not only the first page',
+      'OCR reads each PDF page at full page resolution, then merges (prices on later pages no longer crushed)',
+      'When many products appear but only order totals are read, run Mosaic tile OCR to hunt unit prices',
+      'Still free & on-device',
+    ],
+  },
   {
     version: '1.32.3',
     date: '2026-07-31',

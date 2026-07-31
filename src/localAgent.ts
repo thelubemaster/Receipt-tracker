@@ -176,6 +176,8 @@ export async function runOnDeviceReceiptAgent(
     disabledAis?: import('./aiRoster').AiId[]
     rejected?: import('./agents/retryFeedback').RejectedScanSnapshot
     reliability?: Partial<Record<import('./aiRoster').AiId, number>>
+    /** Multi-page PDF page images for per-page OCR */
+    pageBlobs?: Blob[]
   },
 ): Promise<LocalAgentResult> {
   return runMultiAgentReceiptPipeline(imageBlob, onProgress, options)

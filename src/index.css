@@ -1165,10 +1165,11 @@ a {
 }
 
 .receipt-preview-sm {
-  max-height: 140px;
+  max-height: 160px;
   min-height: 80px;
   width: 100%;
-  object-fit: cover;
+  /* contain — never crop the bottom of multi-page PDF previews */
+  object-fit: contain;
   margin-bottom: 10px;
   border-radius: 12px;
   background: #1a1e28;
@@ -1177,14 +1178,42 @@ a {
 
 .receipt-preview {
   width: 100%;
-  max-height: 280px;
+  /* Tall multi-page PDFs: scroll inside the frame so page 2 / prices stay visible */
+  max-height: min(70vh, 520px);
   min-height: 140px;
   object-fit: contain;
+  object-position: top center;
   border-radius: var(--radius);
   background: #1a1e28;
   border: 1px solid var(--border);
   margin-bottom: 14px;
   box-shadow: var(--shadow-soft);
+  display: block;
+}
+
+/* Scrollable frame when the image is taller than the viewport (full PDF stitch) */
+.receipt-preview-scroll {
+  width: 100%;
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius);
+  background: #1a1e28;
+  border: 1px solid var(--border);
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-soft);
+}
+.receipt-preview-scroll .receipt-preview,
+.receipt-preview-scroll img {
+  max-height: none;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  object-position: top center;
+  margin-bottom: 0;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
   display: block;
 }
 
