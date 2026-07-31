@@ -358,14 +358,125 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
 }
 
 /**
- * When we know product *names* but not reliable unit prices, still list each item.
- * Split subtotal/total evenly (last line absorbs rounding) so math still closes.
+ * Hunt unit prices that aren't order totals / tax / shipping.
+ * Used when product *names* are clear but Ledger never attached a price.
  */
-export function itemsFromNamesWithSplit(
+export function extractCandidateUnitPrices(
+  ocrText: string,
+  opts?: { grandTotal?: number | null; subtotal?: number | null; count?: number },
+): number[] {
+  const grand = opts?.grandTotal ?? null
+  const sub = opts?.subtotal ?? null
+  const text = normalizeOcrText(stripOrderIds(ocrText || ''))
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+
+  const skip =
+    /\b(order\s*summary|order\s*placed|items?\)?\s*subtotal|sub[\s\-]*total|grand\s*total|total\s*before|estimated\s*tax|shipping|handling|payment\s*method|mastercard|visa|amount\s*due|balance\s*due)\b/i
+
+  const out: number[] = []
+  for (const line of lines) {
+    if (skip.test(line)) continue
+    // Skip pure quantity / servings lines without a $ amount signal
+    if (/\b(servings?|capsules?|tablets?|softgels?)\b/i.test(line) && !/\$/.test(line)) {
+      continue
+    }
+    for (const a of parseMoneyTokens(line, { grandTotal: grand })) {
+      if (a < 0.5) continue
+      if (grand != null && nearly(a, grand)) continue
+      if (sub != null && nearly(a, sub) && a > 5) continue
+      if (grand != null && a > grand + 0.05) continue
+      if (sub != null && a > sub + 0.05) continue
+      // Drop whole-dollar OCR ghosts like 100 / 1000 with no cents when budget is xx.00 small
+      if (grand != null && grand < 200 && a >= 100 && Math.abs(a - Math.round(a)) < 0.001) continue
+      out.push(a)
+    }
+  }
+
+  // De-dupe multi-page repeats: keep first N unique-ish sequence
+  const deduped: number[] = []
+  for (const p of out) {
+    const last = deduped[deduped.length - 1]
+    if (last != null && nearly(last, p, 0.02)) continue
+    // Same price appearing many times (page repeats) — allow one copy per product later
+    deduped.push(p)
+  }
+
+  const want = opts?.count
+  if (want != null && want > 0 && deduped.length > want) {
+    // Prefer a window of `want` consecutive prices that sum ≈ subtotal/total
+    const budget = sub ?? grand
+    if (budget != null) {
+      let best: number[] | null = null
+      let bestDiff = Infinity
+      for (let i = 0; i <= deduped.length - want; i++) {
+        const slice = deduped.slice(i, i + want)
+        const sum = roundMoney(slice.reduce((s, x) => s + x, 0))
+        const diff = Math.abs(sum - budget)
+        if (diff < bestDiff) {
+          bestDiff = diff
+          best = slice
+        }
+      }
+      if (best && bestDiff <= Math.max(0.5, budget * 0.05)) return best
+    }
+    return deduped.slice(0, want)
+  }
+  return deduped
+}
+
+export type NamePriceAssign = {
+  items: ReceiptLineItem[]
+  /** true when amounts are even-split placeholders, not real unit prices */
+  pricesEstimated: boolean
+  note: string
+}
+
+/**
+ * Attach real unit prices when OCR has them; otherwise even-split the budget
+ * and mark the result as estimated so the user knows to edit.
+ */
+export function itemsFromNamesWithPrices(
   names: string[],
   budget: number,
-): ReceiptLineItem[] {
-  if (!names.length || budget <= 0) return []
+  unitPrices?: number[] | null,
+): NamePriceAssign {
+  if (!names.length || budget <= 0) {
+    return { items: [], pricesEstimated: false, note: '' }
+  }
+
+  const prices = (unitPrices || []).filter((p) => p > 0 && p <= budget + 0.05)
+  if (prices.length === names.length) {
+    const sum = roundMoney(prices.reduce((s, p) => s + p, 0))
+    if (nearly(sum, budget, Math.max(0.5, budget * 0.06))) {
+      const items = names.map((name, i) => {
+        const { categoryId } = categorizeText(name)
+        return {
+          id: `reason-name-${i}`,
+          description: name,
+          amount: roundMoney(prices[i]),
+          categoryId,
+        }
+      })
+      // Absorb penny drift on last line
+      const drift = roundMoney(budget - sumProducts(items))
+      if (Math.abs(drift) >= 0.01 && items.length) {
+        items[items.length - 1] = {
+          ...items[items.length - 1],
+          amount: roundMoney(items[items.length - 1].amount + drift),
+        }
+      }
+      return {
+        items,
+        pricesEstimated: false,
+        note: 'Unit prices read from OCR and checked against subtotal',
+      }
+    }
+  }
+
+  // Even split — honest placeholder when unit prices are missing/garbled
   const n = names.length
   const base = roundMoney(Math.floor((budget * 100) / n) / 100)
   const items: ReceiptLineItem[] = []
@@ -381,7 +492,19 @@ export function itemsFromNamesWithSplit(
       categoryId,
     })
   }
-  return items
+  return {
+    items,
+    pricesEstimated: true,
+    note: `Unit prices not readable in OCR — even-split $${budget.toFixed(2)} across ${n} items (edit if you know the real prices)`,
+  }
+}
+
+/** @deprecated use itemsFromNamesWithPrices */
+export function itemsFromNamesWithSplit(
+  names: string[],
+  budget: number,
+): ReceiptLineItem[] {
+  return itemsFromNamesWithPrices(names, budget).items
 }
 
 /**
@@ -471,19 +594,37 @@ export function resolveFromOcrConstraints(
     }
   }
 
-  // 3b) Named products without reliable unit prices (common on Amazon PDF OCR)
+  // 3b) Named products — attach real unit prices when OCR has them; else even-split
   const productNames = extractProductNamesFromOcr(text)
   const budget = subtotal ?? total
+  let pricesEstimated = false
+  let priceNote = ''
   const needNameExpand =
     productNames.length >= 2 &&
     budget != null &&
     budget > 0 &&
     (products.length === 0 ||
       products.length === 1 ||
-      (products.length === 1 && total != null && nearly(products[0].amount, total)))
+      (products.length === 1 && total != null && nearly(products[0].amount, total)) ||
+      // Engine found rows but all amounts equal total / missing variety
+      (products.length >= 2 &&
+        products.every((p) => total != null && nearly(p.amount, total / products.length, 0.5)) &&
+        extractCandidateUnitPrices(text, {
+          grandTotal: total,
+          subtotal,
+          count: productNames.length,
+        }).length === productNames.length))
 
-  if (needNameExpand) {
-    products = itemsFromNamesWithSplit(productNames, budget)
+  if (needNameExpand && budget != null) {
+    const candidates = extractCandidateUnitPrices(text, {
+      grandTotal: total,
+      subtotal,
+      count: productNames.length,
+    })
+    const assigned = itemsFromNamesWithPrices(productNames, budget, candidates)
+    products = assigned.items
+    pricesEstimated = assigned.pricesEstimated
+    priceNote = assigned.note
   } else if (
     products.length === 0 &&
     total != null &&
@@ -567,7 +708,14 @@ export function resolveFromOcrConstraints(
   if (tax === 0 || (tax != null && tax < (total ?? 99) * 0.3)) confidence += 0.05
   const pSum = sumProducts(lineItems)
   if (total != null && pSum > 0 && pSum <= total * 1.15) confidence += 0.1
+  // Even-split placeholders must not look as confident as real unit prices
+  if (pricesEstimated) confidence = Math.min(confidence, 0.72)
   confidence = Math.min(0.94, confidence)
+
+  const notesParts = [
+    `Reasoner · conf ${Math.round(confidence * 100)}%`,
+    priceNote || null,
+  ].filter(Boolean)
 
   return {
     date,
@@ -575,23 +723,32 @@ export function resolveFromOcrConstraints(
     amount: total,
     description,
     categoryId,
-    notes: `Reasoner · conf ${Math.round(confidence * 100)}%`,
+    notes: notesParts.join(' · '),
     lineItems,
     subtotal: subtotal ?? (total != null && tax === 0 ? total : null),
     tax,
     source: 'on-device',
     confidence,
     rawText: text,
-    agentReport: 'Receipt reasoner: constraint re-solve from OCR',
+    agentReport: [
+      'Receipt reasoner: constraint re-solve from OCR',
+      priceNote ? `PRICE: ${priceNote}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n'),
     aisUsed: ['arbiter'],
-    activeAiLabel: 'Reasoner · re-solved from OCR',
+    activeAiLabel: pricesEstimated
+      ? 'Reasoner · products listed (prices estimated)'
+      : 'Reasoner · re-solved from OCR',
     fieldSources: {
       primary: 'arbiter',
       total: 'cashier',
       vendor: 'clerk',
       category: 'ledger',
       date: 'clerk',
-      answerLabel: 'Reasoner (self-check + re-solve)',
+      answerLabel: pricesEstimated
+        ? 'Reasoner (products OK · unit prices estimated)'
+        : 'Reasoner (self-check + re-solve)',
     },
   }
 }

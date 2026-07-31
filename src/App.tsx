@@ -1828,6 +1828,39 @@ function ScanScreen(props: {
             setProgress(p.progress)
           },
         })
+        // Hybrid: merge any PDF text layer into the OCR dump and re-reason.
+        // Multi-column Amazon PDFs often OCR product names but drop unit prices;
+        // the embedded layer (when present) can supply missing $ amounts.
+        if (doc.embeddedText && doc.embeddedText.trim().length > 40) {
+          try {
+            const { reasonAboutReceipt } = await import('./agents/receiptReasoner')
+            const merged = `${doc.embeddedText.trim()}\n\n--- OCR ---\n${suggestion.rawText || ''}`
+            const reasoned = await reasonAboutReceipt(
+              {
+                ...suggestion,
+                source: 'on-device',
+                confidence: suggestion.confidence ?? 0.5,
+                rawText: merged,
+              },
+              merged,
+              { allowLlm: false },
+            )
+            if (reasoned.repaired || reasoned.result.lineItems.length > (suggestion.lineItems?.length || 0)) {
+              suggestion = {
+                ...reasoned.result,
+                source: 'on-device',
+                aisUsed: suggestion.aisUsed,
+              }
+            } else {
+              suggestion = {
+                ...suggestion,
+                rawText: merged,
+              }
+            }
+          } catch {
+            /* keep OCR-only result */
+          }
+        }
         if (doc.kind === 'pdf-scan' && doc.pageCount && doc.pageCount > 1) {
           suggestion = {
             ...suggestion,
@@ -1835,6 +1868,7 @@ function ScanScreen(props: {
             agentReport: [
               suggestion.agentReport,
               `Source: PDF (${doc.pageCount} pages rendered for OCR).`,
+              doc.embeddedText ? 'Merged PDF text layer with OCR for prices/names.' : null,
             ]
               .filter(Boolean)
               .join('\n'),

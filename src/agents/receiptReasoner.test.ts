@@ -119,8 +119,27 @@ describe('receipt reasoner (figure it out)', () => {
     const sum = products.reduce((s, i) => s + i.amount, 0)
     expect(sum).toBeCloseTo(93, 1)
     expect(products.every((i) => i.amount > 0 && i.amount < 93)).toBe(true)
-    // Even split of $93 → ~$23.25 each
+    // Even split of $93 → ~$23.25 each (placeholder — OCR has no unit prices)
     expect(products.every((i) => i.amount >= 23 && i.amount <= 24)).toBe(true)
+    expect(fixed.notes || fixed.agentReport || '').toMatch(/even-?split|not readable|estimated/i)
+    expect(fixed.confidence).toBeLessThanOrEqual(0.75)
+  })
+
+  it('uses real unit prices when OCR has them and they sum to subtotal', () => {
+    const withPrices = `
+Order Summary
+Items SUBTOTAL: $100.00
+GRAND TOTAL: $100.00
+THORNE - Magnesium CitraMate $26.00
+THORNE - Vitamin D-5,000 $24.00
+THORNE - Vitamin K $25.00
+THORNE - Zinc Bisglycinate 30 mg $25.00
+`
+    const fixed = resolveFromOcrConstraints(withPrices, null)
+    const products = fixed.lineItems.filter((i) => !/shipping|fee/i.test(i.description))
+    expect(products.length).toBe(4)
+    expect(products.map((p) => p.amount).sort((a, b) => a - b)).toEqual([24, 25, 25, 26])
+    expect(fixed.notes || '').not.toMatch(/even-?split/i)
   })
 
   it('flags single-line collapse when OCR has many products', () => {

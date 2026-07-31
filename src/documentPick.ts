@@ -56,9 +56,19 @@ function isEmbeddedTextUseful(text: string): boolean {
   // Need money-like tokens OR total/invoice structure
   const money = (t.match(/\d+[.,]\d{2}/g) || []).length
   const hasInvoiceWords =
-    /\b(invoice|total|amount\s+due|subtotal|tax|bill|receipt|qty|quantity)\b/i.test(t)
+    /\b(invoice|total|amount\s+due|subtotal|tax|bill|receipt|qty|quantity|order\s+summary|grand\s+total)\b/i.test(
+      t,
+    )
+  // Brand – Product catalog lines (Amazon / marketplace PDFs)
+  const brandLines = (text.match(/^[A-Z][A-Za-z0-9&.']{2,20}\s*[-–]\s*[A-Za-z]/gm) || [])
+    .length
   // Prefer structured docs; scoreOcrText also works on plain text dumps
-  return (money >= 1 && hasInvoiceWords) || money >= 2 || scoreOcrText(t) >= 25
+  return (
+    (money >= 1 && hasInvoiceWords) ||
+    money >= 2 ||
+    scoreOcrText(t) >= 25 ||
+    (brandLines >= 2 && money >= 1)
+  )
 }
 
 async function loadPdfJs() {
@@ -282,8 +292,9 @@ export async function normalizePickedDocument(
         width: pdf.width,
         height: pdf.height,
         kind: usefulText ? 'pdf-text' : 'pdf-scan',
-        embeddedText: usefulText ? pdf.embeddedText : undefined,
-        layoutLines: usefulText ? pdf.layoutLines : undefined,
+        // Always keep embedded text when present so OCR scans can merge it for prices
+        embeddedText: pdf.embeddedText?.trim() ? pdf.embeddedText : undefined,
+        layoutLines: pdf.layoutLines?.length ? pdf.layoutLines : undefined,
         pageCount: pdf.pageCount,
         fileName: name,
       }

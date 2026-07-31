@@ -29,6 +29,20 @@ export function stripOrderIds(text: string): string {
     .replace(/\b\d{3}[\s.]\d{7}[\s.]\d{7}\b/g, ' ')
 }
 
+/**
+ * Recover common OCR money garbling on multi-column PDFs:
+ *   S24.99 → $24.99   ($ read as S)
+ *   524.99 with $ nearby is handled elsewhere
+ */
+export function recoverGarbledMoney(text: string): string {
+  return (text || '')
+    // $ misread as S before amount: S12.99 / S 12.99
+    .replace(/\bS\s*(\d{1,4}[.,]\d{2})\b/g, '$$$1')
+    // $ misread as 5 before amount when next to product column: rare, skip
+    // Bare "USD 12.99"
+    .replace(/\bUSD\s*(\d{1,4}[.,]\d{2})\b/gi, '$$$1')
+}
+
 /** True when a number is almost certainly not a product price on a normal receipt. */
 export function isImplausibleMoney(
   n: number,
@@ -54,7 +68,7 @@ export function parseMoneyTokens(
   opts?: { grandTotal?: number | null },
 ): number[] {
   const amounts: number[] = []
-  const cleaned = stripOrderIds(normalizeMoneyNoise(text || ''))
+  const cleaned = stripOrderIds(recoverGarbledMoney(normalizeMoneyNoise(text || '')))
   // Prefer $ amounts; also allow plain d.dd without $ (thermal receipts).
   // No lookbehind — older Android WebViews still need this path.
   const re = /\$\s*(-?\d{1,5}(?:[.,]\d{3})*(?:[.,]\d{2}))|([^0-9\-.]|^)(-?\d{1,4}[.,]\d{2})(?![0-9\-])/g
@@ -101,7 +115,7 @@ export function lastMoneyOnLine(
  * multi-column PDF OCR where "SHIPPING $0.00 … TOTAL $93.00" share a line.
  */
 export function moneyAfterLabel(line: string, labelRe: RegExp): number | null {
-  const cleaned = stripOrderIds(normalizeMoneyNoise(line || ''))
+  const cleaned = stripOrderIds(recoverGarbledMoney(normalizeMoneyNoise(line || '')))
   const m = cleaned.match(labelRe)
   if (!m || m.index == null) return null
   const after = cleaned.slice(m.index + m[0].length)

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.32.2'
+export const APP_VERSION = '1.32.3'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,18 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.32.3',
+    date: '2026-07-31',
+    title: 'Real unit prices when OCR has them; honest even-split when not',
+    changes: [
+      'If unit prices appear next to products and sum to the subtotal, use those (not equal $ splits)',
+      'When prices are missing from OCR, still list every product but mark amounts as estimated even-split',
+      'Lower confidence + clear notes so you know to edit real prices',
+      'PDF scans merge any embedded text layer with OCR to recover missing $ amounts',
+      'Recover common OCR money glitches ($ misread as S)',
+    ],
+  },
   {
     version: '1.32.2',
     date: '2026-07-31',
