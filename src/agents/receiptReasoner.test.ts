@@ -142,6 +142,93 @@ THORNE - Zinc Bisglycinate 30 mg $25.00
     expect(fixed.notes || '').not.toMatch(/even-?split/i)
   })
 
+  it('pairs mosaic unit prices to THORNE titles and fills missing zinc price', async () => {
+    // Real-world 1.32.4 dump shape: prices under titles; zinc has no $ in OCR
+    const mosaicOcr = `
+Order Summary
+Order placed May 27, 2026
+ITEM(s) SUBTOTAL:
+GRAND TOTAL:
+$93.00
+$0.00
+THORNE - Magnesium CitraMate - Magnesium Citr
+Supplement - Supports Heart Health, Skeletal Mu:
+Lung Function, Bone Density & More* - Third-Part:
+Sold by: Pattern.
+$22.00
+THORNE - Vitamin D-5,000 - Vitamin D3 Supplem
+Healthy Bones, Teeth & Muscles, Plus Cardiovascul
+$20.00
+THORNE - Vitamin K - Vitamins K1 and K2 (as MK-
+Capsule Supplement - Supports Strong Bones* - C
+$31.00
+THORNE - Zinc Bisglycinate 30 mg - Highly Absort
+Supplement - Supports Immune System, Eye, Skin
+`
+    const marketingDraft: LocalAgentResult = {
+      date: '2026-05-27',
+      vendor: 'Amazon',
+      amount: 93,
+      description: 'bad',
+      categoryId: 'windows',
+      notes: '',
+      lineItems: [
+        {
+          id: '1',
+          description: 'Supplement - Supports Heart Health, Skeletal Mu',
+          amount: 22,
+          categoryId: 'misc',
+        },
+        {
+          id: '2',
+          description: 'Third-Party Certified - 90 THORNE - Vitamin D',
+          amount: 20,
+          categoryId: 'misc',
+        },
+        {
+          id: '3',
+          description: 'ardiovascular & Immune uten, Dairy & Soy-Free',
+          amount: 31,
+          categoryId: 'hardware-and-fasteners',
+        },
+      ],
+      subtotal: null,
+      tax: null,
+      source: 'on-device',
+      confidence: 0.9,
+      rawText: mosaicOcr,
+      agentReport: 'bad marketing names',
+      aisUsed: ['mosaic'],
+    }
+
+    const c = critiqueParse(marketingDraft, mosaicOcr)
+    expect(c.ok).toBe(false)
+    expect(
+      c.issues.some((i) =>
+        ['marketing-as-product', 'missing-line-items', 'product-sum-short'].includes(i.code),
+      ),
+    ).toBe(true)
+
+    const { result, repaired } = await reasonAboutReceipt(marketingDraft, mosaicOcr, {
+      allowLlm: false,
+    })
+    expect(repaired).toBe(true)
+    const prods = result.lineItems.filter((i) => !/ship|fee/i.test(i.description))
+    expect(prods.length).toBe(4)
+    const blob = prods.map((p) => p.description).join(' ').toLowerCase()
+    expect(blob).toMatch(/magnesium|citramate/)
+    expect(blob).toMatch(/vitamin\s*d/)
+    expect(blob).toMatch(/vitamin\s*k/)
+    expect(blob).toMatch(/zinc/)
+    // Should not be pure marketing blurbs
+    expect(prods.every((p) => /thorne/i.test(p.description))).toBe(true)
+    const sum = prods.reduce((s, i) => s + i.amount, 0)
+    expect(sum).toBeCloseTo(93, 1)
+    // Known mosaic prices present
+    expect(prods.some((p) => Math.abs(p.amount - 22) < 0.02)).toBe(true)
+    expect(prods.some((p) => Math.abs(p.amount - 31) < 0.02)).toBe(true)
+  })
+
   it('flags single-line collapse when OCR has many products', () => {
     const collapsed: LocalAgentResult = {
       ...badDraft(),

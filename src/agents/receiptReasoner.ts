@@ -184,15 +184,50 @@ export function critiqueParse(
     })
   }
 
-  // Many named products in OCR but only 0–1 line items → incomplete catalog
+  // Many named products in OCR but fewer clean line items → incomplete catalog
   const named = extractProductNamesFromOcr(ocr)
-  if (named.length >= 3 && prods.length <= 1) {
+  if (named.length >= 3 && prods.length < named.length) {
     issues.push({
       code: 'missing-line-items',
-      severity: 'fatal',
+      severity: prods.length <= 1 || named.length - prods.length >= 1 ? 'fatal' : 'warn',
       message: `OCR lists ~${named.length} products (${named
         .slice(0, 3)
         .join('; ')}${named.length > 3 ? '…' : ''}) but parse only has ${prods.length} line(s)`,
+    })
+  }
+
+  // Marketing blurb as “product” when Brand – Product rows exist in OCR
+  const badNames = prods.filter(
+    (p) =>
+      PRODUCT_MARKETING.test((p.description || '').trim()) ||
+      /^(third[-\s]?party|lung\s*function|ardiovascular|uten,|healthy bones)/i.test(
+        (p.description || '').trim(),
+      ) ||
+      (!/\s[-–]\s/.test(p.description || '') &&
+        (p.description || '').length > 40 &&
+        !/^[A-Z]{3,16}\b/.test(p.description || '')),
+  )
+  if (named.length >= 2 && badNames.length >= Math.max(1, Math.ceil(prods.length / 2))) {
+    issues.push({
+      code: 'marketing-as-product',
+      severity: 'fatal',
+      message: `Line items look like marketing blurbs, not product titles (${badNames.length}/${prods.length})`,
+    })
+  }
+
+  // Products under total with more named SKUs → missing price/row
+  if (
+    total != null &&
+    named.length >= 3 &&
+    pSum > 0 &&
+    pSum < total - 1 &&
+    pSum < total * 0.92 &&
+    fee + ship + (tax ?? 0) < 1
+  ) {
+    issues.push({
+      code: 'product-sum-short',
+      severity: 'fatal',
+      message: `Products sum $${pSum} but total is $${total} — missing ~$${roundMoney(total - pSum)} (another product or price)`,
     })
   }
 
@@ -358,6 +393,91 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
 }
 
 /**
+ * Walk OCR top-to-bottom: Brand – Product title, then the next unit price
+ * before the next brand line (Amazon multi-column often puts $ under the title).
+ */
+export function extractNamedProductsWithPrices(
+  ocrText: string,
+  opts?: { grandTotal?: number | null; subtotal?: number | null },
+): Array<{ name: string; price: number | null }> {
+  const grand = opts?.grandTotal ?? null
+  const sub = opts?.subtotal ?? null
+  const text = normalizeOcrText(stripOrderIds(ocrText || ''))
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) =>
+      l
+        .replace(/^[\s=\-~•·|*~]+/, '')
+        .replace(/^[a-z]{1,3}[=:\s]+/i, '')
+        .trim(),
+    )
+    .filter((l) => l.length >= 4)
+
+  const brandRe =
+    /^([A-Z][A-Za-z0-9&.']{2,24})\s*[-–]\s*([A-Za-z0-9][\w\s,&'/\-+.%()]{2,90})/
+  const skipBrand =
+    /^(ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED|RETURN|RETUM|SOLD|YOUR|UNITED|PACKAGE|ITEM)/i
+
+  type Row = { name: string; price: number | null; id: string }
+  const rows: Row[] = []
+  let current: Row | null = null
+
+  const flush = () => {
+    if (current) {
+      rows.push(current)
+      current = null
+    }
+  }
+
+  for (const line of lines) {
+    if (PRODUCT_LINE_SKIP.test(line) && !brandRe.test(line)) continue
+
+    const bm = line.match(brandRe)
+    if (bm && !skipBrand.test(bm[1])) {
+      const cleaned = cleanBrandProductTitle(bm[1], bm[2])
+      if (cleaned) {
+        flush()
+        const id = productIdentityKey(cleaned)
+        // Skip multi-page duplicate of same product
+        if (rows.some((r) => r.id === id)) {
+          current = null
+          continue
+        }
+        current = { name: cleaned, price: null, id }
+        // Price on same line as title?
+        const same = parseMoneyTokens(line, { grandTotal: grand }).filter(
+          (a) =>
+            a >= 0.5 &&
+            (grand == null || (!nearly(a, grand) && a <= grand + 0.05)) &&
+            (sub == null || !nearly(a, sub) || a < 5),
+        )
+        if (same.length) current.price = same[same.length - 1]
+        continue
+      }
+    }
+
+    if (!current) continue
+    if (PRODUCT_MARKETING.test(line) && !/\$/.test(line)) continue
+
+    const amts = parseMoneyTokens(line, { grandTotal: grand }).filter((a) => {
+      if (a < 0.5) return false
+      if (grand != null && nearly(a, grand)) return false
+      if (sub != null && nearly(a, sub) && a > 5) return false
+      if (grand != null && a > grand + 0.05) return false
+      if (grand != null && grand < 200 && a >= 100 && Math.abs(a - Math.round(a)) < 0.001)
+        return false
+      return true
+    })
+    if (amts.length && current.price == null) {
+      current.price = amts[0]
+    }
+  }
+  flush()
+
+  return rows.map(({ name, price }) => ({ name, price }))
+}
+
+/**
  * Hunt unit prices that aren't order totals / tax / shipping.
  * Used when product *names* are clear but Ledger never attached a price.
  */
@@ -437,14 +557,79 @@ export type NamePriceAssign = {
 /**
  * Attach real unit prices when OCR has them; otherwise even-split the budget
  * and mark the result as estimated so the user knows to edit.
+ *
+ * Also handles n products with n−1 prices: remainder = budget − sum goes on the
+ * product that has no price (common when the last column price is missed).
  */
 export function itemsFromNamesWithPrices(
   names: string[],
   budget: number,
   unitPrices?: number[] | null,
+  paired?: Array<{ name: string; price: number | null }> | null,
 ): NamePriceAssign {
   if (!names.length || budget <= 0) {
     return { items: [], pricesEstimated: false, note: '' }
+  }
+
+  // Prefer ordered pairs (name + price from OCR layout)
+  if (paired && paired.length >= 2) {
+    const rows = paired.filter((p) => names.some((n) => productIdentityKey(n) === productIdentityKey(p.name)) || names.includes(p.name))
+    const use = rows.length >= 2 ? rows : paired
+    if (use.length >= 2) {
+      const known = use.map((u) => u.price).filter((p): p is number => p != null && p > 0)
+      const knownSum = roundMoney(known.reduce((s, p) => s + p, 0))
+      const missingIdx = use.map((u, i) => (u.price == null || u.price <= 0 ? i : -1)).filter((i) => i >= 0)
+      let amounts = use.map((u) => (u.price != null && u.price > 0 ? roundMoney(u.price) : 0))
+
+      if (missingIdx.length === 1 && knownSum > 0 && knownSum < budget) {
+        const gap = roundMoney(budget - knownSum)
+        if (gap >= 0.5 && gap <= budget * 0.9) {
+          amounts[missingIdx[0]] = gap
+        }
+      } else if (missingIdx.length === 0 && nearly(knownSum, budget, Math.max(0.5, budget * 0.06))) {
+        // all priced and close
+      } else if (missingIdx.length > 1 && knownSum > 0 && knownSum < budget) {
+        // split remainder across missing
+        const gap = roundMoney(budget - knownSum)
+        if (gap >= 0.5) {
+          const each = roundMoney(Math.floor((gap * 100) / missingIdx.length) / 100)
+          let alloc = 0
+          missingIdx.forEach((idx, j) => {
+            amounts[idx] =
+              j === missingIdx.length - 1 ? roundMoney(gap - alloc) : each
+            alloc = roundMoney(alloc + amounts[idx])
+          })
+        }
+      }
+
+      const sum = roundMoney(amounts.reduce((s, a) => s + a, 0))
+      if (amounts.every((a) => a > 0) && nearly(sum, budget, Math.max(0.75, budget * 0.08))) {
+        const items = use.map((u, i) => {
+          const { categoryId } = categorizeText(u.name)
+          return {
+            id: `reason-pair-${i}`,
+            description: u.name,
+            amount: amounts[i],
+            categoryId,
+          }
+        })
+        const drift = roundMoney(budget - sumProducts(items))
+        if (Math.abs(drift) >= 0.01 && items.length) {
+          items[items.length - 1] = {
+            ...items[items.length - 1],
+            amount: roundMoney(items[items.length - 1].amount + drift),
+          }
+        }
+        const anyFilled = missingIdx.length > 0
+        return {
+          items,
+          pricesEstimated: anyFilled,
+          note: anyFilled
+            ? `Unit prices from OCR; filled $${roundMoney(budget - knownSum).toFixed(2)} gap on product(s) with no price so total closes`
+            : 'Unit prices paired with product titles from OCR',
+        }
+      }
+    }
   }
 
   const prices = (unitPrices || []).filter((p) => p > 0 && p <= budget + 0.05)
@@ -472,6 +657,29 @@ export function itemsFromNamesWithPrices(
         items,
         pricesEstimated: false,
         note: 'Unit prices read from OCR and checked against subtotal',
+      }
+    }
+  }
+
+  // n names, n-1 prices in order — put remainder on last product
+  if (prices.length === names.length - 1 && prices.length >= 1) {
+    const knownSum = roundMoney(prices.reduce((s, p) => s + p, 0))
+    const gap = roundMoney(budget - knownSum)
+    if (gap >= 0.5 && gap < budget && knownSum > 0) {
+      const all = [...prices, gap]
+      const items = names.map((name, i) => {
+        const { categoryId } = categorizeText(name)
+        return {
+          id: `reason-name-${i}`,
+          description: name,
+          amount: roundMoney(all[i]),
+          categoryId,
+        }
+      })
+      return {
+        items,
+        pricesEstimated: true,
+        note: `Unit prices from OCR for ${prices.length}/${names.length} items; last line filled to close $${budget.toFixed(2)} total`,
       }
     }
   }
@@ -524,15 +732,29 @@ export function resolveFromOcrConstraints(
   // 1) Lock grand total first (source of truth)
   const totals = runTotalsAgent(text)
   let total = totals.total
-  // Prefer explicit GRAND TOTAL lines
-  for (const line of lines) {
+  // Prefer explicit GRAND TOTAL — amount may be on the same line or the next line
+  // (Mosaic/Amazon PDF OCR often splits "GRAND TOTAL:" and "$93.00")
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
     if (/\bgrand\s*t[o0]tal\b/i.test(line)) {
-      const a = parseMoneyTokens(line)
+      let a = parseMoneyTokens(line)
+      if (!a.length && lines[i + 1]) a = parseMoneyTokens(lines[i + 1])
+      if (!a.length && lines[i + 2]) a = parseMoneyTokens(lines[i + 2])
       if (a.length) {
         total = a[a.length - 1]
         break
       }
     }
+  }
+  // Prefer draft total when OCR “total” is just one product price
+  if (
+    draft?.amount != null &&
+    total != null &&
+    draft.amount > total * 1.2 &&
+    /\bgrand\s*t[o0]tal\b/i.test(text) &&
+    parseMoneyTokens(text).some((a) => nearly(a, draft.amount!))
+  ) {
+    total = draft.amount
   }
   if (total == null && draft?.amount != null) total = draft.amount
 
@@ -542,8 +764,17 @@ export function resolveFromOcrConstraints(
   let shipping: number | null = null
   let fee: number | null = null
 
-  for (const line of lines) {
-    const amts = parseMoneyTokens(line, { grandTotal: total })
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    let amts = parseMoneyTokens(line, { grandTotal: total })
+    // Label-only lines: peek next line for amount
+    if (
+      !amts.length &&
+      /\b(sub[\s\-]*t[o0]tal|items?\)?\s*subtotal|estimated\s*t[a4]x|shipping|handl)/i.test(line) &&
+      lines[i + 1]
+    ) {
+      amts = parseMoneyTokens(lines[i + 1], { grandTotal: total })
+    }
     if (!amts.length) continue
     const minA = Math.min(...amts)
     if (/\bsub[\s\-]*t[o0]tal\b|\bitems?\)?\s*subtotal\b/i.test(line)) {
@@ -594,26 +825,42 @@ export function resolveFromOcrConstraints(
     }
   }
 
-  // 3b) Named products — attach real unit prices when OCR has them; else even-split
+  // 3b) Named products — pair Brand–Product titles with unit prices from OCR
   const productNames = extractProductNamesFromOcr(text)
+  const paired = extractNamedProductsWithPrices(text, {
+    grandTotal: total,
+    subtotal,
+  })
   const budget = subtotal ?? total
   let pricesEstimated = false
   let priceNote = ''
+
+  const draftLooksMarketing =
+    products.length > 0 &&
+    products.filter(
+      (p) =>
+        PRODUCT_MARKETING.test((p.description || '').trim()) ||
+        (!/\b[A-Z]{3,16}\s*[-–]/.test(p.description || '') &&
+          /supplement|supports|certified|healthy bones|lung function/i.test(
+            p.description || '',
+          )),
+    ).length >= Math.max(1, Math.ceil(products.length / 2))
+
   const needNameExpand =
     productNames.length >= 2 &&
     budget != null &&
     budget > 0 &&
     (products.length === 0 ||
       products.length === 1 ||
+      products.length < productNames.length ||
+      draftLooksMarketing ||
+      (total != null &&
+        sumProducts(products) > 0 &&
+        sumProducts(products) < total - 1 &&
+        sumProducts(products) < total * 0.92) ||
       (products.length === 1 && total != null && nearly(products[0].amount, total)) ||
-      // Engine found rows but all amounts equal total / missing variety
       (products.length >= 2 &&
-        products.every((p) => total != null && nearly(p.amount, total / products.length, 0.5)) &&
-        extractCandidateUnitPrices(text, {
-          grandTotal: total,
-          subtotal,
-          count: productNames.length,
-        }).length === productNames.length))
+        products.every((p) => total != null && nearly(p.amount, total / products.length, 0.5))))
 
   if (needNameExpand && budget != null) {
     const candidates = extractCandidateUnitPrices(text, {
@@ -621,10 +868,26 @@ export function resolveFromOcrConstraints(
       subtotal,
       count: productNames.length,
     })
-    const assigned = itemsFromNamesWithPrices(productNames, budget, candidates)
-    products = assigned.items
-    pricesEstimated = assigned.pricesEstimated
-    priceNote = assigned.note
+    const assigned = itemsFromNamesWithPrices(
+      productNames,
+      budget,
+      candidates,
+      paired.length >= 2 ? paired : null,
+    )
+    // Prefer paired/expanded if it lists more real products or closes math better
+    const newSum = sumProducts(assigned.items)
+    const oldSum = sumProducts(products)
+    const better =
+      assigned.items.length > products.length ||
+      draftLooksMarketing ||
+      (total != null &&
+        Math.abs(newSum - total) < Math.abs(oldSum - total) - 0.5) ||
+      products.length === 0
+    if (better && assigned.items.length >= 2) {
+      products = assigned.items
+      pricesEstimated = assigned.pricesEstimated
+      priceNote = assigned.note
+    }
   } else if (
     products.length === 0 &&
     total != null &&

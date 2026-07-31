@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.32.4'
+export const APP_VERSION = '1.32.5'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.32.5',
+    date: '2026-07-31',
+    title: 'Pair unit prices to product titles (not marketing blurbs)',
+    changes: [
+      'Attach $22 / $20 / $31 style prices to Brand – Product rows from Mosaic OCR',
+      'Reject marketing blurbs as line items when real product titles exist',
+      'If one product has no price, fill the gap so lines sum to the grand total',
+      'GRAND TOTAL on its own line + $ amount on the next line is read correctly',
+    ],
+  },
   {
     version: '1.32.4',
     date: '2026-07-31',
