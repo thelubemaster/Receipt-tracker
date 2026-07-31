@@ -68,9 +68,9 @@ jobs:
             \"apkUrl\": \"${APK}\"
           }" > dist/app-update.json
           printf '%s\n' "{
-            \"baseUrl\": \"${PAGES}\",
+            \"baseUrl\": \"${REPO}/releases/latest/download\",
             \"version\": \"${V}\",
-            \"source\": \"github-pages\",
+            \"source\": \"github-releases\",
             \"updatedAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
           }" > dist/update-server.json
           printf '%s\n' "{
