@@ -51,17 +51,21 @@ jobs:
           (
             cd dist
             rm -f downloads/web-update.zip
+            # Never embed downloads/ (APK, install zips) inside the OTA bundle
             zip -qr downloads/web-update.zip . \
-              -x 'downloads/schoolie.apk' \
-              -x 'downloads/web-update.zip'
+              -x 'downloads/*' \
+              -x 'downloads/**'
           )
           REPO="https://github.com/thelubemaster/Receipt-tracker"
-          PAGES="https://thelubemaster.github.io/Receipt-tracker"
+          # Prefer Releases assets (Pages may be disabled). App also reads Releases API.
           APK="${REPO}/releases/latest/download/schoolie.apk"
+          WEB="${REPO}/releases/latest/download/web-update.zip"
           printf '%s\n' "{
             \"version\": \"${V}\",
-            \"url\": \"${PAGES}/downloads/web-update.zip\",
-            \"notes\": \"Schoolie v${V} from GitHub\"
+            \"url\": \"${WEB}\",
+            \"notes\": \"Schoolie v${V} — free on-device scan update\",
+            \"apkVersion\": \"${V}\",
+            \"apkUrl\": \"${APK}\"
           }" > dist/app-update.json
           printf '%s\n' "{
             \"baseUrl\": \"${PAGES}\",
@@ -140,8 +144,10 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  # Pages is optional — many installs only use GitHub Releases for OTA.
   pages:
     needs: web
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -161,8 +167,10 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
+  # Publish OTA even when the APK job fails (content updates do not need a new shell).
   release:
     needs: [web, apk]
+    if: ${{ always() && needs.web.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -170,12 +178,14 @@ jobs:
           name: schoolie-dist
           path: dist
 
-      - uses: actions/download-artifact@v4
+      - name: Download APK artifact if present
+        continue-on-error: true
+        uses: actions/download-artifact@v4
         with:
           name: schoolie-apk
           path: artifacts
 
-      - name: Publish GitHub Release (APK + OTA zip)
+      - name: Publish GitHub Release (OTA zip + APK when available)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.web.outputs.version }}
@@ -194,11 +204,11 @@ jobs:
             ---
             Also included: `web-update.zip` (OTA for already-installed APKs).
           files: |
-            artifacts/schoolie.apk
             dist/downloads/web-update.zip
             dist/app-update.json
             dist/install.json
-          fail_on_unmatched_files: true
+            artifacts/schoolie.apk
+          fail_on_unmatched_files: false
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
