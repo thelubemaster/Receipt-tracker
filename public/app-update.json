@@ -1,7 +1,7 @@
 {
-  "version": "1.31.3",
+  "version": "1.32.0",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Amazon PDF fix — no order-ID prices, tax not equal to total, vendor Amazon, order-placed date",
+  "notes": "Reasoner self-check: if the answer is impossible, re-solve from OCR (optional free LLM)",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

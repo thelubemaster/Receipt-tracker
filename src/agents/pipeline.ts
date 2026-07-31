@@ -1107,16 +1107,69 @@ export async function runMultiAgentReceiptPipeline(
     }
   }
 
+  // ── Reasoner: self-check + re-solve when the answer is impossible ──
+  // This is how the team “figures it out” — not store-specific hacks.
+  try {
+    onProgress?.({
+      stage: 'arbitrate',
+      progress: 0.996,
+      message: 'Reasoner checking if the answer is possible…',
+      aiId: 'arbiter',
+      aiName: 'Arbiter',
+    })
+    const { reasonAboutReceipt } = await import('./receiptReasoner')
+    const reasoned = await reasonAboutReceipt(final, councilText || final.rawText || '', {
+      allowLlm: true,
+      onProgress: (msg) =>
+        onProgress?.({
+          stage: 'arbitrate',
+          progress: 0.997,
+          message: msg.slice(0, 120),
+          aiId: 'arbiter',
+          aiName: 'Reasoner',
+        }),
+    })
+    if (reasoned.repaired) {
+      final = reasoned.result
+      actuallyRan.add('arbiter')
+    } else if (!reasoned.critique.ok) {
+      final = {
+        ...final,
+        agentReport: [
+          final.agentReport,
+          '---',
+          'REASONER: issues remain after checks',
+          ...reasoned.critique.issues.map((i) => `  · ${i.message}`),
+        ].join('\n'),
+      }
+    } else {
+      final = {
+        ...final,
+        agentReport: [
+          final.agentReport,
+          '---',
+          'REASONER: answer passes consistency checks',
+        ].join('\n'),
+      }
+    }
+  } catch (e) {
+    final.agentReport = [
+      final.agentReport,
+      `Reasoner skipped: ${e instanceof Error ? e.message : 'error'}`,
+    ].join('\n')
+  }
+
   final.source = 'on-device'
+  final.aisUsed = Array.from(actuallyRan)
 
   onProgress?.({
     stage: 'done',
     progress: 1,
     message: rejected?.marks
       ? 'Retry finished using your ✓/✗ marks…'
-      : 'On-device team finished (layout + consensus + memory)',
-    aiId: 'council',
-    aiName: 'Council',
+      : 'Scan finished (OCR + team + self-check reasoner)',
+    aiId: 'arbiter',
+    aiName: 'Reasoner',
   })
 
   return final

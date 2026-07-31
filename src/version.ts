@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.31.3'
+export const APP_VERSION = '1.32.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.32.0',
+    date: '2026-07-31',
+    title: 'Reasoner — scan self-checks and re-solves',
+    changes: [
+      'After every scan, Arbiter critiques whether the answer is *possible*',
+      'Impossible math (product ≫ total, fee=total, tax=total, garbage vendor) triggers a re-solve from OCR',
+      'Optional free language model repair when online (HF) if constraints alone are not enough',
+      'Goal: the team figures out broken parses — not one-off hardcodes per store',
+    ],
+  },
   {
     version: '1.31.3',
     date: '2026-07-31',

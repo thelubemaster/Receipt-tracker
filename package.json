@@ -1,7 +1,7 @@
 {
   "name": "schoolie-tracker",
   "private": true,
-  "version": "1.31.3",
+  "version": "1.32.0",
   "description": "Project Cost Tracker — free on-device receipts by project",
   "author": "Schoolie",
   "repository": {
