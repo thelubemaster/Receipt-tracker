@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.32.5'
+export const APP_VERSION = '1.32.6'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.32.6',
+    date: '2026-08-01',
+    title: 'Private-sale / Marketplace screenshots — less OCR soup',
+    changes: [
+      'Reject gibberish vendors like “NIN A HVBDARBM KARZ” (OCR soup, not a store)',
+      'Detect “I’m selling…” listings → Private sale · seller name when readable',
+      'Rebuild garbage product titles into a short listing description',
+      'Read dates like V26/2026 (7 misread as V) as 2026-07-26',
+    ],
+  },
   {
     version: '1.32.5',
     date: '2026-07-31',

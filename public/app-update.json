@@ -1,7 +1,7 @@
 {
-  "version": "1.32.5",
+  "version": "1.32.6",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Pair unit prices to product titles; fill missing product price to close total",
+  "notes": "Private-sale screenshots: reject OCR-soup vendors, clean listing titles",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

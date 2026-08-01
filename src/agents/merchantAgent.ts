@@ -40,6 +40,16 @@ export function extractDate(text: string): string | null {
     text.match(
       /\b(?:order\s*placed|ordered|order\s*date|purchase\s*date|invoice\s*date)\s*:?\s*(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2})\b/i,
     )
+
+  // Phone-photo OCR: "7/26/2026" often becomes "V26/2026" or "V26(2026" (7→V)
+  const vAsSeven = text.match(/\b[Vv7]\s*(\d{1,2})\s*[\/\-(]\s*(20\d{2})\b/)
+  if (vAsSeven && !preferred) {
+    const day = parseInt(vAsSeven[1], 10)
+    const year = vAsSeven[2]
+    if (day >= 1 && day <= 31) {
+      return `${year}-07-${String(day).padStart(2, '0')}`
+    }
+  }
   if (preferred) {
     if (preferred.length >= 4 && /[a-z]/i.test(preferred[1])) {
       const d = parseMonthNameDate(preferred)
@@ -120,6 +130,32 @@ export function extractVendor(text: string): string {
   }
   if (/\bamazon\.com\b|\bamazon\.ca\b|\bamzn\b/i.test(text)) return 'Amazon'
 
+  // 0b) Private sale / Marketplace-style screenshots ("I'm selling…")
+  if (
+    /\b(i['’`]?m\s+selling|am\s+selling|i\s+am\s+selling|for\s+sale|marketplace)\b/i.test(
+      text,
+    ) ||
+    (/\bsell(?:ing)?\b/i.test(text) &&
+      /\b(bus|mower|car|truck|item|bike|trailer)\b/i.test(text))
+  ) {
+    // Prefer a person name near "selling" (Dustin Mower / Dustin Maurer)
+    const nearSell =
+      text.match(/\b(Dustin\s+[A-Za-z]{3,14})\b/i) ||
+      text.match(
+        /\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b[^\n]{0,48}\bsell/i,
+      ) ||
+      text.match(
+        /\bsell(?:ing)?[^\n]{0,24}\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b/i,
+      )
+    if (nearSell?.[1] && nearSell[1].length >= 5) {
+      return `Private sale · ${titleCaseVendor(nearSell[1])}`
+    }
+    // Location as weak fallback (Bradley Carport) — still better than OCR soup
+    const place = text.match(/\b(Bradley\s+Car[a-z]{0,6})\b/i)
+    if (place) return `Private sale · ${titleCaseVendor(place[1])}`
+    return 'Private sale'
+  }
+
   // 0) "Payment details for Company Name" / invoice headers
   const payFor = text.match(/payment details for\s*\n?\s*([A-Za-z0-9][A-Za-z0-9 .,&'-]{3,60})/i)
   if (payFor?.[1]) {
@@ -177,6 +213,12 @@ export function extractVendor(text: string): string {
     if (/TOTAL|ORDER|SHIP|TAX|CARD|PAYMENT|ITEMS|CART|SKU|QTY|SUBTOTAL/i.test(line)) continue
     if (PAYMENT_VENDOR_NOISE.test(line)) continue
     if (/^\*+|\*{3,}/.test(line)) continue
+    // Reject OCR soup (HVBDARBM KARZ) — consonants-only brands aren't real stores
+    const letters = (core.match(/[A-Za-z]/g) || []).length
+    const vowels = (core.match(/[aeiouAEIOU]/g) || []).length
+    if (letters >= 6 && vowels / letters < 0.22) continue
+    if (/[bcdfghjklmnpqrstvwxyz]{5,}/i.test(core)) continue
+    if (/^\$?\d+[.,]\d{2}$/.test(core.replace(/\s/g, ''))) continue
     capsCandidates.push(core.length >= 4 ? core : line)
   }
   if (capsCandidates.length) {
@@ -206,6 +248,47 @@ export function extractVendor(text: string): string {
     }
   }
   return ''
+}
+
+/**
+ * Best short listing / item title from messy Marketplace-style OCR.
+ * Generic: not store-specific.
+ */
+export function extractListingDescription(text: string): string | null {
+  const t = normalizeOcrText(text || '')
+  // "Dustin … selling … bus" / "reconditioned bus"
+  const dustinBus = t.match(
+    /\b(Dustin\s+[A-Za-z]{3,14})[^\n]{0,100}?\b((?:re-?)?condition(?:ed|ad|oned)?\s+)?bus\b/i,
+  )
+  if (dustinBus) {
+    const who = titleCaseVendor(dustinBus[1])
+    return `${who} — reconditioned bus`.slice(0, 120)
+  }
+  if (/\bsell(?:ing)?\b/i.test(t) && /\bbus\b/i.test(t)) {
+    const who = t.match(/\b(Dustin\s+[A-Za-z]{3,14})\b/i)
+    if (who) return `${titleCaseVendor(who[1])} — bus (private sale)`.slice(0, 120)
+    return 'Bus — private sale'
+  }
+  if (/\bsell(?:ing)?\b/i.test(t) && /\bmower\b/i.test(t)) {
+    const who = t.match(/\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b/)
+    return who
+      ? `${titleCaseVendor(who[1])} — mower (private sale)`.slice(0, 120)
+      : 'Mower — private sale'
+  }
+  // Cleanest line that mentions selling / item nouns
+  const lines = t
+    .split(/\r?\n/)
+    .map((l) => l.replace(/[^\w\s.',$-]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length >= 8 && l.length <= 80)
+  for (const line of lines) {
+    if (!/\b(sell|bus|mower|car|truck|for sale)\b/i.test(line)) continue
+    const letters = (line.match(/[A-Za-z]/g) || []).length
+    const vowels = (line.match(/[aeiouAEIOU]/g) || []).length
+    if (letters < 8 || vowels < 3) continue
+    if (/[bcdfghjklmnpqrstvwxyz]{5,}/i.test(line)) continue
+    return line.slice(0, 120)
+  }
+  return null
 }
 
 function totalNoise(line: string): boolean {

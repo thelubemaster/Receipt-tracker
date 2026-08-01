@@ -24,7 +24,7 @@ import {
   roundMoney,
   stripOrderIds,
 } from './moneyParse'
-import { extractDate, extractVendor } from './merchantAgent'
+import { extractDate, extractListingDescription, extractVendor } from './merchantAgent'
 import { normalizeOcrText } from './normalizeOcrText'
 import type { LocalAgentResult } from './pipeline'
 import { runReceiptEngine } from './receiptEngine'
@@ -73,13 +73,48 @@ export function vendorQuality(v: string): number {
   if (/^[A-Z]?\d{2,6}$/i.test(s)) return 0 // S000, S200
   if (/^payer$|^bradley$|^payment/i.test(s)) return 0
   if (/visa|mastercard|amex|debit|chip/i.test(s)) return 0
+  // Never a money amount
+  if (/^\$?\d+[.,]\d{2}$/.test(s.replace(/\s/g, ''))) return 0
+  if (/^\d+[.,]\d{2}$/.test(s)) return 0
   const letters = (s.match(/[A-Za-z]/g) || []).length
   const vowels = (s.match(/[aeiouAEIOU]/g) || []).length
   if (letters < 3) return 0
+  // OCR soup: long consonant runs / near-vowel-free tokens (e.g. HVBDARBM KARZ)
+  const tokens = s.split(/\s+/).filter(Boolean)
+  let gibber = 0
+  for (const t of tokens) {
+    const tl = (t.match(/[A-Za-z]/g) || []).length
+    const tv = (t.match(/[aeiouAEIOU]/g) || []).length
+    if (tl >= 5 && tv === 0) gibber += 2
+    else if (tl >= 6 && tv / tl < 0.18) gibber += 2
+    else if (/[bcdfghjklmnpqrstvwxyz]{4,}/i.test(t) && tv <= 1) gibber += 1
+  }
+  if (gibber >= 2) return 0
+  if (gibber >= 1 && vowels < 3) return 1
   let score = letters + vowels * 2
   if (s.includes(' ')) score += 8
   if (letters >= 5 && vowels >= 2) score += 6
-  return score
+  // Prefer real-looking multi-word names over random CAPS
+  if (/^[A-Z]{2,}(\s+[A-Z]{2,}){2,}$/.test(s) && vowels / Math.max(1, letters) < 0.28) {
+    score -= 20
+  }
+  return Math.max(0, score)
+}
+
+/** How “readable” a product/description string is (0 = OCR soup). */
+export function descriptionQuality(d: string): number {
+  const s = (d || '').trim()
+  if (s.length < 3) return 0
+  if (vendorQuality(s) === 0 && /[bcdfghjklmnpqrstvwxyz]{4,}/i.test(s)) return 0
+  const letters = (s.match(/[A-Za-z]/g) || []).length
+  const vowels = (s.match(/[aeiouAEIOU]/g) || []).length
+  if (letters < 4) return 0
+  if (vowels / letters < 0.15 && letters > 12) return 0
+  let score = Math.min(40, letters) + vowels
+  if (/\b(selling|mower|bus|filter|oil|kit|amazon|thorne|vitamin|supplement|receipt|invoice)\b/i.test(s))
+    score += 15
+  if (/[|]{2,}|[\\]{2,}/.test(s)) score -= 10
+  return Math.max(0, score)
 }
 
 /**
@@ -161,6 +196,18 @@ export function critiqueParse(
       severity: vq === 0 ? 'fatal' : 'warn',
       message: `Vendor “${draft.vendor || ''}” looks like OCR noise, not a store name`,
     })
+  }
+
+  // Single line item that is OCR soup — re-solve for a cleaner title
+  if (prods.length === 1) {
+    const dq = descriptionQuality(prods[0].description || '')
+    if (dq < 12) {
+      issues.push({
+        code: 'garbage-description',
+        severity: 'fatal',
+        message: 'Product description looks like OCR garbage — rebuild from cleaner phrases',
+      })
+    }
   }
 
   // OCR says estimated tax 0 / shipping 0 but we invented large fees
@@ -923,7 +970,10 @@ export function resolveFromOcrConstraints(
   // 4) Vendor — pick best quality candidate from OCR, prefer draft if already good
   let vendor = draft?.vendor && vendorQuality(draft.vendor) >= 8 ? draft.vendor : extractVendor(text)
   if (vendorQuality(vendor) < 4) {
-    // Scan early lines for brand-like tokens
+    vendor = extractVendor(text)
+  }
+  if (vendorQuality(vendor) < 4) {
+    // Scan early lines for brand-like tokens (skip OCR soup)
     let best = ''
     let bestQ = 0
     for (const line of lines.slice(0, 40)) {
@@ -935,10 +985,50 @@ export function resolveFromOcrConstraints(
       }
     }
     if (bestQ >= 8) vendor = best.slice(0, 48)
+    else if (!vendor || vendorQuality(vendor) < 4) vendor = 'Unknown seller'
   }
 
   // 5) Date
   const date = extractDate(text) || draft?.date || new Date().toISOString().slice(0, 10)
+
+  // 5b) Clean listing / single-item description when lines are OCR soup
+  const listingDesc = extractListingDescription(text)
+  if (listingDesc && products.length <= 1 && total != null) {
+    const dq = products[0] ? descriptionQuality(products[0].description) : 0
+    if (dq < 18 || products.length === 0) {
+      const { categoryId: cat } = categorizeText(listingDesc)
+      products = [
+        {
+          id: 'reason-listing',
+          description: listingDesc,
+          amount: subtotal ?? total,
+          categoryId: cat,
+        },
+      ]
+    }
+  } else if (products.length === 1 && descriptionQuality(products[0].description) < 12) {
+    // Rebuild a shorter title from the least-gibberish OCR line
+    let bestLine = ''
+    let bestQ = 0
+    for (const line of lines) {
+      const q = descriptionQuality(line)
+      if (q > bestQ && line.length >= 6 && line.length <= 80 && !/^\$?\d+[.,]\d{2}$/.test(line)) {
+        bestQ = q
+        bestLine = line
+      }
+    }
+    if (bestLine && bestQ >= 12) {
+      const { categoryId: cat } = categorizeText(bestLine)
+      products = [
+        {
+          id: 'reason-clean',
+          description: bestLine.slice(0, 120),
+          amount: products[0].amount,
+          categoryId: cat,
+        },
+      ]
+    }
+  }
 
   const lineItems: ReceiptLineItem[] = [...products]
   if (shipping != null && shipping > 0) {
@@ -951,7 +1041,7 @@ export function resolveFromOcrConstraints(
   const categoryId: CategoryId =
     products.length > 0
       ? primaryCategoryFromItems(products)
-      : categorizeText(`${vendor} ${text.slice(0, 400)}`).categoryId
+      : categorizeText(`${vendor} ${listingDesc || text.slice(0, 400)}`).categoryId
 
   const description =
     products.length > 0
@@ -960,9 +1050,7 @@ export function resolveFromOcrConstraints(
           .slice(0, 6)
           .join('; ')
           .slice(0, 160)
-      : vendor
-        ? `Order — ${vendor}`
-        : 'Receipt'
+      : listingDesc || (vendor ? `Order — ${vendor}` : 'Receipt')
 
   // Confidence from how clean the constraints are
   let confidence = 0.55
