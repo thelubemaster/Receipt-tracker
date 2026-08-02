@@ -32,13 +32,16 @@ export function stripOrderIds(text: string): string {
 /**
  * Recover common OCR money garbling on multi-column PDFs:
  *   S24.99 → $24.99   ($ read as S)
- *   524.99 with $ nearby is handled elsewhere
+ *   7150.00 → $150.00  (leading 7/l glued on “$150.00” / “Loc 150.00”)
  */
 export function recoverGarbledMoney(text: string): string {
   return (text || '')
     // $ misread as S before amount: S12.99 / S 12.99
     .replace(/\bS\s*(\d{1,4}[.,]\d{2})\b/g, '$$$1')
-    // $ misread as 5 before amount when next to product column: rare, skip
+    // Leading 7/l/I glued onto a normal price: 7150.00 → 150.00, 7 150.00 → 150.00
+    .replace(/\b[7lI]\s*([1-9]\d{1,2}[.,]\d{2})\b/g, '$$$1')
+    // "Loc 150.00" / "foc 150.00" marketplace location price
+    .replace(/\b(?:loc|foc|lc)\s*[:=]?\s*\$?\s*([1-9]\d{0,3}[.,]\d{2})\b/gi, ' $$$1 ')
     // Bare "USD 12.99"
     .replace(/\bUSD\s*(\d{1,4}[.,]\d{2})\b/gi, '$$$1')
 }

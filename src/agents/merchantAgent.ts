@@ -1,4 +1,5 @@
 import { VENDOR_HINTS } from './keywords'
+import { parseMoneyTokens, recoverGarbledMoney } from './moneyParse'
 import { normalizeOcrText } from './normalizeOcrText'
 
 export type MerchantAgentResult = {
@@ -30,6 +31,20 @@ function parseMonthNameDate(m: RegExpMatchArray): string | null {
   return `${m[3]}-${mo}-${m[2].padStart(2, '0')}`
 }
 
+function isPlausibleIsoDate(iso: string): boolean {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return false
+  const y = parseInt(m[1], 10)
+  const mo = parseInt(m[2], 10)
+  const d = parseInt(m[3], 10)
+  if (y < 2000 || y > 2100) return false
+  if (mo < 1 || mo > 12) return false
+  if (d < 1 || d > 31) return false
+  // Reject impossible calendar days (2022-01-81 from CORE TRADE-IN OCR)
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+}
+
 export function extractDate(text: string): string | null {
   // Prefer "Order placed May 27,2026" / "Delivered May 28" over "Return window closed June 27"
   // Allow missing space after comma (common OCR: "May 27,2026")
@@ -41,13 +56,23 @@ export function extractDate(text: string): string | null {
       /\b(?:order\s*placed|ordered|order\s*date|purchase\s*date|invoice\s*date)\s*:?\s*(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2})\b/i,
     )
 
+  // Auto parts footer: "DATE 08/01/2026" or "DATE 08/01,3" + year nearby / "08/01/2026"
+  const storeDate =
+    text.match(/\bDATE\s*:?\s*(\d{1,2})[\/\-.](\d{1,2})[\/\-.,\s]+(20\d{2})\b/i) ||
+    text.match(/\bDATE\s*:?\s*(\d{1,2})[\/\-.](\d{1,2})\b[^\n]{0,40}?(20\d{2})/i)
+  if (storeDate) {
+    const iso = `${storeDate[3]}-${storeDate[1].padStart(2, '0')}-${storeDate[2].padStart(2, '0')}`
+    if (isPlausibleIsoDate(iso)) return iso
+  }
+
   // Phone-photo OCR: "7/26/2026" often becomes "V26/2026" or "V26(2026" (7→V)
   const vAsSeven = text.match(/\b[Vv7]\s*(\d{1,2})\s*[\/\-(]\s*(20\d{2})\b/)
   if (vAsSeven && !preferred) {
     const day = parseInt(vAsSeven[1], 10)
     const year = vAsSeven[2]
     if (day >= 1 && day <= 31) {
-      return `${year}-07-${String(day).padStart(2, '0')}`
+      const iso = `${year}-07-${String(day).padStart(2, '0')}`
+      if (isPlausibleIsoDate(iso)) return iso
     }
   }
   if (preferred) {
@@ -90,7 +115,11 @@ export function extractDate(text: string): string | null {
         }
         const ctx = text.slice(Math.max(0, m.index - 40), m.index + m[0].length + 20)
         let score = 1
-        if (/\border\s*placed\b|\bordered\b|\binvoice\b|\bpurchase\b/i.test(ctx)) score += 10
+        if (!isPlausibleIsoDate(date)) continue
+        // AutoZone CORE TRADE-IN OCR like "81/22.00" must not become a date
+        if (/\bcore\s*trade/i.test(ctx) || /@\s*\d/.test(ctx)) score -= 15
+        if (/\border\s*placed\b|\bordered\b|\binvoice\b|\bpurchase\b|\bdate\b/i.test(ctx))
+          score += 10
         if (/\bdelivered\b|\bshipped\b/i.test(ctx)) score += 4
         if (/\breturn\s*window\b|\brefund\b|\bclosed\s*on\b/i.test(ctx)) score -= 8
         candidates.push({ date, score })
@@ -100,7 +129,8 @@ export function extractDate(text: string): string | null {
     }
   }
   candidates.sort((a, b) => b.score - a.score)
-  return candidates[0]?.date ?? null
+  const best = candidates[0]?.date
+  return best && isPlausibleIsoDate(best) ? best : null
 }
 
 function titleCaseVendor(s: string): string {
@@ -130,26 +160,25 @@ export function extractVendor(text: string): string {
   }
   if (/\bamazon\.com\b|\bamazon\.ca\b|\bamzn\b/i.test(text)) return 'Amazon'
 
+  // 0a2) AutoZone (OCR often drops the leading “A”: “utoZone 01874”)
+  if (
+    /\baut[o0]z[o0]ne\b/i.test(text) ||
+    /\bu?t[o0]z[o0]ne\b/i.test(text) ||
+    (/\bnazareth\s*pike\b/i.test(text) && /\b(battery|duralast|core\s*charge)\b/i.test(text))
+  ) {
+    return 'AutoZone'
+  }
+
   // 0b) Private sale / Marketplace-style screenshots ("I'm selling…")
   if (
     /\b(i['’`]?m\s+selling|am\s+selling|i\s+am\s+selling|for\s+sale|marketplace)\b/i.test(
       text,
     ) ||
     (/\bsell(?:ing)?\b/i.test(text) &&
-      /\b(bus|mower|car|truck|item|bike|trailer)\b/i.test(text))
+      /\b(bus|mower|car|truck|item|bike|trailer|rus)\b/i.test(text))
   ) {
-    // Prefer a person name near "selling" (Dustin Mower / Dustin Maurer)
-    const nearSell =
-      text.match(/\b(Dustin\s+[A-Za-z]{3,14})\b/i) ||
-      text.match(
-        /\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b[^\n]{0,48}\bsell/i,
-      ) ||
-      text.match(
-        /\bsell(?:ing)?[^\n]{0,24}\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b/i,
-      )
-    if (nearSell?.[1] && nearSell[1].length >= 5) {
-      return `Private sale · ${titleCaseVendor(nearSell[1])}`
-    }
+    const seller = extractPrivateSellerName(text)
+    if (seller) return `Private sale · ${seller}`
     // Location as weak fallback (Bradley Carport) — still better than OCR soup
     const place = text.match(/\b(Bradley\s+Car[a-z]{0,6})\b/i)
     if (place) return `Private sale · ${titleCaseVendor(place[1])}`
@@ -250,30 +279,99 @@ export function extractVendor(text: string): string {
   return ''
 }
 
+/** Normalize OCR seller names (Dustn/Oustn → Dustin Maurer when last name matches). */
+export function extractPrivateSellerName(text: string): string | null {
+  const t = text || ''
+  // Common: Dustin Maurer with heavy OCR damage on both tokens
+  if (
+    /\b(dustin|dustn|oustn|duskin|dughin|oustn|dustn|oustn|mawrer|maurer|mowe|moser|maser|mawr)\b/i.test(
+      t,
+    ) &&
+    /\b(maur|mowe|moser|mawr|maser|mower)\b/i.test(t)
+  ) {
+    // If first name looks like Dustin*
+    if (/\b(dustin|dustn|oustn|duskin|dughin|oustn)\b/i.test(t)) {
+      return 'Dustin Maurer'
+    }
+  }
+  const nearSell =
+    t.match(/\b(Dustin\s+[A-Za-z]{3,14})\b/i) ||
+    t.match(/\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b[^\n]{0,48}\bsell/i) ||
+    t.match(/\bsell(?:ing)?[^\n]{0,24}\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b/i)
+  if (nearSell?.[1] && nearSell[1].length >= 5) {
+    const raw = nearSell[1]
+    if (/dustin|dustn|oustn|duskin/i.test(raw) && /maur|mowe|moser|mawr|maser/i.test(raw)) {
+      return 'Dustin Maurer'
+    }
+    return titleCaseVendor(raw)
+  }
+  return null
+}
+
+/**
+ * Asking price for a private-sale listing (mode of plausible unit prices).
+ * Prefers 150-class amounts over OCR ghosts like 7150 or multi-page sums.
+ */
+export function extractListingPrice(text: string): number | null {
+  const amounts = parseMoneyTokens(recoverGarbledMoney(text || ''))
+    .filter((a) => a >= 5 && a <= 5000)
+    // Drop VIN-ish / order-ish magnitudes when we also see a normal listing price
+    .filter((a) => a < 2000 || amountsNear(a, text))
+  if (!amounts.length) return null
+  // Histogram to 2 decimals
+  const counts = new Map<number, number>()
+  for (const a of amounts) {
+    const k = Math.round(a * 100) / 100
+    counts.set(k, (counts.get(k) || 0) + 1)
+  }
+  // Prefer amounts that appear most often, then smaller plausible listing prices
+  let best: number | null = null
+  let bestScore = -1
+  for (const [amt, n] of counts) {
+    let score = n * 10
+    if (amt >= 20 && amt <= 2000) score += 5
+    if (amt >= 50 && amt <= 500) score += 3
+    // Prefer 150 over 750/7150-class if both present
+    if (Math.abs(amt - 150) < 1) score += 8
+    if (amt >= 500 && amt <= 900 && counts.has(150)) score -= 10
+    if (score > bestScore) {
+      bestScore = score
+      best = amt
+    }
+  }
+  return best
+}
+
+function amountsNear(a: number, text: string): boolean {
+  // Keep large amount only if explicitly marked with $ or Loc
+  return new RegExp(
+    `(\\$\\s*${Math.floor(a)}|loc\\s*[:=]?\\s*${Math.floor(a)})`,
+    'i',
+  ).test(text)
+}
+
 /**
  * Best short listing / item title from messy Marketplace-style OCR.
  * Generic: not store-specific.
  */
 export function extractListingDescription(text: string): string | null {
   const t = normalizeOcrText(text || '')
-  // "Dustin … selling … bus" / "reconditioned bus"
-  const dustinBus = t.match(
-    /\b(Dustin\s+[A-Za-z]{3,14})[^\n]{0,100}?\b((?:re-?)?condition(?:ed|ad|oned)?\s+)?bus\b/i,
+  const who = extractPrivateSellerName(t)
+  // "reconditioned bus" OCR: Trvernadionod / Teweenedionod / Trvernodionod + Bus/Rus
+  const hasBus = /\b(bus|rus)\b/i.test(t)
+  const recond = /\b(re-?)?c?ondition|trvern|teween|tovecn|tevern|nadionod|nodionod|ioned\b/i.test(
+    t,
   )
-  if (dustinBus) {
-    const who = titleCaseVendor(dustinBus[1])
-    return `${who} — reconditioned bus`.slice(0, 120)
-  }
-  if (/\bsell(?:ing)?\b/i.test(t) && /\bbus\b/i.test(t)) {
-    const who = t.match(/\b(Dustin\s+[A-Za-z]{3,14})\b/i)
-    if (who) return `${titleCaseVendor(who[1])} — bus (private sale)`.slice(0, 120)
-    return 'Bus — private sale'
+  if (hasBus && (recond || /\bsell/i.test(t))) {
+    const label = recond ? 'reconditioned bus' : 'bus'
+    if (who) return `${who} — ${label}`.slice(0, 120)
+    return `Private sale — ${label}`
   }
   if (/\bsell(?:ing)?\b/i.test(t) && /\bmower\b/i.test(t)) {
-    const who = t.match(/\b([A-Z][a-z]{2,12}\s+[A-Z][a-z]{2,14})\b/)
-    return who
-      ? `${titleCaseVendor(who[1])} — mower (private sale)`.slice(0, 120)
-      : 'Mower — private sale'
+    return who ? `${who} — mower (private sale)`.slice(0, 120) : 'Mower — private sale'
+  }
+  if (who && /\bsell/i.test(t)) {
+    return `${who} — private sale item`.slice(0, 120)
   }
   // Cleanest line that mentions selling / item nouns
   const lines = t
@@ -286,6 +384,7 @@ export function extractListingDescription(text: string): string | null {
     const vowels = (line.match(/[aeiouAEIOU]/g) || []).length
     if (letters < 8 || vowels < 3) continue
     if (/[bcdfghjklmnpqrstvwxyz]{5,}/i.test(line)) continue
+    if (/[|\\]/.test(line) || /\bvin\b/i.test(line)) continue
     return line.slice(0, 120)
   }
   return null

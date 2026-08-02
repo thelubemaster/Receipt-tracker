@@ -88,6 +88,9 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
     const lineTotal = amounts[amounts.length - 1]
     if (/\bgrand\s*t[o0]tal\b/i.test(line)) {
       votes.push({ label: 'grand-total-line', total: roundMoney(lineTotal), weight: 14 })
+    } else if (/\bsale\s*t[o0]tal\b/i.test(line)) {
+      // AutoZone / parts stores — often the real charged amount
+      votes.push({ label: 'sale-total-line', total: roundMoney(lineTotal), weight: 15 })
     } else if (/\bamount\s*due\b|\bbalance\s*due\b/i.test(line)) {
       votes.push({ label: 'amount-due-line', total: roundMoney(lineTotal), weight: 13 })
     } else if (
@@ -103,12 +106,44 @@ export function runTotalsAgent(text: string): TotalsAgentResult {
       // Ignore bare "VISA CHIP" with no real charge, or tiny incidental numbers
       lineTotal >= 1
     ) {
-      votes.push({ label: 'card-charge-line', total: roundMoney(lineTotal), weight: 6 })
+      // Prefer larger card charges (not a lone $22 core line misread as debit)
+      votes.push({
+        label: 'card-charge-line',
+        total: roundMoney(lineTotal),
+        weight: lineTotal >= 50 ? 9 : 4,
+      })
     } else if (
       /\b(paid|payment|tender)\b/i.test(line) &&
       !/payment date|payment method|payment details/i.test(line)
     ) {
       votes.push({ label: 'payment-line', total: roundMoney(lineTotal), weight: 5 })
+    }
+  }
+
+  // Split OCR: "$365" on one line and "20" / ".20" nearby → $365.20 (AutoZone photos)
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/\$?\s*(\d{2,4})\s*$/)
+    if (!m) continue
+    const whole = parseInt(m[1], 10)
+    if (whole < 20 || whole > 9999) continue
+    const next = (lines[i + 1] || '').trim()
+    const cents = next.match(/^(\d{2})\b/) || next.match(/^\.(\d{2})\b/)
+    if (!cents) continue
+    // Only if a total/debit/sale context is near
+    const ctx = `${lines[i - 1] || ''} ${lines[i]} ${next}`
+    if (!/\b(sale\s*t[o0]tal|t[o0]tal|debit|amount|due|approval)\b/i.test(ctx) && i < lines.length - 8)
+      continue
+    const combined = roundMoney(whole + parseInt(cents[1], 10) / 100)
+    votes.push({ label: 'split-dollar-cents', total: combined, weight: 11 })
+  }
+
+  // Bare "$365.20" near end without label (footer charge)
+  for (const line of lines.slice(-20)) {
+    if (/^\$?\s*\d{2,4}[.,]\d{2}\s*$/.test(line.trim())) {
+      const a = parseMoneyTokens(line)
+      if (a.length === 1 && a[0] >= 20) {
+        votes.push({ label: 'bare-footer-total', total: roundMoney(a[0]), weight: 8 })
+      }
     }
   }
 

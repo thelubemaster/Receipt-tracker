@@ -24,7 +24,12 @@ import {
   roundMoney,
   stripOrderIds,
 } from './moneyParse'
-import { extractDate, extractListingDescription, extractVendor } from './merchantAgent'
+import {
+  extractDate,
+  extractListingDescription,
+  extractListingPrice,
+  extractVendor,
+} from './merchantAgent'
 import { normalizeOcrText } from './normalizeOcrText'
 import type { LocalAgentResult } from './pipeline'
 import { runReceiptEngine } from './receiptEngine'
@@ -113,7 +118,11 @@ export function descriptionQuality(d: string): number {
   let score = Math.min(40, letters) + vowels
   if (/\b(selling|mower|bus|filter|oil|kit|amazon|thorne|vitamin|supplement|receipt|invoice)\b/i.test(s))
     score += 15
-  if (/[|]{2,}|[\\]{2,}/.test(s)) score -= 10
+  // Noise: pipes, backslashes, “0 | oO”, VIN soup
+  if (/[|\\]{1,}/.test(s)) score -= 20
+  if (/\bvin\b|\bahvbd|\bhvbd/i.test(s)) score -= 15
+  if (/^\d[\s|]|[o0]\s*[|o0]/i.test(s)) score -= 12
+  if (s.length > 70) score -= 10
   return Math.max(0, score)
 }
 
@@ -201,13 +210,27 @@ export function critiqueParse(
   // Single line item that is OCR soup — re-solve for a cleaner title
   if (prods.length === 1) {
     const dq = descriptionQuality(prods[0].description || '')
-    if (dq < 12) {
+    if (dq < 18) {
       issues.push({
         code: 'garbage-description',
         severity: 'fatal',
         message: 'Product description looks like OCR garbage — rebuild from cleaner phrases',
       })
     }
+  }
+
+  // Total and product sum disagree (e.g. total $750, line $150 from marketplace OCR)
+  if (
+    total != null &&
+    pSum > 0 &&
+    Math.abs(pSum + fee + ship + (tax ?? 0) - total) > Math.max(1, total * 0.08) &&
+    prods.length <= 3
+  ) {
+    issues.push({
+      code: 'total-line-mismatch',
+      severity: 'fatal',
+      message: `Grand total $${total} does not match line sum $${roundMoney(pSum + fee + ship + (tax ?? 0))}`,
+    })
   }
 
   // OCR says estimated tax 0 / shipping 0 but we invented large fees
@@ -307,11 +330,19 @@ export function critiqueParse(
 
 /** Header / boilerplate / marketing — never a product title. */
 const PRODUCT_LINE_SKIP =
-  /\b(order\s*summary|order\s*placed|order\s*#|ship\s*to|shipped|payment\s*method|mastercard|visa|amex|subtotal|grand\s*total|total\s*before|estimated\s*tax|shipping|handling|delivered|retu[rmn]+\s*window|sold\s*by|package\s*was|bangor|united\s*states|items?\)?\s*subtotal|bradley|little\s*creek|front\s*door|porch)\b/i
+  /\b(order\s*summary|order\s*placed|order\s*#|ship\s*to|shipped|payment\s*method|mastercard|visa|amex|subtotal|final\s*subtotal|grand\s*total|sale\s*t[o0]tal|total\s*before|estimated\s*tax|state\s*tax|sales\s*tax|shipping|handling|delivered|retu[rmn]+\s*window|sold\s*by|package\s*was|bangor|united\s*states|items?\)?\s*subtotal|bradley|little\s*creek|front\s*door|porch|approval|debit|credit|chip|pin\s*online|rewards?\s*account|store\s*#|reg\s*#|csr\s*#|data\s*source|app\s*name|aid:|arqc)\b/i
+
+/** Auto parts chrome — core deposits/trade-ins & tax lines are not SKUs to “even-split”. */
+const NON_CATALOG_PRODUCT =
+  /\b(core\s*trade[-\s]?in|core\s*charge|core\s*c\s*harge|state\s*tax|sales\s*tax|sale\s*t[o0]tal|final\s*subtotal|subtotal|debit|approval|rewards?)\b/i
 
 /** Continuation / blurb lines that look like products but are not SKUs. */
 const PRODUCT_MARKETING =
   /^(supplement|capsule|tablet|softgel|serving|servings|healthy|supports|function|ingredients|third[-\s]?party|gluten|dairy|soy|nsf\b|clinically|highly\s*absorb|lung\s*function|bone\s*density|health\b|incron|suoplement|suopiement)/i
+
+/** Brands that are never real product brands in Brand – Title extraction. */
+const FAKE_BRAND =
+  /^(CORE|STATE|SALE|FINAL|TOTAL|TAX|DEBIT|CREDIT|VISA|ROHR|ITEM|STORE|DATE|REG|CSR|PIN|AID|ARQC|SUBTOTAL)$/i
 
 /**
  * Stable identity for fuzzy dedupe across OCR typos and multi-page repeats.
@@ -407,6 +438,7 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
     const line = lines[i]
     if (PRODUCT_LINE_SKIP.test(line)) continue
     if (PRODUCT_MARKETING.test(line)) continue
+    if (NON_CATALOG_PRODUCT.test(line)) continue
 
     // Pattern A: BRAND - Product (hyphen optional spaces; allow dose hyphens in product)
     const brandDash = line.match(
@@ -414,11 +446,17 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
     )
     if (brandDash) {
       const brand = brandDash[1]
-      if (/^(ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED|RETURN|RETUM|SOLD|YOUR|UNITED|PACKAGE)$/i.test(brand)) {
+      if (
+        FAKE_BRAND.test(brand) ||
+        /^(ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED|RETURN|RETUM|SOLD|YOUR|UNITED|PACKAGE)$/i.test(
+          brand,
+        )
+      ) {
         continue
       }
+      if (NON_CATALOG_PRODUCT.test(`${brand} ${brandDash[2]}`)) continue
       const cleaned = cleanBrandProductTitle(brand, brandDash[2])
-      if (cleaned) pushName(cleaned)
+      if (cleaned && !NON_CATALOG_PRODUCT.test(cleaned)) pushName(cleaned)
       continue
     }
 
@@ -428,15 +466,95 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
     )
     if (
       brandSpace &&
+      !FAKE_BRAND.test(brandSpace[1]) &&
       !/ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED/i.test(brandSpace[1]) &&
-      !PRODUCT_MARKETING.test(brandSpace[2])
+      !PRODUCT_MARKETING.test(brandSpace[2]) &&
+      !NON_CATALOG_PRODUCT.test(`${brandSpace[1]} ${brandSpace[2]}`)
     ) {
       const cleaned = cleanBrandProductTitle(brandSpace[1], brandSpace[2])
-      if (cleaned) pushName(cleaned)
+      if (cleaned && !NON_CATALOG_PRODUCT.test(cleaned)) pushName(cleaned)
+    }
+
+    // Pattern C: Auto parts style "Duralast HD Battery, EA" (no Brand-dash)
+    const autoPart = line.match(
+      /^((?:Duralast|DieHard|EverStart|Valvoline|Mobil|Castrol|ACDelco|Motorcraft|Bosh|Bosch|AGS|Peak)[\w\s,./#-]{4,55})/i,
+    )
+    if (autoPart && !NON_CATALOG_PRODUCT.test(autoPart[1])) {
+      pushName(autoPart[1].replace(/,?\s*E[AR]\s*$/i, '').trim())
     }
   }
 
   return names.slice(0, 12)
+}
+
+/**
+ * Catalog lines with unit prices: "… 174.99 P" / "BTP-1 1.99"
+ * Skips tax, core trade-in chrome unless priced as CORE CHARGE deposit.
+ */
+export function extractPricedCatalogLines(
+  ocrText: string,
+  opts?: { grandTotal?: number | null },
+): Array<{ name: string; price: number; kind: 'product' | 'core-charge' | 'core-trade-in' }> {
+  const grand = opts?.grandTotal ?? null
+  const text = normalizeOcrText(stripOrderIds(ocrText || ''))
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 4)
+
+  const out: Array<{ name: string; price: number; kind: 'product' | 'core-charge' | 'core-trade-in' }> =
+    []
+  const seen = new Set<string>()
+
+  for (const line of lines) {
+    if (PRODUCT_LINE_SKIP.test(line) && !/\bcore\s*charge\b/i.test(line)) continue
+    if (/\bstate\s*tax\b|\bsale\s*t[o0]tal\b|\bsubtotal\b|\bdebit\b|\bapproval\b/i.test(line))
+      continue
+
+    const amts = parseMoneyTokens(line, { grandTotal: grand }).filter(
+      (a) => a >= 0.5 && (grand == null || a < grand * 1.05),
+    )
+    if (!amts.length) continue
+    // Prefer last amount on the line (SKU … 174.99 P)
+    let price = amts[amts.length - 1]
+    if (grand != null && nearly(price, grand) && amts.length === 1) continue
+
+    let kind: 'product' | 'core-charge' | 'core-trade-in' = 'product'
+    if (/\bcore\s*trade[-\s]?in\b/i.test(line)) kind = 'core-trade-in'
+    else if (/\bcore\s*charge\b/i.test(line)) kind = 'core-charge'
+
+    let name = line
+      .replace(/\$?\s*\d{1,5}(?:[.,]\d{2})?\s*P?\s*$/i, '')
+      .replace(/#\d{6,}\s*/g, '')
+      .replace(/\b\d{5,}\s+\d{2}-\d{3}\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (kind === 'core-trade-in') name = 'Core trade-in'
+    else if (kind === 'core-charge') name = 'Core charge'
+    else {
+      // Prefer battery product names on nearby context
+      if (/battery|duralast|btp|terminal|protector|recycled/i.test(line)) {
+        name = line
+          .replace(/\$?\s*\d{1,5}(?:[.,]\d{2}).*$/i, '')
+          .replace(/#\d+\s*/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 80)
+      }
+      if (name.length < 4 || NON_CATALOG_PRODUCT.test(name) && kind === 'product') continue
+      if (descriptionQuality(name) < 8 && kind === 'product') continue
+    }
+
+    const key = `${kind}:${price.toFixed(2)}:${name.slice(0, 24).toLowerCase()}`
+    if (seen.has(key)) continue
+    // Cap duplicates of same core charge amount (multi-page OCR)
+    const sameCore = out.filter((x) => x.kind === kind && nearly(x.price, price)).length
+    if (kind !== 'product' && sameCore >= 3) continue
+    seen.add(key)
+    out.push({ name: name.slice(0, 90), price, kind })
+  }
+
+  return out.slice(0, 20)
 }
 
 /**
@@ -793,6 +911,16 @@ export function resolveFromOcrConstraints(
       }
     }
   }
+  // Private-sale listing: prefer modal listing price (150) over OCR ghosts (7150/750)
+  const listingPrice = extractListingPrice(text)
+  if (
+    listingPrice != null &&
+    (/\bsell(?:ing)?\b/i.test(text) || /\bprivate\s*sale\b/i.test(draft?.vendor || ''))
+  ) {
+    if (total == null || Math.abs(total - listingPrice) > 1 || total > listingPrice * 2) {
+      total = listingPrice
+    }
+  }
   // Prefer draft total when OCR “total” is just one product price
   if (
     draft?.amount != null &&
@@ -804,6 +932,7 @@ export function resolveFromOcrConstraints(
     total = draft.amount
   }
   if (total == null && draft?.amount != null) total = draft.amount
+  if (total == null && listingPrice != null) total = listingPrice
 
   // 2) Subtotal / tax / ship from labeled lines with “first amount after label”
   let subtotal: number | null = null
@@ -968,9 +1097,23 @@ export function resolveFromOcrConstraints(
   }
 
   // 4) Vendor — pick best quality candidate from OCR, prefer draft if already good
-  let vendor = draft?.vendor && vendorQuality(draft.vendor) >= 8 ? draft.vendor : extractVendor(text)
+  // Always re-extract private-sale vendors so “Dustn Mawrer” → “Dustin Maurer”
+  let vendor = extractVendor(text)
+  if (
+    (!vendor || vendorQuality(vendor) < 8) &&
+    draft?.vendor &&
+    vendorQuality(draft.vendor) >= 8 &&
+    !/\bprivate\s*sale\b/i.test(draft.vendor)
+  ) {
+    vendor = draft.vendor
+  }
   if (vendorQuality(vendor) < 4) {
     vendor = extractVendor(text)
+  }
+  // Normalize private-sale label even if draft already said Private sale · …
+  if (/\bprivate\s*sale\b/i.test(vendor) || /\bsell(?:ing)?\b/i.test(text)) {
+    const fromOcr = extractVendor(text)
+    if (fromOcr && /dustin maurer/i.test(fromOcr)) vendor = fromOcr
   }
   if (vendorQuality(vendor) < 4) {
     // Scan early lines for brand-like tokens (skip OCR soup)
@@ -995,18 +1138,21 @@ export function resolveFromOcrConstraints(
   const listingDesc = extractListingDescription(text)
   if (listingDesc && products.length <= 1 && total != null) {
     const dq = products[0] ? descriptionQuality(products[0].description) : 0
-    if (dq < 18 || products.length === 0) {
+    if (dq < 22 || products.length === 0 || (listingPrice != null && products[0] && !nearly(products[0].amount, total))) {
       const { categoryId: cat } = categorizeText(listingDesc)
       products = [
         {
           id: 'reason-listing',
           description: listingDesc,
-          amount: subtotal ?? total,
+          amount: listingPrice ?? subtotal ?? total,
           categoryId: cat,
         },
       ]
+    } else if (products.length === 1 && listingPrice != null) {
+      // Align single line to listing price
+      products = [{ ...products[0], amount: listingPrice }]
     }
-  } else if (products.length === 1 && descriptionQuality(products[0].description) < 12) {
+  } else if (products.length === 1 && descriptionQuality(products[0].description) < 18) {
     // Rebuild a shorter title from the least-gibberish OCR line
     let bestLine = ''
     let bestQ = 0

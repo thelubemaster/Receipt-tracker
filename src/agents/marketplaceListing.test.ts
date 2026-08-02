@@ -90,7 +90,7 @@ describe('marketplace / private-sale listing OCR', () => {
     expect(c.ok).toBe(false)
     expect(
       c.issues.some((i) =>
-        ['weak-vendor', 'garbage-description'].includes(i.code),
+        ['weak-vendor', 'garbage-description', 'total-line-mismatch'].includes(i.code),
       ),
     ).toBe(true)
 
@@ -104,5 +104,60 @@ describe('marketplace / private-sale listing OCR', () => {
     expect(descriptionQuality(result.lineItems[0]?.description || '')).toBeGreaterThanOrEqual(12)
     expect(result.lineItems[0]?.description.toLowerCase()).toMatch(/bus|dustin|sale|mower/)
     expect(result.lineItems[0]?.description.toLowerCase()).not.toMatch(/hvbdarbm/)
+    expect(result.lineItems[0]?.amount).toBeCloseTo(150, 1)
+  })
+
+  it('fixes total $750 / line $150 mismatch and 7150 OCR ghost (1.32.6 dump)', async () => {
+    const ocr = `
+BN of Sole
+TX Duskin Moser Om selling
+on \\499 Trvernadionod. Bus
+NIN 4HVBDARMXKH 23156 fo
+Brdly Copier £5 7150.00
+Bradley Corpert
+TT Dustin Maurer Gm selling
+on 1499 Trvernodionod Rus
+Dbrodby Copier Loc 7150.00
+VIN AHVBDARMXANZ(3155 Fo
+0 | oO  Sola
+TT, Oustn Mawrer Om selling
+on \\499 Teweenedionod Bus
+V262026
+`
+    const draft: LocalAgentResult = {
+      date: '2026-07-26',
+      vendor: 'Private sale · Dustn Mawrer',
+      amount: 750,
+      description: 'garbage',
+      categoryId: 'engine',
+      notes: '',
+      lineItems: [
+        {
+          id: '1',
+          description:
+            '0 | oO Sola TT, Oustn Mawrer Om selling on \\499 Teweenedionod Bus VIN AHVBDARMXANZ(3155 Fo',
+          amount: 150,
+          categoryId: 'engine',
+        },
+      ],
+      subtotal: null,
+      tax: null,
+      source: 'on-device',
+      confidence: 0.89,
+      rawText: ocr,
+      agentReport: 'mismatch',
+      aisUsed: ['mosaic'],
+    }
+    const c = critiqueParse(draft, ocr)
+    expect(c.ok).toBe(false)
+    const { result, repaired } = await reasonAboutReceipt(draft, ocr, { allowLlm: false })
+    expect(repaired).toBe(true)
+    expect(result.amount).toBeCloseTo(150, 1)
+    expect(result.lineItems).toHaveLength(1)
+    expect(result.lineItems[0].amount).toBeCloseTo(150, 1)
+    expect(result.lineItems[0].description.toLowerCase()).toMatch(/dustin|bus/)
+    expect(result.lineItems[0].description).not.toMatch(/\|/)
+    expect(result.vendor.toLowerCase()).toMatch(/private sale/)
+    expect(result.vendor.toLowerCase()).toMatch(/dustin maurer/)
   })
 })

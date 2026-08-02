@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.32.6'
+export const APP_VERSION = '1.32.7'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,18 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.32.7',
+    date: '2026-08-02',
+    title: 'Private-sale price + title cleanup (no more $750 vs $150)',
+    changes: [
+      'OCR 7150.00 / Loc 7150 treated as $150.00 (leading 7 glued on price)',
+      'Listing total forced to the real asking price — not multi-page sum ghosts',
+      'Line amount always matches total on single-item private sales',
+      'Seller “Dustn/Oustn Mawrer” → Dustin Maurer; clean “reconditioned bus” title',
+      'Reject tax/core-charge rows as products; AutoZone vendor + SALE TOTAL totals',
+    ],
+  },
   {
     version: '1.32.6',
     date: '2026-08-01',

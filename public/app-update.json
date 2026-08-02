@@ -1,7 +1,7 @@
 {
-  "version": "1.32.6",
+  "version": "1.32.7",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Private-sale screenshots: reject OCR-soup vendors, clean listing titles",
+  "notes": "Private-sale: fix 7150→$150, align total to line, clean Dustin Maurer bus title",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
