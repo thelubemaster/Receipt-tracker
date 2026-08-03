@@ -12,6 +12,8 @@
 import type { CategoryId, ReceiptLineItem } from '../types'
 import { categorizeText } from './keywords'
 import {
+  isCoreChargeLineItem,
+  isCoreTradeInLineItem,
   isFeeLineItem,
   isShippingLineItem,
   makeFeeLineItem,
@@ -52,7 +54,23 @@ function nearly(a: number, b: number, tol = 0.08): boolean {
 }
 
 function productsOf(items: ReceiptLineItem[]): ReceiptLineItem[] {
-  return items.filter((i) => !isShippingLineItem(i.description) && !isFeeLineItem(i.description))
+  return items.filter(
+    (i) =>
+      !isShippingLineItem(i.description) &&
+      !isFeeLineItem(i.description) &&
+      !isCoreChargeLineItem(i.description) &&
+      !isCoreTradeInLineItem(i.description),
+  )
+}
+
+function coreNet(items: ReceiptLineItem[]): number {
+  return roundMoney(
+    items.reduce((s, i) => {
+      if (isCoreChargeLineItem(i.description)) return s + Math.abs(i.amount)
+      if (isCoreTradeInLineItem(i.description)) return s - Math.abs(i.amount)
+      return s
+    }, 0),
+  )
 }
 
 function sumProducts(items: ReceiptLineItem[]): number {
@@ -219,6 +237,22 @@ export function critiqueParse(
     }
   }
 
+  // Tax / sale total / core labels listed as “products” with invented even-split $ — re-solve
+  const chromeAsProduct = prods.filter(
+    (p) =>
+      NON_CATALOG_PRODUCT.test(p.description || '') ||
+      /\bstate\s*tax\b|\bsale\s*t[o0]tal\b|\bcore\s*trade|\bcore\s*charge\b/i.test(
+        p.description || '',
+      ),
+  )
+  if (prods.length >= 3 && chromeAsProduct.length >= Math.ceil(prods.length / 2)) {
+    issues.push({
+      code: 'chrome-as-products',
+      severity: 'fatal',
+      message: `Receipt chrome (tax/total/core labels) was treated as products — re-parse with real prices and core money`,
+    })
+  }
+
   // Total and product sum disagree (e.g. total $750, line $150 from marketplace OCR)
   if (
     total != null &&
@@ -332,9 +366,9 @@ export function critiqueParse(
 const PRODUCT_LINE_SKIP =
   /\b(order\s*summary|order\s*placed|order\s*#|ship\s*to|shipped|payment\s*method|mastercard|visa|amex|subtotal|final\s*subtotal|grand\s*total|sale\s*t[o0]tal|total\s*before|estimated\s*tax|state\s*tax|sales\s*tax|shipping|handling|delivered|retu[rmn]+\s*window|sold\s*by|package\s*was|bangor|united\s*states|items?\)?\s*subtotal|bradley|little\s*creek|front\s*door|porch|approval|debit|credit|chip|pin\s*online|rewards?\s*account|store\s*#|reg\s*#|csr\s*#|data\s*source|app\s*name|aid:|arqc)\b/i
 
-/** Auto parts chrome — core deposits/trade-ins & tax lines are not SKUs to “even-split”. */
+/** Tax/total chrome is never a catalog SKU. Core charge/trade-in are real money but not SKUs to invent. */
 const NON_CATALOG_PRODUCT =
-  /\b(core\s*trade[-\s]?in|core\s*charge|core\s*c\s*harge|state\s*tax|sales\s*tax|sale\s*t[o0]tal|final\s*subtotal|subtotal|debit|approval|rewards?)\b/i
+  /\b(core\s*[-–]?\s*trade|core\s*[-–]?\s*charge|core\s*c\s*harge|state\s*[-–]?\s*tax|sales\s*tax|sale\s*[-–]?\s*t[o0]tal|final\s*subtotal|subtotal|debit|approval|rewards?)\b/i
 
 /** Continuation / blurb lines that look like products but are not SKUs. */
 const PRODUCT_MARKETING =
@@ -506,8 +540,22 @@ export function extractPricedCatalogLines(
     []
   const seen = new Set<string>()
 
-  for (const line of lines) {
-    if (PRODUCT_LINE_SKIP.test(line) && !/\bcore\s*charge\b/i.test(line)) continue
+  const looksLikeSkuOnly = (s: string) =>
+    !/[A-Za-z]{4,}/.test(s) ||
+    /^[\d#\s.\-P]+$/i.test(s) ||
+    (s.length < 12 && /\d{2,}/.test(s) && !/battery|filter|oil|kit/i.test(s))
+
+  const looksLikeProductTitle = (s: string) =>
+    s.length >= 6 &&
+    /[A-Za-z]{4,}/.test(s) &&
+    !NON_CATALOG_PRODUCT.test(s) &&
+    !PRODUCT_LINE_SKIP.test(s) &&
+    !/^\$?\d/.test(s) &&
+    descriptionQuality(s) >= 8
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (PRODUCT_LINE_SKIP.test(line) && !/\bcore\s*(charge|trade)/i.test(line)) continue
     if (/\bstate\s*tax\b|\bsale\s*t[o0]tal\b|\bsubtotal\b|\bdebit\b|\bapproval\b/i.test(line))
       continue
 
@@ -516,7 +564,7 @@ export function extractPricedCatalogLines(
     )
     if (!amts.length) continue
     // Prefer last amount on the line (SKU … 174.99 P)
-    let price = amts[amts.length - 1]
+    const price = amts[amts.length - 1]
     if (grand != null && nearly(price, grand) && amts.length === 1) continue
 
     let kind: 'product' | 'core-charge' | 'core-trade-in' = 'product'
@@ -532,17 +580,24 @@ export function extractPricedCatalogLines(
     if (kind === 'core-trade-in') name = 'Core trade-in'
     else if (kind === 'core-charge') name = 'Core charge'
     else {
-      // Prefer battery product names on nearby context
-      if (/battery|duralast|btp|terminal|protector|recycled/i.test(line)) {
-        name = line
+      // AutoZone: price on SKU line, title on next/prev ("Duralast HD Battery, EA")
+      if (looksLikeSkuOnly(name) || descriptionQuality(name) < 10) {
+        const next = lines[i + 1] || ''
+        const prev = lines[i - 1] || ''
+        if (looksLikeProductTitle(next)) name = next.replace(/,?\s*E[AR]\s*$/i, '').trim()
+        else if (looksLikeProductTitle(prev)) name = prev.replace(/,?\s*E[AR]\s*$/i, '').trim()
+      }
+      if (/battery|duralast|btp|terminal|protector|recycled|filter/i.test(line + ' ' + name)) {
+        name = name
           .replace(/\$?\s*\d{1,5}(?:[.,]\d{2}).*$/i, '')
           .replace(/#\d+\s*/g, '')
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 80)
       }
-      if (name.length < 4 || NON_CATALOG_PRODUCT.test(name) && kind === 'product') continue
+      if (name.length < 4 || (NON_CATALOG_PRODUCT.test(name) && kind === 'product')) continue
       if (descriptionQuality(name) < 8 && kind === 'product') continue
+      if (looksLikeSkuOnly(name)) continue
     }
 
     const key = `${kind}:${price.toFixed(2)}:${name.slice(0, 24).toLowerCase()}`
@@ -983,13 +1038,18 @@ export function resolveFromOcrConstraints(
   if (tax == null && /\btax[\s\S]{0,40}\$0\.00/i.test(text)) tax = 0
   if (shipping == null && /\bshipping[\s\S]{0,40}\$0\.00/i.test(text)) shipping = 0
 
-  // 3) Products: only amounts that fit under total
+  // 3) Products: only amounts that fit under total — drop tax/total chrome
   const engine = runReceiptEngine(text)
   let products = productsOf(engine.lineItems || []).filter(
     (p) =>
-      total == null ||
-      (!isImplausibleMoney(p.amount, { grandTotal: total }) && p.amount <= total * 1.05 + 0.5),
+      !NON_CATALOG_PRODUCT.test(p.description) &&
+      (total == null ||
+        (!isImplausibleMoney(p.amount, { grandTotal: total }) &&
+          p.amount <= total * 1.05 + 0.5)),
   )
+  let coreLines: ReceiptLineItem[] = []
+  let pricesEstimated = false
+  let priceNote = ''
 
   // Progressive drop of largest products until sum ≤ total * 1.15 (or empty)
   if (total != null && products.length) {
@@ -1001,40 +1061,113 @@ export function resolveFromOcrConstraints(
     }
   }
 
-  // 3b) Named products — pair Brand–Product titles with unit prices from OCR
-  const productNames = extractProductNamesFromOcr(text)
+  // 3a) Auto parts / priced catalog: real unit prices + core charge/trade-in money
+  // Core charge = deposit you pay; core trade-in = money back for old core (not invented).
+  const pricedCatalog = extractPricedCatalogLines(text, { grandTotal: total })
+  if (pricedCatalog.length >= 1) {
+    const realProducts = pricedCatalog.filter((r) => r.kind === 'product')
+    const cores = pricedCatalog.filter((r) => r.kind !== 'product')
+    // Dedupe product lines by name+price (multi-page OCR)
+    const seenP = new Set<string>()
+    const productItems: ReceiptLineItem[] = []
+    for (const r of realProducts) {
+      const key = `${r.name.slice(0, 40).toLowerCase()}|${r.price.toFixed(2)}`
+      if (seenP.has(key)) continue
+      seenP.add(key)
+      // Cap identical battery lines at 3 (two pages × 2 batteries)
+      const same = productItems.filter(
+        (p) => nearly(p.amount, r.price) && p.description.slice(0, 20) === r.name.slice(0, 20),
+      ).length
+      if (same >= 2) continue
+      const { categoryId } = categorizeText(r.name)
+      productItems.push({
+        id: `catalog-${productItems.length}`,
+        description: r.name,
+        amount: r.price,
+        categoryId: categoryId === 'misc' && /battery/i.test(r.name) ? 'electrical' : categoryId,
+      })
+    }
+    // Core deposits/credits — keep real amounts, never invent names
+    const seenC = new Set<string>()
+    for (const r of cores) {
+      const key = `${r.kind}|${r.price.toFixed(2)}`
+      // Allow up to 2 of each amount (multi-page) but prefer net pairs
+      const count = [...seenC].filter((k) => k.startsWith(r.kind)).length
+      if (count >= 4) continue
+      seenC.add(`${key}|${seenC.size}`)
+      if (r.kind === 'core-charge') {
+        coreLines.push({
+          id: `core-ch-${coreLines.length}`,
+          description: 'Core charge',
+          amount: Math.abs(r.price),
+          categoryId: 'misc',
+        })
+      } else {
+        coreLines.push({
+          id: `core-ti-${coreLines.length}`,
+          description: 'Core trade-in',
+          // Money back = negative so line sum closes toward total
+          amount: -Math.abs(r.price),
+          categoryId: 'misc',
+        })
+      }
+    }
+    // Prefer catalog products when draft was chrome even-split or empty
+    const draftJunk =
+      products.length === 0 ||
+      products.every(
+        (p) =>
+          NON_CATALOG_PRODUCT.test(p.description) ||
+          descriptionQuality(p.description) < 14 ||
+          (total != null &&
+            products.length >= 3 &&
+            nearly(p.amount, total / products.length, 1)),
+      )
+    if (productItems.length >= 1 && (draftJunk || productItems.length >= products.length)) {
+      products = productItems
+      pricesEstimated = false
+      priceNote =
+        coreLines.length > 0
+          ? 'Catalog prices from OCR; core charge = deposit, core trade-in = money back for old core'
+          : 'Catalog unit prices from OCR (not invented)'
+    } else if (coreLines.length && !draftJunk) {
+      // Keep products, still attach cores
+      priceNote =
+        'Core charge/trade-in from OCR (deposit / money back — not made-up products)'
+    }
+  }
+
+  // 3b) Named products — only real catalog names (never STATE TAX / SALE TOTAL as “products”)
+  const productNames = extractProductNamesFromOcr(text).filter(
+    (n) => !NON_CATALOG_PRODUCT.test(n) && descriptionQuality(n) >= 10,
+  )
   const paired = extractNamedProductsWithPrices(text, {
     grandTotal: total,
     subtotal,
-  })
+  }).filter((p) => !NON_CATALOG_PRODUCT.test(p.name))
   const budget = subtotal ?? total
-  let pricesEstimated = false
-  let priceNote = ''
 
   const draftLooksMarketing =
     products.length > 0 &&
     products.filter(
       (p) =>
         PRODUCT_MARKETING.test((p.description || '').trim()) ||
+        NON_CATALOG_PRODUCT.test(p.description) ||
         (!/\b[A-Z]{3,16}\s*[-–]/.test(p.description || '') &&
-          /supplement|supports|certified|healthy bones|lung function/i.test(
+          /supplement|supports|certified|healthy bones|lung function|member|items sold/i.test(
             p.description || '',
           )),
     ).length >= Math.max(1, Math.ceil(products.length / 2))
 
+  // Brand–Product rows (Amazon multi-item): prefer name+price pairing over incomplete SKU scrape
+  // even-split only for real titles — never for tax/core chrome.
   const needNameExpand =
     productNames.length >= 2 &&
     budget != null &&
     budget > 0 &&
     (products.length === 0 ||
-      products.length === 1 ||
       products.length < productNames.length ||
       draftLooksMarketing ||
-      (total != null &&
-        sumProducts(products) > 0 &&
-        sumProducts(products) < total - 1 &&
-        sumProducts(products) < total * 0.92) ||
-      (products.length === 1 && total != null && nearly(products[0].amount, total)) ||
       (products.length >= 2 &&
         products.every((p) => total != null && nearly(p.amount, total / products.length, 0.5))))
 
@@ -1050,19 +1183,19 @@ export function resolveFromOcrConstraints(
       candidates,
       paired.length >= 2 ? paired : null,
     )
-    // Prefer paired/expanded if it lists more real products or closes math better
     const newSum = sumProducts(assigned.items)
     const oldSum = sumProducts(products)
     const better =
+      products.length === 0 ||
       assigned.items.length > products.length ||
       draftLooksMarketing ||
-      (total != null &&
-        Math.abs(newSum - total) < Math.abs(oldSum - total) - 0.5) ||
-      products.length === 0
+      (total != null && Math.abs(newSum - total) <= Math.abs(oldSum - total) + 0.05)
     if (better && assigned.items.length >= 2) {
       products = assigned.items
       pricesEstimated = assigned.pricesEstimated
       priceNote = assigned.note
+      // Don't attach AutoZone-style core lines on Amazon multi-item name expands
+      if (!/\bcore\s*charge\b/i.test(text)) coreLines = []
     }
   } else if (
     products.length === 0 &&
@@ -1080,20 +1213,23 @@ export function resolveFromOcrConstraints(
       },
     ]
   } else if (!products.length && total != null) {
-    // Last resort single bucket
+    // Last resort single bucket — only if description is readable (no invented chrome)
     const desc =
-      draft?.description && !/shipping|fee/i.test(draft.description)
+      draft?.description &&
+      !/shipping|fee/i.test(draft.description) &&
+      !NON_CATALOG_PRODUCT.test(draft.description) &&
+      descriptionQuality(draft.description) >= 12
         ? draft.description.slice(0, 140)
         : 'Order items'
-    const { categoryId } = categorizeText(desc)
     products = [
       {
         id: 'reason-bundle',
         description: desc,
         amount: subtotal ?? total,
-        categoryId,
+        categoryId: 'misc',
       },
     ]
+    priceNote = priceNote || 'Single total line — unit prices not read (not inventing product names)'
   }
 
   // 4) Vendor — pick best quality candidate from OCR, prefer draft if already good
@@ -1176,7 +1312,7 @@ export function resolveFromOcrConstraints(
     }
   }
 
-  const lineItems: ReceiptLineItem[] = [...products]
+  const lineItems: ReceiptLineItem[] = [...products, ...coreLines]
   if (shipping != null && shipping > 0) {
     lineItems.push(makeShippingLineItem(shipping, 'reason-ship'))
   }

@@ -1,7 +1,7 @@
 {
-  "version": "1.33.0",
+  "version": "1.33.1",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Project AI data lab — see all receipts + OCR dumps",
+  "notes": "No invented product names; core charge/trade-in are real money",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

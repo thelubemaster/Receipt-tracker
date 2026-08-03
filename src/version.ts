@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.33.0'
+export const APP_VERSION = '1.33.1'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,18 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.33.1',
+    date: '2026-08-03',
+    title: 'Stop inventing words; core charge/trade-in are real money',
+    changes: [
+      'Do not invent product names from tax, sale total, or OCR chrome',
+      'Do not invent categories like “core-parts” / “state” from random tokens',
+      'Core charge = deposit you pay; core trade-in = money back for returned cores (real $ amounts)',
+      'AutoZone: real unit prices (e.g. batteries) instead of even-split junk lines',
+      'Never even-split prices across tax/total labels',
+    ],
+  },
   {
     version: '1.33.0',
     date: '2026-08-03',

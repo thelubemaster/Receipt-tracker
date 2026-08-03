@@ -11,7 +11,7 @@ import { normalizeOcrText } from './normalizeOcrText'
 
 /** Not product rows — totals/chrome (shipping + fees handled as their own sections) */
 const SKIP_LINE =
-  /\b(subtotal|sub total|total|grand total|tax|sales tax|vat|gst|hst|cash|change|visa|mastercard|debit|credit|auth|approval|balance due|amount due|payment method|payment date|payment details|created date|payer|tender|thank|store\s*#|tel|phone|www\.|http|https|cashier|register|tran|invoice|receipt|member|rewards|savings|you saved|coupon|promo|discount|card\s*#|\*{4}|xxxx|aid\s|tc#|ref\s?#|cart items|item price|item total|qty|sku|order contains|items shipped|powered by|launch your own|bigcommerce|reply|forward)\b/i
+  /\b(subtotal|sub total|total|grand total|sale\s*total|final\s*subtotal|tax|sales tax|state\s*tax|vat|gst|hst|cash|change|visa|mastercard|debit|credit|auth|approval|balance due|amount due|payment method|payment date|payment details|created date|payer|tender|thank|store\s*#|tel|phone|www\.|http|https|cashier|register|tran|invoice|receipt|member|rewards|savings|you saved|coupon|promo|discount|card\s*#|\*{4}|xxxx|aid\s|tc#|ref\s?#|cart items|item price|item total|qty|sku|order contains|items shipped|powered by|launch your own|bigcommerce|reply|forward|#\s*of\s*items|items\s*sold|as\s*of\s*\d)\b/i
 
 /** Shipping / delivery — kept as its own tracked line item, not a product */
 const SHIPPING_LINE =
@@ -82,7 +82,19 @@ export function makeShippingLineItem(amount: number, id = 'li-shipping'): Receip
 export function isFeeLineItem(desc: string): boolean {
   if (!desc) return false
   if (isShippingLineItem(desc)) return false
+  // Core charge deposit is real money (returnable deposit), not a “convenience fee”
+  if (isCoreChargeLineItem(desc) || isCoreTradeInLineItem(desc)) return false
   return NON_SHIP_FEE.test(desc) || /^fee\b/i.test(desc.trim()) || /\bfee\b/i.test(desc)
+}
+
+/** Auto parts core deposit you pay when buying a part with a core. */
+export function isCoreChargeLineItem(desc: string): boolean {
+  return /\bcore\s*charge\b/i.test(desc || '')
+}
+
+/** Credit for returning an old core (money back) — real, not invented product. */
+export function isCoreTradeInLineItem(desc: string): boolean {
+  return /\bcore\s*trade[-\s]?in\b/i.test(desc || '')
 }
 
 /**

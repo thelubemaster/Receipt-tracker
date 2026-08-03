@@ -362,49 +362,8 @@ export function inventCategoryFromText(text: string): { categoryId: CategoryId; 
     return { categoryId: cat.id, label: cat.label, score: bestScore }
   }
 
-  // Last resort: pull meaningful product words (not pure misc dump)
-  const stop = new Set([
-    'the',
-    'and',
-    'for',
-    'with',
-    'from',
-    'item',
-    'qty',
-    'each',
-    'total',
-    'order',
-    'shipped',
-    'filter', // too generic alone without family
-  ])
-  const tokens = lower
-    .replace(/[^a-z0-9\s/-]/g, ' ')
-    .split(/[\s/]+/)
-    .filter(
-      (t) =>
-        t.length >= 4 &&
-        !stop.has(t) &&
-        !/^\d+$/.test(t) &&
-        // skip OCR junk / part codes as category names (r0mex, ph8a, 5w30)
-        !/\d/.test(t) &&
-        /[aeiou]/.test(t),
-    )
-  const unique: string[] = []
-  for (const t of tokens) {
-    if (!unique.includes(t)) unique.push(t)
-    if (unique.length >= 3) break
-  }
-
-  if (unique.length >= 1) {
-    // Prefer a short group name so similar parts cluster
-    const shortLabel =
-      unique.length >= 2
-        ? `${unique[0].charAt(0).toUpperCase()}${unique[0].slice(1)} parts`
-        : `${unique[0].charAt(0).toUpperCase()}${unique[0].slice(1)}`
-    const short = makeCustomCategory(shortLabel)
-    return { categoryId: short.id, label: short.label, score: 1 }
-  }
-
+  // Only invent from DYNAMIC_FAMILIES above (score >= 2).
+  // Never invent a category from a single OCR token ("Core parts", "State", "Sale"…).
   return { categoryId: 'misc', label: 'Misc', score: 0 }
 }
 
