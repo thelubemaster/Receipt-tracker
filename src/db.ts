@@ -514,6 +514,7 @@ function normalizePurchase(p: Purchase): Purchase {
     projectId: p.projectId || DEFAULT_PROJECT_ID,
     lineItems: Array.isArray(p.lineItems) ? p.lineItems : [],
     aisUsed: Array.isArray(p.aisUsed) ? p.aisUsed : [],
+    scanDebug: p.scanDebug && typeof p.scanDebug === 'object' ? p.scanDebug : null,
   }
 }
 

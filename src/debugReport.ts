@@ -199,6 +199,142 @@ export function formatScanDebugText(input: ScanDebugTextInput): string {
   return lines.join('\n')
 }
 
+export type ProjectPurchaseDebugRow = {
+  id: string
+  date: string
+  vendor: string
+  amount: number
+  description: string
+  categoryId: string
+  notes: string
+  lineItems: ReceiptLineItem[]
+  aisUsed?: AiId[]
+  scanDebug?: {
+    capturedAt?: string
+    appVersion?: string
+    activeAiLabel?: string
+    source?: string
+    confidence?: number
+    rawText?: string
+    agentReport?: string
+    aisUsed?: AiId[]
+    subtotal?: number | null
+    tax?: number | null
+    fieldSources?: ScanDebugTextInput['suggestion']['fieldSources']
+    aiAnswer?: {
+      date?: string | null
+      vendor?: string
+      amount?: number | null
+      description?: string
+      categoryId?: string
+      notes?: string
+      lineItems?: ReceiptLineItem[]
+    }
+  } | null
+}
+
+/**
+ * Full project dump: every saved receipt + OCR/agent data when available.
+ * Paste into chat so the coding agent can see systematic AI mistakes.
+ */
+export function formatProjectDebugText(input: {
+  projectName: string
+  projectId: string
+  purchases: ProjectPurchaseDebugRow[]
+}): string {
+  const money = (n: number | null | undefined) =>
+    n == null || Number.isNaN(n) ? '—' : `$${Number(n).toFixed(2)}`
+  const lines: string[] = []
+  lines.push('=== SCHOOLIE PROJECT DATA (paste into chat) ===')
+  lines.push(`App version: ${APP_VERSION}`)
+  lines.push(`When: ${new Date().toISOString()}`)
+  lines.push(`Project: ${input.projectName}`)
+  lines.push(`Project id: ${input.projectId}`)
+  lines.push(`Receipts: ${input.purchases.length}`)
+  lines.push('')
+
+  const withDump = input.purchases.filter((p) => p.scanDebug?.rawText || p.scanDebug?.agentReport)
+  lines.push(
+    `Scan dumps saved: ${withDump.length}/${input.purchases.length} (older receipts may lack OCR — re-scan to capture)`,
+  )
+  lines.push('')
+
+  input.purchases.forEach((p, idx) => {
+    lines.push(`######## RECEIPT ${idx + 1}/${input.purchases.length} · id ${p.id} ########`)
+    lines.push('--- SAVED (what is in the project) ---')
+    lines.push(`Date: ${p.date || '—'}`)
+    lines.push(`Vendor: ${p.vendor || '—'}`)
+    lines.push(`Total: ${money(p.amount)}`)
+    lines.push(`Category: ${p.categoryId || '—'}`)
+    lines.push(`Description: ${p.description || '—'}`)
+    lines.push(`Notes: ${p.notes || '—'}`)
+    lines.push('Line items:')
+    if (p.lineItems?.length) {
+      for (const li of p.lineItems) {
+        lines.push(
+          `  • ${li.description || '(no name)'} | ${money(li.amount)} | cat=${li.categoryId}`,
+        )
+      }
+    } else {
+      lines.push('  (none)')
+    }
+
+    const sd = p.scanDebug
+    if (sd) {
+      lines.push('')
+      lines.push('--- AI SCAN DUMP (what free AIs produced) ---')
+      lines.push(`Captured: ${sd.capturedAt || '—'}`)
+      lines.push(`Scan app version: ${sd.appVersion || '—'}`)
+      lines.push(`Active label: ${sd.activeAiLabel || '—'}`)
+      lines.push(`Source: ${sd.source || '—'}`)
+      lines.push(
+        `Confidence: ${sd.confidence != null ? `${Math.round(sd.confidence * 100)}%` : '—'}`,
+      )
+      if (sd.aiAnswer) {
+        const a = sd.aiAnswer
+        lines.push(`AI vendor: ${a.vendor || '—'}`)
+        lines.push(`AI date: ${a.date || '—'}`)
+        lines.push(`AI total: ${money(a.amount ?? null)}`)
+        lines.push(`AI category: ${a.categoryId || '—'}`)
+        lines.push(`AI description: ${a.description || '—'}`)
+        lines.push('AI line items:')
+        if (a.lineItems?.length) {
+          for (const li of a.lineItems) {
+            lines.push(
+              `  • ${li.description || '(no name)'} | ${money(li.amount)} | cat=${li.categoryId}`,
+            )
+          }
+        } else {
+          lines.push('  (none)')
+        }
+      }
+      lines.push(
+        `AIs that ran (${(sd.aisUsed || p.aisUsed || []).length}): ${(sd.aisUsed || p.aisUsed || []).join(', ') || '—'}`,
+      )
+      if (sd.fieldSources) {
+        const fs = sd.fieldSources
+        lines.push(
+          `Field sources: primary=${fs.primary || '—'} ocr=${fs.ocr || '—'} total=${fs.total || '—'} vendor=${fs.vendor || '—'} category=${fs.category || '—'} date=${fs.date || '—'}`,
+        )
+      }
+      lines.push('')
+      lines.push('--- RAW OCR / VISION TEXT ---')
+      lines.push((sd.rawText || '').trim() || '(empty)')
+      lines.push('')
+      lines.push('--- FULL AGENT REPORT ---')
+      lines.push((sd.agentReport || '').trim() || '(no agent report)')
+    } else {
+      lines.push('')
+      lines.push('--- AI SCAN DUMP ---')
+      lines.push('(none saved — this receipt was typed in or scanned before AI dumps were stored)')
+    }
+    lines.push('')
+  })
+
+  lines.push('=== END PROJECT DATA ===')
+  return lines.join('\n')
+}
+
 export async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {

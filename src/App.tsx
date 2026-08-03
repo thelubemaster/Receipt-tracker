@@ -120,6 +120,7 @@ import type {
   FieldSources,
   Purchase,
   ReceiptLineItem,
+  ScanDebugSnapshot,
   Screen,
 } from './types'
 import {
@@ -130,6 +131,7 @@ import {
   blobToDataUrl,
   buildReportShell,
   copyTextToClipboard,
+  formatProjectDebugText,
   formatScanDebugText,
   listRemoteDebugReports,
   submitDebugReport,
@@ -217,6 +219,7 @@ function ExpandableBlock(props: {
 function projectIdFromScreen(s: Screen): string | null {
   if (
     s.name === 'project' ||
+    s.name === 'project-data' ||
     s.name === 'add' ||
     s.name === 'edit' ||
     s.name === 'detail' ||
@@ -281,6 +284,7 @@ export default function App() {
     let cancelled = false
     const projectScreens = new Set([
       'project',
+      'project-data',
       'project-edit',
       'scan',
       'add',
@@ -465,6 +469,8 @@ export default function App() {
     bestAiId?: AiId | null
     receiptBlob?: Blob | null
     existingReceiptImageId?: string | null
+    /** Capture OCR + agent dump with this receipt (for project AI lab) */
+    scanDebug?: ScanDebugSnapshot | null
   }) {
     setError(null)
     const amount = parseMoneyInputLoose(input.amountRaw)
@@ -503,6 +509,12 @@ export default function App() {
     })
 
     const aisUsed = input.aisUsed ?? []
+    const existing = input.id ? purchases.find((p) => p.id === input.id) : undefined
+    // Keep prior dump on edit unless a new scan dump is provided
+    const scanDebug =
+      input.scanDebug !== undefined
+        ? input.scanDebug
+        : (existing?.scanDebug ?? null)
     const purchase: Purchase = {
       id: input.id ?? newId(),
       projectId: input.projectId,
@@ -516,8 +528,9 @@ export default function App() {
       lineItems: normalizedLines,
       aisUsed,
       bestAiId: input.bestAiId ?? null,
+      scanDebug: scanDebug || null,
       createdAt: input.id
-        ? (purchases.find((p) => p.id === input.id)?.createdAt ?? now)
+        ? (existing?.createdAt ?? now)
         : now,
       updatedAt: now,
     }
@@ -759,6 +772,26 @@ export default function App() {
           onSettings={() => setScreen({ name: 'settings' })}
           onExportCsv={() => downloadCsv(purchases, activeProject.name)}
           onExportPdf={() => downloadPdfSummary(purchases, activeProject.name)}
+          onOpenAiData={() =>
+            setScreen({ name: 'project-data', projectId: activeProject.id })
+          }
+        />
+      )}
+
+      {screen.name === 'project-data' && activeProject && (
+        <ProjectDataScreen
+          project={activeProject}
+          purchases={purchases}
+          customCategories={customCats}
+          onBack={() => setScreen({ name: 'project', projectId: activeProject.id })}
+          onOpen={(id) =>
+            setScreen({
+              name: 'detail',
+              purchaseId: id,
+              projectId: activeProject.id,
+            })
+          }
+          onMessage={(msg) => setInfo(msg)}
         />
       )}
 
@@ -889,6 +922,35 @@ export default function App() {
           }
           onDebugMessage={(msg) => setInfo(msg)}
           onSave={async (form, receiptBlob) => {
+            const amountNum = parseMoneyInputLoose(form.amount)
+            const hasScanDump = Boolean(
+              (form.rawText && form.rawText.trim()) ||
+                (form.agentReport && form.agentReport.trim()),
+            )
+            const scanDebug: ScanDebugSnapshot | null = hasScanDump
+              ? {
+                  capturedAt: new Date().toISOString(),
+                  appVersion: APP_VERSION,
+                  activeAiLabel: form.activeAiLabel || undefined,
+                  source: form.source || undefined,
+                  confidence: form.confidence,
+                  rawText: form.rawText || undefined,
+                  agentReport: form.agentReport || undefined,
+                  aisUsed: form.aisUsed,
+                  fieldSources: form.fieldSources,
+                  subtotal: form.subtotal,
+                  tax: form.tax,
+                  aiAnswer: {
+                    date: form.date || null,
+                    vendor: form.vendor,
+                    amount: amountNum,
+                    description: form.description,
+                    categoryId: form.categoryId,
+                    notes: form.notes,
+                    lineItems: form.lineItems,
+                  },
+                }
+              : null
             await handleSavePurchase({
               projectId: screen.projectId,
               date: form.date,
@@ -901,6 +963,7 @@ export default function App() {
               aisUsed: form.aisUsed,
               bestAiId: form.bestAiId,
               receiptBlob,
+              scanDebug,
             })
           }}
         />
@@ -1468,6 +1531,8 @@ function HomeScreen(props: {
   onSettings: () => void
   onExportCsv: () => void
   onExportPdf: () => void
+  /** Open project AI data lab — every receipt + OCR dumps */
+  onOpenAiData: () => void
 }) {
   // Groups start expanded so the main screen shows receipts under each category
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
@@ -1575,6 +1640,23 @@ function HomeScreen(props: {
       </section>
 
       <AndroidInstallCard />
+
+      <div className="card ai-data-lab-card">
+        <strong>AI data lab</strong>
+        <p className="muted" style={{ margin: '6px 0 10px' }}>
+          See every receipt in this project plus OCR text and agent reports the free
+          AIs produced — so you can spot mistakes and improve scanning.
+        </p>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ width: '100%' }}
+          disabled={props.purchases.length === 0}
+          onClick={props.onOpenAiData}
+        >
+          View all project + AI data
+        </button>
+      </div>
 
       <div className="section-title">
         <span>By category</span>
@@ -1703,6 +1785,243 @@ function HomeScreen(props: {
           Scan receipt
         </button>
       </div>
+    </>
+  )
+}
+
+/**
+ * Project AI data lab — every receipt in the project plus OCR/agent dumps
+ * so you can see what free AIs got wrong and improve scanning.
+ */
+function ProjectDataScreen(props: {
+  project: Project
+  purchases: Purchase[]
+  customCategories: Category[]
+  onBack: () => void
+  onOpen: (purchaseId: string) => void
+  onMessage: (msg: string) => void
+}) {
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [copyStatus, setCopyStatus] = useState<string | null>(null)
+  const withDump = props.purchases.filter(
+    (p) => p.scanDebug?.rawText || p.scanDebug?.agentReport,
+  ).length
+
+  async function copyAll() {
+    const text = formatProjectDebugText({
+      projectName: props.project.name,
+      projectId: props.project.id,
+      purchases: props.purchases.map((p) => ({
+        id: p.id,
+        date: p.date,
+        vendor: p.vendor,
+        amount: p.amount,
+        description: p.description,
+        categoryId: p.categoryId,
+        notes: p.notes,
+        lineItems: p.lineItems,
+        aisUsed: p.aisUsed,
+        scanDebug: p.scanDebug,
+      })),
+    })
+    const ok = await copyTextToClipboard(text)
+    const msg = ok
+      ? `Copied full project dump (${props.purchases.length} receipts) — paste into chat`
+      : 'Could not copy — try again'
+    setCopyStatus(msg)
+    props.onMessage(msg)
+  }
+
+  async function copyOne(p: Purchase) {
+    const text = formatProjectDebugText({
+      projectName: props.project.name,
+      projectId: props.project.id,
+      purchases: [
+        {
+          id: p.id,
+          date: p.date,
+          vendor: p.vendor,
+          amount: p.amount,
+          description: p.description,
+          categoryId: p.categoryId,
+          notes: p.notes,
+          lineItems: p.lineItems,
+          aisUsed: p.aisUsed,
+          scanDebug: p.scanDebug,
+        },
+      ],
+    })
+    const ok = await copyTextToClipboard(text)
+    const msg = ok
+      ? `Copied dump for ${p.vendor || p.description || 'receipt'} — paste into chat`
+      : 'Could not copy'
+    setCopyStatus(msg)
+    props.onMessage(msg)
+  }
+
+  return (
+    <>
+      <header className="topbar">
+        <button type="button" className="icon-btn" onClick={props.onBack} aria-label="Back">
+          ←
+        </button>
+        <BrandLockup title="AI data lab" subtitle={props.project.name} size={36} />
+        <div className="topbar-actions" />
+      </header>
+
+      <div className="card">
+        <strong>Everything in this project</strong>
+        <p className="muted" style={{ margin: '6px 0 10px' }}>
+          Saved receipt fields plus OCR text and agent reports from free on-device AIs.
+          Copy a dump and paste it into chat so scanning can be improved — nothing leaves
+          your phone until you paste it.
+        </p>
+        <p className="muted" style={{ margin: '0 0 12px', fontSize: '0.9rem' }}>
+          {props.purchases.length} receipt{props.purchases.length === 1 ? '' : 's'} ·{' '}
+          {withDump} with AI scan dump{withDump === 1 ? '' : 's'}
+          {withDump < props.purchases.length
+            ? ' · older/manual entries may lack OCR (re-scan to capture)'
+            : ''}
+        </p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          style={{ width: '100%' }}
+          disabled={props.purchases.length === 0}
+          onClick={() => void copyAll()}
+        >
+          Copy all project data for chat
+        </button>
+        {copyStatus && (
+          <p className="muted" style={{ margin: '10px 0 0', fontSize: '0.85rem' }}>
+            {copyStatus}
+          </p>
+        )}
+      </div>
+
+      {props.purchases.length === 0 ? (
+        <div className="empty empty-soft">
+          <div className="empty-icon">🧪</div>
+          <p>No receipts yet. Scan one, save it, then come back here.</p>
+        </div>
+      ) : (
+        <div className="ai-data-list">
+          {props.purchases.map((p, idx) => {
+            const open = openId === p.id
+            const sd = p.scanDebug
+            const hasDump = Boolean(sd?.rawText || sd?.agentReport)
+            const cat = getCategory(p.categoryId, props.customCategories)
+            return (
+              <article key={p.id} className="card ai-data-receipt">
+                <div className="ai-data-receipt-head">
+                  <div>
+                    <div className="ai-data-receipt-title">
+                      {p.vendor || p.description || 'Receipt'}{' '}
+                      <span className="muted">#{idx + 1}</span>
+                    </div>
+                    <div className="muted" style={{ fontSize: '0.85rem' }}>
+                      {p.date} · {formatMoney(p.amount)} · {cat.label}
+                    </div>
+                  </div>
+                  <div className="ai-data-badges">
+                    {hasDump ? (
+                      <span className="ai-badge ai-badge-ok">AI dump</span>
+                    ) : (
+                      <span className="ai-badge ai-badge-miss">No OCR dump</span>
+                    )}
+                    {typeof sd?.confidence === 'number' && (
+                      <span className="ai-badge">
+                        {Math.round(sd.confidence * 100)}% conf
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className="ai-data-desc">{p.description || '—'}</p>
+                {p.lineItems?.length > 0 && (
+                  <ul className="ai-data-lines">
+                    {p.lineItems.map((li) => (
+                      <li key={li.id}>
+                        {li.description || '(item)'} · {formatMoney(li.amount)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="row-actions stack" style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setOpenId(open ? null : p.id)}
+                  >
+                    {open ? 'Hide AI dump' : 'Show AI dump (OCR + agents)'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void copyOne(p)}
+                  >
+                    Copy this receipt for chat
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => props.onOpen(p.id)}
+                  >
+                    Open receipt
+                  </button>
+                </div>
+                {open && (
+                  <div className="ai-data-dump">
+                    {hasDump ? (
+                      <>
+                        <div className="muted" style={{ fontSize: '0.8rem', marginBottom: 6 }}>
+                          {sd?.activeAiLabel || 'Scan'} ·{' '}
+                          {(sd?.aisUsed || p.aisUsed || []).join(', ') || 'no AI ids'}
+                          {sd?.capturedAt ? ` · saved ${sd.capturedAt.slice(0, 19)}` : ''}
+                        </div>
+                        {sd?.aiAnswer && (
+                          <div className="ai-data-block">
+                            <strong>AI answer (at save)</strong>
+                            <pre className="ai-data-pre">
+                              {`Vendor: ${sd.aiAnswer.vendor || '—'}
+Date: ${sd.aiAnswer.date || '—'}
+Total: ${sd.aiAnswer.amount != null ? formatMoney(sd.aiAnswer.amount) : '—'}
+Category: ${sd.aiAnswer.categoryId || '—'}
+Description: ${sd.aiAnswer.description || '—'}
+Lines: ${(sd.aiAnswer.lineItems || [])
+                                .map(
+                                  (li) =>
+                                    `${li.description} ${formatMoney(li.amount)}`,
+                                )
+                                .join(' · ') || '(none)'}`}
+                            </pre>
+                          </div>
+                        )}
+                        <div className="ai-data-block">
+                          <strong>Raw OCR / vision text</strong>
+                          <pre className="ai-data-pre">
+                            {(sd?.rawText || '').trim() || '(empty)'}
+                          </pre>
+                        </div>
+                        <div className="ai-data-block">
+                          <strong>Agent report</strong>
+                          <pre className="ai-data-pre">
+                            {(sd?.agentReport || '').trim() || '(none)'}
+                          </pre>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="muted" style={{ margin: 0 }}>
+                        No OCR/agent dump on this receipt. It was entered manually or
+                        saved before this feature. Scan again and save to capture AI data.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </article>
+            )
+          })}
+        </div>
+      )}
     </>
   )
 }

@@ -29,6 +29,34 @@ export interface Project {
   updatedAt: string
 }
 
+/**
+ * What the on-device AI team produced for one scan (kept so you can review
+ * OCR + agent mistakes later without re-scanning).
+ */
+export type ScanDebugSnapshot = {
+  capturedAt: string
+  appVersion?: string
+  activeAiLabel?: string
+  source?: string
+  confidence?: number
+  rawText?: string
+  agentReport?: string
+  aisUsed?: AiId[]
+  fieldSources?: FieldSources
+  subtotal?: number | null
+  tax?: number | null
+  /** Answer the AI produced before/while you edited the form */
+  aiAnswer?: {
+    date?: string | null
+    vendor?: string
+    amount?: number | null
+    description?: string
+    categoryId?: CategoryId
+    notes?: string
+    lineItems?: ReceiptLineItem[]
+  }
+}
+
 export interface Purchase {
   id: string
   /** Which project this receipt belongs to */
@@ -43,6 +71,12 @@ export interface Purchase {
   lineItems: ReceiptLineItem[]
   aisUsed: AiId[]
   bestAiId?: AiId | null
+  /**
+   * Optional scan dump (OCR text, agent report, confidence).
+   * Saved when you keep a receipt from a scan so the project AI lab can show
+   * everything the free AIs saw and got wrong.
+   */
+  scanDebug?: ScanDebugSnapshot | null
   createdAt: string
   updatedAt: string
 }
@@ -128,6 +162,8 @@ export type Screen =
   | { name: 'home' }
   | { name: 'project'; projectId: string }
   | { name: 'project-edit'; projectId?: string }
+  /** Full project dump: every receipt + AI OCR/agent data for fixing scans */
+  | { name: 'project-data'; projectId: string }
   | {
       name: 'add'
       projectId: string

@@ -1,7 +1,7 @@
 {
-  "version": "1.32.7",
+  "version": "1.33.0",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Private-sale: fix 7150→$150, align total to line, clean Dustin Maurer bus title",
+  "notes": "Project AI data lab — see all receipts + OCR dumps",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

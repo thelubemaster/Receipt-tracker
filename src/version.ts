@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.32.7'
+export const APP_VERSION = '1.33.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.33.0',
+    date: '2026-08-03',
+    title: 'Project AI data lab — see everything the AIs got wrong',
+    changes: [
+      'New “View all project + AI data” on each project',
+      'Lists every receipt with saved fields, line items, confidence, and OCR/agent dumps',
+      'Copy one receipt or the whole project dump to paste into chat for AI fixes',
+      'New scans store OCR text + agent report with the receipt (older ones need a re-scan to capture dumps)',
+    ],
+  },
   {
     version: '1.32.7',
     date: '2026-08-02',
