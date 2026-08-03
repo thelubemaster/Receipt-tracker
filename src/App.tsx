@@ -111,8 +111,12 @@ import {
 import { ThemePicker } from './ThemePicker'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanInvoiceFromText, scanReceipt, type ScanResult } from './receiptAi'
-import { regroupAllPurchases } from './regroup'
-import { categoryBreakdown, groupPurchasesByCategory, totalSpent } from './stats'
+import {
+  categoryBreakdown,
+  groupPurchasesForDisplay,
+  purchaseCategoryLabel,
+  totalSpent,
+} from './stats'
 import type {
   AppSettings,
   Project,
@@ -398,62 +402,10 @@ export default function App() {
     [purchases, customCats],
   )
   const purchaseGroups = useMemo(
-    () => groupPurchasesByCategory(purchases, customCats),
+    () => groupPurchasesForDisplay(purchases, customCats),
     [purchases, customCats],
   )
 
-  async function handleRegroup() {
-    if (!purchases.length) {
-      setInfo('Scan a receipt first — then Regroup can put alike ones in the same group.')
-      return
-    }
-    setError(null)
-    const { purchases: next, changed, labels, preserved, filledMisc, mergedAlike } =
-      regroupAllPurchases(purchases)
-    const groupCount = new Set(next.map((p) => p.categoryId || 'misc')).size
-    const nextCustom = absorbCategoryLabels(settings.customCategories ?? [], labels)
-    if (
-      nextCustom.length !== (settings.customCategories ?? []).length ||
-      nextCustom.some((c, i) => c.id !== (settings.customCategories ?? [])[i]?.id)
-    ) {
-      const nextSettings = { ...settings, customCategories: nextCustom }
-      await saveSettings(nextSettings)
-      setSettings(nextSettings)
-    }
-    // Only update receipts whose *group* categoryId moved — never rewrite line items
-    const byId = new Map(purchases.map((p) => [p.id, p]))
-    for (const p of next) {
-      const prev = byId.get(p.id)
-      if (!prev || prev.categoryId !== p.categoryId) {
-        // Preserve line items / AI marks from the original receipt
-        await savePurchase({
-          ...prev!,
-          categoryId: p.categoryId,
-          updatedAt: p.updatedAt,
-          lineItems: prev!.lineItems,
-        })
-      }
-    }
-    await refresh()
-    if (changed === 0) {
-      setInfo(
-        `AI categories kept as-is — ${preserved} receipt${preserved === 1 ? '' : 's'} in ${groupCount} group${groupCount === 1 ? '' : 's'}.`,
-      )
-    } else {
-      const bits: string[] = []
-      if (mergedAlike > 0) {
-        bits.push(
-          `merged ${mergedAlike} alike receipt${mergedAlike === 1 ? '' : 's'} into shared groups`,
-        )
-      }
-      if (filledMisc > 0) {
-        bits.push(`placed ${filledMisc} uncategorized receipt${filledMisc === 1 ? '' : 's'}`)
-      }
-      setInfo(
-        `${bits.join('; ') || `Updated ${changed}`} — still ${groupCount} group${groupCount === 1 ? '' : 's'}. AI category marks on each receipt were not re-run.`,
-      )
-    }
-  }
 
   async function handleSavePurchase(input: {
     id?: string
@@ -744,7 +696,6 @@ export default function App() {
           groups={purchaseGroups}
           purchases={purchases}
           customCategories={customCats}
-          onRegroup={handleRegroup}
           onBackHome={() => {
             setScreen({ name: 'home' })
             void refresh(null)
@@ -1519,10 +1470,9 @@ function HomeScreen(props: {
   total: number
   purchaseCount: number
   breakdown: ReturnType<typeof categoryBreakdown>
-  groups: ReturnType<typeof groupPurchasesByCategory>
+  groups: ReturnType<typeof groupPurchasesForDisplay>
   purchases: Purchase[]
   customCategories: Category[]
-  onRegroup: () => void | Promise<void>
   onBackHome: () => void
   onEditProject: () => void
   onScan: () => void
@@ -1536,7 +1486,6 @@ function HomeScreen(props: {
 }) {
   // Groups start expanded so the main screen shows receipts under each category
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
-  const [regroupBusy, setRegroupBusy] = useState(false)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const coverBlobRef = useRef<string | null>(null)
 
@@ -1582,15 +1531,6 @@ function HomeScreen(props: {
       const currentlyOpen = prev[id] !== false
       return { ...prev, [id]: !currentlyOpen }
     })
-  }
-
-  async function runRegroup() {
-    setRegroupBusy(true)
-    try {
-      await Promise.resolve(props.onRegroup())
-    } finally {
-      setRegroupBusy(false)
-    }
   }
 
   return (
@@ -1659,16 +1599,7 @@ function HomeScreen(props: {
       </div>
 
       <div className="section-title">
-        <span>By category</span>
-        <button
-          type="button"
-          className="regroup-btn"
-          disabled={regroupBusy || props.purchases.length === 0}
-          onClick={() => void runRegroup()}
-          title="Put alike receipts in the same group — does not re-run AI or change marked categories"
-        >
-          {regroupBusy ? 'Regrouping…' : 'Regroup'}
-        </button>
+        <span>Categories (spend)</span>
       </div>
       {props.breakdown.length === 0 ? (
         <div className="empty empty-soft">
@@ -1698,15 +1629,14 @@ function HomeScreen(props: {
             </div>
           ))}
           <p className="group-hint">
-            Groups use the category each free AI marked when you scanned. Press{' '}
-            <strong>Regroup</strong> only to put alike receipts in the same group — it does not
-            change what the AI already marked on each receipt.
+            This list is the <strong>real category on each receipt</strong> (what the AI or you
+            set). Nothing here is rewritten when you view groups below.
           </p>
         </div>
       )}
 
       <div className="section-title">
-        <span>Groups</span>
+        <span>Groups (similar together)</span>
         <span className="export-links">
           <button type="button" onClick={props.onExportCsv}>
             CSV
@@ -1716,6 +1646,10 @@ function HomeScreen(props: {
           </button>
         </span>
       </div>
+      <p className="group-hint" style={{ margin: '0 0 10px' }}>
+        Similar categories sit in the same group for browsing only. Each receipt keeps its own
+        category (shown under the title).
+      </p>
 
       {props.groups.length === 0 ? (
         <div className="empty empty-soft">
@@ -1760,6 +1694,8 @@ function HomeScreen(props: {
                         <span className="purchase-title">{p.description || 'Purchase'}</span>
                         <span className="purchase-amount">{formatMoney(p.amount)}</span>
                         <span className="purchase-meta">
+                          {purchaseCategoryLabel(p, props.customCategories)}
+                          {' · '}
                           {p.date}
                           {p.vendor ? ` · ${p.vendor}` : ''}
                           {p.lineItems?.length

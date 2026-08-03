@@ -1,7 +1,7 @@
 {
-  "version": "1.33.1",
+  "version": "1.33.2",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "No invented product names; core charge/trade-in are real money",
+  "notes": "Groups only sort similar receipts — never change categories",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.33.1'
+export const APP_VERSION = '1.33.2'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.33.2',
+    date: '2026-08-03',
+    title: 'Groups only sort — never change receipt categories',
+    changes: [
+      'Removed Regroup that rewrote categories (it felt broken and was unwanted)',
+      '“By category” shows each receipt’s real category and spend',
+      '“Groups” only puts similar categories together for browsing',
+      'Each receipt still shows its own category under the title',
+    ],
+  },
   {
     version: '1.33.1',
     date: '2026-08-03',
