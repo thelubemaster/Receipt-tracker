@@ -63,16 +63,6 @@ function productsOf(items: ReceiptLineItem[]): ReceiptLineItem[] {
   )
 }
 
-function coreNet(items: ReceiptLineItem[]): number {
-  return roundMoney(
-    items.reduce((s, i) => {
-      if (isCoreChargeLineItem(i.description)) return s + Math.abs(i.amount)
-      if (isCoreTradeInLineItem(i.description)) return s - Math.abs(i.amount)
-      return s
-    }, 0),
-  )
-}
-
 function sumProducts(items: ReceiptLineItem[]): number {
   return roundMoney(productsOf(items).reduce((s, i) => s + i.amount, 0))
 }
