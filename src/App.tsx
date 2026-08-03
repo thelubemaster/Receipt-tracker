@@ -1599,7 +1599,7 @@ function HomeScreen(props: {
       </div>
 
       <div className="section-title">
-        <span>Categories (spend)</span>
+        <span>Spending by category</span>
       </div>
       {props.breakdown.length === 0 ? (
         <div className="empty empty-soft">
@@ -1628,15 +1628,11 @@ function HomeScreen(props: {
               </div>
             </div>
           ))}
-          <p className="group-hint">
-            This list is the <strong>real category on each receipt</strong> (what the AI or you
-            set). Nothing here is rewritten when you view groups below.
-          </p>
         </div>
       )}
 
       <div className="section-title">
-        <span>Groups (similar together)</span>
+        <span>Receipts</span>
         <span className="export-links">
           <button type="button" onClick={props.onExportCsv}>
             CSV
@@ -1647,8 +1643,7 @@ function HomeScreen(props: {
         </span>
       </div>
       <p className="group-hint" style={{ margin: '0 0 10px' }}>
-        Similar categories sit in the same group for browsing only. Each receipt keeps its own
-        category (shown under the title).
+        Same categories as above. Expand a category to open receipts.
       </p>
 
       {props.groups.length === 0 ? (

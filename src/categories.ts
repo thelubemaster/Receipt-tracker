@@ -84,13 +84,92 @@ export function humanizeCategoryId(id: string): string {
     .join(' ')
 }
 
+/**
+ * Map free-form / AI slug variants onto a stable builtin id when they mean
+ * the same thing. Example: "engine-and-powertrain" → "engine"
+ * (slugify turns "Engine & Powertrain" into "engine-and-powertrain").
+ * Display and invent only — does not rewrite saved purchases by itself.
+ */
+const CATEGORY_ID_ALIASES: Record<string, string> = {
+  // Engine & Powertrain family
+  engine: 'engine',
+  engines: 'engine',
+  powertrain: 'engine',
+  'power-train': 'engine',
+  'engine-powertrain': 'engine',
+  'engine-and-powertrain': 'engine',
+  engineparts: 'engine',
+  'engine-parts': 'engine',
+  motor: 'engine',
+  motors: 'engine',
+  drivetrain: 'engine',
+  'drive-train': 'engine',
+  // Clear free-form ↔ preset (only obvious synonyms — not loose words like "battery")
+  electrical: 'electrical',
+  electric: 'electrical',
+  electronics: 'electrical',
+  wiring: 'electrical',
+  fuel: 'fuel',
+  'fuel-system': 'fuel',
+  fuelsystem: 'fuel',
+  structure: 'structure',
+  insulation: 'insulation',
+  plumbing: 'plumbing',
+  solar: 'solar',
+  tools: 'tools',
+  'tools-and-supplies': 'tools',
+  safety: 'safety',
+  kitchen: 'kitchen',
+  bathroom: 'bathroom',
+  flooring: 'flooring',
+  furniture: 'furniture',
+  interior: 'interior',
+  propane: 'propane',
+  windows: 'windows',
+  'windows-and-doors': 'windows',
+  misc: 'misc',
+  other: 'misc',
+  general: 'misc',
+}
+
+/** Prefer builtin id when the free-form slug is a known synonym. */
+export function canonicalizeCategoryId(id: string): string {
+  const raw = (id || '').trim()
+  if (!raw) return 'misc'
+  const lower = raw.toLowerCase()
+  if (BUILTIN_CATEGORIES.some((c) => c.id === lower)) return lower
+
+  // Already a slug, or a label
+  const slug = raw.includes(' ') || raw.includes('&')
+    ? slugifyCategory(raw)
+    : lower.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+
+  if (BUILTIN_CATEGORIES.some((c) => c.id === slug)) return slug
+
+  // Builtin label slugified: "Engine & Powertrain" → engine-and-powertrain
+  for (const c of BUILTIN_CATEGORIES) {
+    if (slugifyCategory(c.label) === slug) return c.id
+  }
+
+  const alias = CATEGORY_ID_ALIASES[slug] || CATEGORY_ID_ALIASES[lower]
+  if (alias) return alias
+
+  return raw
+}
+
 export function makeCustomCategory(label: string): Category {
   const clean = label.trim() || 'Misc'
-  const id = slugifyCategory(clean)
+  const slug = slugifyCategory(clean)
+  const canon = canonicalizeCategoryId(slug)
+  const builtin = BUILTIN_CATEGORIES.find((c) => c.id === canon)
+  // Don't invent a near-duplicate of a schoolie preset (Engine And Powertrain vs Engine & Powertrain)
+  if (builtin && (canon === slug || slugifyCategory(builtin.label) === slug || CATEGORY_ID_ALIASES[slug] === canon)) {
+    return { ...builtin }
+  }
   return {
-    id,
+    id: slug,
     label: clean,
-    color: colorForCategoryId(id),
+    color: colorForCategoryId(slug),
     custom: true,
   }
 }
@@ -100,15 +179,21 @@ export function getCategory(
   id: string,
   custom: Category[] = [],
 ): Category {
-  const fromCustom = custom.find((c) => c.id === id)
+  const raw = (id || 'misc').trim() || 'misc'
+  const canon = canonicalizeCategoryId(raw)
+  // Known alias of a schoolie preset → always show the clean preset label
+  // (engine-and-powertrain → Engine & Powertrain)
+  if (canon !== raw.toLowerCase() || BUILTIN_CATEGORIES.some((c) => c.id === canon)) {
+    const builtin = BUILTIN_CATEGORIES.find((c) => c.id === canon)
+    if (builtin) return builtin
+  }
+  const fromCustom = custom.find((c) => c.id === raw || c.id === canon)
   if (fromCustom) return fromCustom
-  const fromBuiltin = BUILTIN_CATEGORIES.find((c) => c.id === id)
-  if (fromBuiltin) return fromBuiltin
   // Free-form id we haven't stored yet
   return {
-    id,
-    label: humanizeCategoryId(id),
-    color: colorForCategoryId(id),
+    id: raw,
+    label: humanizeCategoryId(raw),
+    color: colorForCategoryId(raw),
     custom: true,
   }
 }
@@ -137,10 +222,16 @@ export function absorbCategoryLabels(
   for (const c of custom) map.set(c.id, c)
   for (const raw of labelsOrIds) {
     if (!raw || raw === 'misc') continue
-    const asBuiltin = BUILTIN_CATEGORIES.find((c) => c.id === raw || c.label === raw)
-    if (asBuiltin) continue
-    const cat = makeCustomCategory(raw.includes('-') && raw === slugifyCategory(raw) ? humanizeCategoryId(raw) : raw)
-    if (!map.has(cat.id) && !BUILTIN_CATEGORIES.some((b) => b.id === cat.id)) {
+    // Skip builtins and known aliases (engine-and-powertrain → engine)
+    const canon = canonicalizeCategoryId(raw)
+    if (BUILTIN_CATEGORIES.some((c) => c.id === canon || c.id === raw || c.label === raw)) {
+      continue
+    }
+    const cat = makeCustomCategory(
+      raw.includes('-') && raw === slugifyCategory(raw) ? humanizeCategoryId(raw) : raw,
+    )
+    if (!cat.custom || BUILTIN_CATEGORIES.some((b) => b.id === cat.id)) continue
+    if (!map.has(cat.id)) {
       map.set(cat.id, cat)
     }
   }

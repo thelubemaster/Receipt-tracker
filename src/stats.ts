@@ -33,14 +33,16 @@ export function totalSpent(purchases: Purchase[]): number {
 }
 
 /**
- * Breakdown by whatever category ids appear in purchases (builtins + free-form).
- * Exact categories — does not merge or rewrite receipts.
+ * Spend bars for the project home screen.
+ * Uses the same similarity merge as receipt groups so
+ * "Engine & Powertrain" and "Engine And Powertrain" are one line —
+ * never rewrites purchase.categoryId.
  */
 export function categoryBreakdown(
   purchases: Purchase[],
   custom: Category[] = [],
 ): CategoryTotal[] {
-  return groupPurchasesByCategoryExact(purchases, custom).map((g) => ({
+  return groupPurchasesForDisplay(purchases, custom).map((g) => ({
     categoryId: g.categoryId,
     label: g.label,
     color: g.color,

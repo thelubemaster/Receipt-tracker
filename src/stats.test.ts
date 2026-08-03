@@ -68,13 +68,23 @@ describe('groupPurchasesForDisplay', () => {
     expect(groups.find((g) => g.purchases.some((x) => x.id === '3'))!.count).toBe(1)
   })
 
-  it('exact breakdown still lists each real category for spend', () => {
+  it('spend bars merge engine aliases into one line (same as receipts)', () => {
     const purchases = [
-      p({ id: '1', amount: 100, categoryId: 'engine' }),
-      p({ id: '2', amount: 50, categoryId: 'engine-parts' }),
+      p({ id: '1', amount: 116.94, categoryId: 'engine' }),
+      p({ id: '2', amount: 365.2, categoryId: 'engine-and-powertrain' }),
+      p({ id: '3', amount: 750, categoryId: 'vehicle' }),
     ]
-    const exact = groupPurchasesByCategoryExact(purchases)
-    expect(exact).toHaveLength(2)
-    expect(categoryBreakdown(purchases)).toHaveLength(2)
+    // Exact stored ids are still two engine-ish categories
+    expect(groupPurchasesByCategoryExact(purchases)).toHaveLength(3)
+    // Home spend bars combine engine family
+    const bars = categoryBreakdown(purchases)
+    expect(bars).toHaveLength(2)
+    const engineBar = bars.find((b) => /engine/i.test(b.label))!
+    expect(engineBar.amount).toBe(482.14)
+    expect(engineBar.label).toMatch(/Engine/i)
+    // One clean label — not both "Engine And Powertrain" and "Engine & Powertrain"
+    expect(bars.filter((b) => /engine/i.test(b.label))).toHaveLength(1)
+    expect(purchases[0].categoryId).toBe('engine')
+    expect(purchases[1].categoryId).toBe('engine-and-powertrain')
   })
 })

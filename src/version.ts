@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.33.3'
+export const APP_VERSION = '1.33.4'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.33.4',
+    date: '2026-08-03',
+    title: 'One spending list — no duplicate engine lines',
+    changes: [
+      '“Engine & Powertrain” and “Engine And Powertrain” show as one spend bar',
+      'Spending bars and Receipts use the same category buckets',
+      'Cleaner home layout: Spending by category + Receipts (no dual grouping story)',
+    ],
+  },
   {
     version: '1.33.3',
     date: '2026-08-03',
