@@ -111,19 +111,122 @@ function categoryTokens(id: string): Set<string> {
   return new Set(toks.length ? toks : raw ? [raw] : ['misc'])
 }
 
-/** How alike two category ids are (0–1). */
+/**
+ * Related category families for *display* grouping only.
+ * "engine" and "powertrain" share no letters, so token overlap alone fails —
+ * these synonyms put them in one visual group without rewriting receipt categories.
+ */
+const CATEGORY_FAMILIES: string[][] = [
+  [
+    'engine',
+    'engines',
+    'powertrain',
+    'power-train',
+    'engine-powertrain',
+    'engine-and-powertrain',
+    'engineparts',
+    'engine-parts',
+    'motor',
+    'motors',
+    'drivetrain',
+    'drive-train',
+  ],
+  [
+    'electrical',
+    'electric',
+    'electronics',
+    'wiring',
+    'sensors',
+    'sensor',
+    'electrical-and-sensors',
+  ],
+  [
+    'fuel',
+    'fuel-system',
+    'fuelsystem',
+    'diesel',
+    'filters-and-fluids',
+    'filters',
+    'fluids',
+    'oil',
+  ],
+  ['brakes', 'brake', 'suspension', 'brakes-and-suspension'],
+  ['cooling', 'coolant', 'radiator', 'cooling-system'],
+  ['exhaust', 'emissions', 'exhaust-and-emissions', 'dpf'],
+  ['towing', 'tow', 'hitch', 'trailer', 'towing-and-hitch'],
+  ['body', 'exterior', 'body-and-exterior'],
+  ['structure', 'framing', 'lumber', 'metal'],
+  ['insulation', 'foam'],
+  ['plumbing', 'pipe', 'pipes'],
+  ['solar', 'battery', 'batteries', 'electrical-solar'],
+]
+
+/** Family key if this category id/label belongs to a known related set. */
+export function categoryFamily(id: string): string | null {
+  const norm = (id || '')
+    .toLowerCase()
+    .replace(/&/g, ' ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  if (!norm || norm === 'misc') return null
+  const labelNorm = humanizeCategoryId(id)
+    .toLowerCase()
+    .replace(/&/g, ' ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+
+  for (const fam of CATEGORY_FAMILIES) {
+    const key = fam[0]
+    for (const term of fam) {
+      if (
+        norm === term ||
+        labelNorm === term ||
+        norm.includes(term) ||
+        term.includes(norm) ||
+        labelNorm.includes(term) ||
+        term.includes(labelNorm)
+      ) {
+        return key
+      }
+    }
+    // token hit: "engine-and-powertrain" tokens engine + powertrain
+    const toks = categoryTokens(id)
+    if ([...toks].some((t) => fam.includes(t))) return key
+  }
+  return null
+}
+
+/** How alike two category ids are (0–1). Display grouping only. */
 export function categorySimilarity(a: string, b: string): number {
   if (!a || !b) return 0
   if (a === b) return 1
   const la = a.toLowerCase()
   const lb = b.toLowerCase()
   if (la === lb) return 1
+
+  // Same known family (engine ↔ powertrain, engine ↔ Engine & Powertrain, …)
+  const fa = categoryFamily(a)
+  const fb = categoryFamily(b)
+  if (fa && fb && fa === fb) return 0.92
+
   // prefix / contains (engine vs engine-parts)
   if (la.startsWith(lb) || lb.startsWith(la) || la.includes(lb) || lb.includes(la)) {
     const shorter = Math.min(la.length, lb.length)
     const longer = Math.max(la.length, lb.length)
     return Math.max(0.72, shorter / longer)
   }
+  // Label text overlap (humanized)
+  const ha = humanizeCategoryId(a).toLowerCase()
+  const hb = humanizeCategoryId(b).toLowerCase()
+  if (ha === hb) return 1
+  if (ha.includes(hb) || hb.includes(ha)) {
+    const shorter = Math.min(ha.length, hb.length)
+    const longer = Math.max(ha.length, hb.length)
+    return Math.max(0.7, shorter / longer)
+  }
+
   const ta = categoryTokens(a)
   const tb = categoryTokens(b)
   if (!ta.size || !tb.size) return 0
@@ -133,7 +236,8 @@ export function categorySimilarity(a: string, b: string): number {
   return union > 0 ? inter / union : 0
 }
 
-const ALIKE_THRESHOLD = 0.55
+/** Lower threshold so family matches and soft overlaps still cluster. */
+const ALIKE_THRESHOLD = 0.5
 
 /**
  * Build a map: each category id → canonical id to merge into.

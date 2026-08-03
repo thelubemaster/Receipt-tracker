@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.33.2'
+export const APP_VERSION = '1.33.3'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.33.3',
+    date: '2026-08-03',
+    title: 'Engine + powertrain sit in one group',
+    changes: [
+      '“Groups (similar together)” now clusters engine and powertrain (and similar families)',
+      'Display-only — each receipt still keeps its real category (engine vs powertrain)',
+      'Categories (spend) still lists exact categories for accurate totals',
+    ],
+  },
   {
     version: '1.33.2',
     date: '2026-08-03',

@@ -1,6 +1,6 @@
 import { allCategories, getCategory, humanizeCategoryId, type Category } from './categories'
 import { sumAmounts } from './money'
-import { categorySimilarity, buildCategoryMergeMap } from './regroup'
+import { categorySimilarity, buildCategoryMergeMap, categoryFamily } from './regroup'
 import type { CategoryId, Purchase } from './types'
 
 export interface CategoryTotal {
@@ -174,11 +174,37 @@ export function groupPurchasesForDisplay(
         topId = id
       }
     }
+    // Same family (engine + powertrain) → prefer family key label ("Engine & Powertrain")
+    const fams = [
+      ...new Set(
+        memberIds
+          .map((id) => categoryFamily(id))
+          .filter((f): f is string => !!f),
+      ),
+    ]
+    if (fams.length === 1) {
+      topId = fams[0]
+    }
     const cat = getCategory(topId, known)
-    const label =
-      memberIds.length > 1 && memberIds.some((id) => id !== topId)
-        ? `${cat.label}`
-        : cat.label
+    // When several real categories sit together, show them in the title
+    let label = cat.label
+    if (memberIds.length > 1) {
+      const memberLabels = [
+        ...new Set(memberIds.map((id) => getCategory(id, known).label)),
+      ]
+      if (memberLabels.length > 1) {
+        // Prefer family name when it already covers the idea; still note members
+        const covered = memberLabels.every(
+          (ml) =>
+            ml.toLowerCase() === label.toLowerCase() ||
+            label.toLowerCase().includes(ml.toLowerCase()) ||
+            ml.toLowerCase().includes(label.toLowerCase().split(/\s+/)[0] || ''),
+        )
+        if (!covered) {
+          label = `${label} · ${memberLabels.filter((ml) => ml !== cat.label).join(' · ')}`
+        }
+      }
+    }
 
     groups.push({
       categoryId: `display:${canon}`,

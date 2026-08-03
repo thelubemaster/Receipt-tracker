@@ -28,6 +28,28 @@ function base(partial: Partial<Purchase> = {}): Purchase {
   }
 }
 
+describe('category family grouping', () => {
+  it('treats engine and powertrain as the same display family', () => {
+    expect(categorySimilarity('engine', 'powertrain')).toBeGreaterThanOrEqual(0.5)
+    expect(categorySimilarity('engine', 'engine-and-powertrain')).toBeGreaterThanOrEqual(0.5)
+    expect(categorySimilarity('powertrain', 'engine-parts')).toBeGreaterThanOrEqual(0.5)
+  })
+
+  it('display merge map puts engine + powertrain in one bucket', () => {
+    const list = [
+      base({ id: 'a', categoryId: 'engine', description: 'Battery' }),
+      base({ id: 'b', categoryId: 'powertrain', description: 'Filter kit' }),
+      base({ id: 'c', categoryId: 'towing', description: 'Tow' }),
+    ]
+    const map = buildCategoryMergeMap(list)
+    expect(map.get('engine')).toBe(map.get('powertrain'))
+    expect(map.get('towing')).not.toBe(map.get('engine'))
+    // Stored categories never rewritten by merge map alone
+    expect(list[0].categoryId).toBe('engine')
+    expect(list[1].categoryId).toBe('powertrain')
+  })
+})
+
 describe('regroup — preserve AI categories', () => {
   it('does not overwrite an AI-assigned receipt category', () => {
     const p = base({

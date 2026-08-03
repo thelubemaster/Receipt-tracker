@@ -47,6 +47,27 @@ describe('groupPurchasesForDisplay', () => {
     expect(groups.find((g) => g.purchases.some((x) => x.id === '3'))!.count).toBe(1)
   })
 
+  it('groups engine and powertrain together (no shared letters)', () => {
+    const purchases = [
+      p({ id: '1', amount: 200, categoryId: 'engine', description: 'Head studs' }),
+      p({ id: '2', amount: 80, categoryId: 'powertrain', description: 'Transmission filter' }),
+      p({ id: '3', amount: 30, categoryId: 'towing', description: 'Tow bill' }),
+    ]
+    const groups = groupPurchasesForDisplay(purchases)
+    const engineGroup = groups.find((g) => g.purchases.some((x) => x.id === '1'))!
+    expect(engineGroup.purchases.map((x) => x.id).sort()).toEqual(['1', '2'])
+    expect(engineGroup.count).toBe(2)
+    expect(engineGroup.amount).toBe(280)
+    expect(engineGroup.memberCategoryIds?.sort()).toEqual(['engine', 'powertrain'])
+    // Family label should be Engine & Powertrain (builtin)
+    expect(engineGroup.label.toLowerCase()).toMatch(/engine|powertrain/)
+    // Receipt categories never rewritten
+    expect(purchases[0].categoryId).toBe('engine')
+    expect(purchases[1].categoryId).toBe('powertrain')
+    // Towing stays separate
+    expect(groups.find((g) => g.purchases.some((x) => x.id === '3'))!.count).toBe(1)
+  })
+
   it('exact breakdown still lists each real category for spend', () => {
     const purchases = [
       p({ id: '1', amount: 100, categoryId: 'engine' }),
