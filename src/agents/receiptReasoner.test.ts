@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { LocalAgentResult } from './pipeline'
 import {
   critiqueParse,
+  descriptionQuality,
+  extractOrderSummaryStack,
   extractProductNamesFromOcr,
   reasonAboutReceipt,
   resolveFromOcrConstraints,
@@ -246,5 +248,156 @@ Supplement - Supports Immune System, Eye, Skin
     const c = critiqueParse(collapsed, AMAZON_OCR)
     expect(c.ok).toBe(false)
     expect(c.issues.some((i) => i.code === 'missing-line-items')).toBe(true)
+  })
+
+  /**
+   * User dump 2026-08-10 R1: Amazon battery cable lugs.
+   * Stacked summary amounts + "Supplied by" OCR garbage as product names.
+   */
+  const AMAZON_CABLE_OCR = `
+Order Summary
+Order placed August 9, 2026
+Order # 112-5476060-9670657
+Ship to Bradley
+BANGOR, PA 18013-4160
+Payment method Mastercard ending In 3765
+Item(s) Subtotal:
+Shipping &
+Handling:
+Total before tax:
+Estimated tax to be
+collected:
+Grand Total:
+$24.65
+$0.00
+$1.48
+$26.13
+Arriving Wednesday
+4 AWG/Gauge - 3/8" Battery Cable Lug Copper Connector Wire Ring
+Sold by: AIRIC ELECTRICAL ACCESSORIES
+[             Supplied by: Other
+$6.99
+Sold by: TKDMR Store
+TKDMR 8 PCS 4/0 AWG - 3/8 Battery Cable Lugs Copper Wire Ring
+Terminals
+Supplied by: Other
+$17.66
+Grand Total:                       $26.13
+`
+
+  it('Amazon cable order: grand total $26.13 not items subtotal $24.65', () => {
+    const stack = extractOrderSummaryStack(AMAZON_CABLE_OCR)
+    expect(stack.total).toBeCloseTo(26.13, 1)
+    expect(stack.subtotal).toBeCloseTo(24.65, 1)
+    expect(stack.shipping === 0 || stack.shipping === null || (stack.shipping ?? 0) < 0.1).toBe(
+      true,
+    )
+
+    const fixed = resolveFromOcrConstraints(AMAZON_CABLE_OCR, {
+      date: '2026-08-09',
+      vendor: 'Amazon',
+      amount: 24.65,
+      description: 'Supplied by: Oth; : Terminals',
+      categoryId: 'electrical',
+      notes: '',
+      lineItems: [
+        { id: '1', description: '[             Supplied by: Oth', amount: 6.99, categoryId: 'misc' },
+        { id: '2', description: ': Terminals', amount: 17.66, categoryId: 'misc' },
+      ],
+      source: 'on-device',
+      confidence: 0.9,
+      rawText: AMAZON_CABLE_OCR,
+      agentReport: 'bad',
+      aisUsed: ['forge'],
+    })
+    expect(fixed.amount).toBeCloseTo(26.13, 1)
+    const ship = fixed.lineItems.find((i) => /shipping/i.test(i.description))
+    if (ship) expect(ship.amount).toBeLessThan(1)
+    const prods = fixed.lineItems.filter((i) => !/ship|fee|tax/i.test(i.description))
+    expect(prods.every((p) => descriptionQuality(p.description) >= 10)).toBe(true)
+    expect(prods.every((p) => !/supplied\s*by/i.test(p.description))).toBe(true)
+    const blob = prods.map((p) => p.description).join(' ').toLowerCase()
+    expect(blob).toMatch(/awg|battery|cable|tkdmr|lug/)
+  })
+
+  /**
+   * User dump R2: multi-item Amazon electrical — shipping was wrongly $433.63 (items subtotal).
+   */
+  const AMAZON_ELEC_OCR = `
+Order Summary
+Order placed August 9, 2026      Order # 112-8610033-3484203
+Item(s) Subtotal:              $433.63
+shipping &                        $0.00
+Handling:
+Total before tax:                $433.63
+Estimated tax to be            $26.02
+collected:
+Grand Total:                     $459.65
+Arriving Wednesday
+260Pcs Heat Shrink Wire Connectors Kit - Marine /
+Electrical Connectors - Crimp Terminal Set for Elec
+Sold by: Ccwoo
+$21.98
+True MODS 12V Automotive Waterproof 5-Pin Pre
+Box Block Kit
+Sold by: OnlineLEDStore
+$49.99
+Blue Sea Systems ST Blade Fuse Block 12 Circuit w
+Cover, 100 Amps, 5026
+Sold by: Amazon.com
+$44.00
+IWISS Deutsch DT Series Connector Assortment, Si
+Contacts, Waterproof Automotive Electrical Conne
+Sold by: iwiss
+$46.99
+DaierTek 300A Bus Bar 12V Marine 12V Power Dist
+Cover 6 x 3/8" (M10) Terminal Studs Max 300V AC
+Sold by: DaierTek
+$29.99
+ALFOCI 482 PCS DT Deustch Connector Kit, 2 3 4 €
+Waterproof Automotive Electrical Connectors
+Sold by: Henan)
+$99.99
+250A Relay, 12VDC Continuous Duty SPST 4-pin H
+Sold by: IRHAPSODY® Store
+$14.99
+Blue Sea Systems 3000 HD-Serles Heavy Duty On-Off Battery Switch
+$81.70
+`
+
+  it('Amazon multi-item: shipping is $0 not $433.63 subtotal; grand $459.65', () => {
+    const fixed = resolveFromOcrConstraints(AMAZON_ELEC_OCR, {
+      date: '2026-08-09',
+      vendor: 'Amazon',
+      amount: 459.65,
+      description: 'junk',
+      categoryId: 'electrical',
+      notes: '',
+      lineItems: [
+        { id: '1', description: 'ALFOCI kit', amount: 99.99, categoryId: 'electrical' },
+        { id: 'ship', description: 'Shipping', amount: 433.63, categoryId: 'misc' },
+      ],
+      source: 'on-device',
+      confidence: 0.5,
+      rawText: AMAZON_ELEC_OCR,
+      agentReport: 'bad ship',
+      aisUsed: ['forge'],
+    })
+    expect(fixed.amount).toBeCloseTo(459.65, 1)
+    const ship = fixed.lineItems.find((i) => /shipping/i.test(i.description))
+    expect(!ship || ship.amount < 1).toBe(true)
+    const prods = fixed.lineItems.filter((i) => !/ship|fee/i.test(i.description))
+    expect(prods.length).toBeGreaterThanOrEqual(4)
+    expect(prods.every((p) => p.amount < 200)).toBe(true)
+    const sum = prods.reduce((s, p) => s + p.amount, 0)
+    // Product sum should be near items subtotal, not include fake shipping
+    expect(sum).toBeGreaterThan(200)
+    expect(sum).toBeLessThan(460)
+  })
+
+  it('rejects Supplied by / Terminals as product titles', () => {
+    expect(descriptionQuality('[             Supplied by: Oth')).toBe(0)
+    expect(descriptionQuality(': Terminals')).toBe(0)
+    expect(descriptionQuality('Sold by: TKDMR Store')).toBe(0)
   })
 })

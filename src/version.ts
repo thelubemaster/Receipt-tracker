@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.34.1'
+export const APP_VERSION = '1.34.2'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,17 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.34.2',
+    date: '2026-08-10',
+    title: 'Amazon orders: real product names, real totals',
+    changes: [
+      'Grand total from stacked Amazon summaries (not items subtotal)',
+      'Never treat item subtotal as Shipping',
+      'Reject “Supplied by / Terminals” OCR crumbs as product titles',
+      'Better hard-parts titles (AWG lugs, connector kits, bus bars…)',
+    ],
+  },
   {
     version: '1.34.1',
     date: '2026-08-10',

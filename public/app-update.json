@@ -1,7 +1,7 @@
 {
-  "version": "1.34.1",
+  "version": "1.34.2",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Generic Project Cost Tracker branding — any project, not school-bus only",
+  "notes": "Amazon orders: real product names and grand totals",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk"

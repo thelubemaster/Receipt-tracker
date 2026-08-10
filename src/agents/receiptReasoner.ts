@@ -49,6 +49,10 @@ export type Critique = {
   issues: CritiqueIssue[]
 }
 
+/** OCR crumbs Amazon prints under each SKU — never product names. */
+const PRODUCT_NAME_JUNK =
+  /^(supplied\s*by|sold\s*by|terminals?|other|amazon\.com|view\s*related|arriving|condition|qty|quantity|unit\s*price)[:\s.]*/i
+
 function nearly(a: number, b: number, tol = 0.08): boolean {
   return Math.abs(a - b) <= Math.max(tol, Math.abs(b) * 0.02)
 }
@@ -118,20 +122,137 @@ export function vendorQuality(v: string): number {
 export function descriptionQuality(d: string): number {
   const s = (d || '').trim()
   if (s.length < 3) return 0
+  // Amazon chrome / partial titles — never good product names
+  if (PRODUCT_NAME_JUNK.test(s)) return 0
+  if (/^\s*\[?\s*supplied\s*by/i.test(s) || /^\s*:\s*terminals?\s*$/i.test(s)) return 0
+  if (/^sold\s*by\b/i.test(s) || /\bsupplied\s*by\s*:?\s*oth/i.test(s)) return 0
   if (vendorQuality(s) === 0 && /[bcdfghjklmnpqrstvwxyz]{4,}/i.test(s)) return 0
   const letters = (s.match(/[A-Za-z]/g) || []).length
   const vowels = (s.match(/[aeiouAEIOU]/g) || []).length
   if (letters < 4) return 0
   if (vowels / letters < 0.15 && letters > 12) return 0
   let score = Math.min(40, letters) + vowels
-  if (/\b(selling|mower|bus|filter|oil|kit|amazon|thorne|vitamin|supplement|receipt|invoice)\b/i.test(s))
+  if (
+    /\b(selling|mower|bus|filter|oil|kit|amazon|thorne|vitamin|supplement|receipt|invoice|battery|cable|connector|fuse|relay|awg|terminal|bus\s*bar)\b/i.test(
+      s,
+    )
+  )
     score += 15
   // Noise: pipes, backslashes, “0 | oO”, VIN soup
   if (/[|\\]{1,}/.test(s)) score -= 20
   if (/\bvin\b|\bahvbd|\bhvbd/i.test(s)) score -= 15
   if (/^\d[\s|]|[o0]\s*[|o0]/i.test(s)) score -= 12
+  if (/^\s*\[/.test(s)) score -= 18
   if (s.length > 70) score -= 10
   return Math.max(0, score)
+}
+
+/**
+ * Amazon / multi-column order summary: labels stacked, then amounts stacked.
+ * Example:
+ *   Item(s) Subtotal: / Shipping / Tax / Grand Total:
+ *   $433.63 / $0.00 / $26.02 / $459.65
+ */
+export function extractOrderSummaryStack(ocrText: string): {
+  subtotal: number | null
+  shipping: number | null
+  tax: number | null
+  total: number | null
+} {
+  const lines = normalizeOcrText(ocrText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+
+  let labelStart = -1
+  let labelEnd = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (/\bitems?\)?\s*subtotal\b|\bitem\(s\)\s*subtotal\b/i.test(lines[i])) {
+      labelStart = i
+    }
+    if (labelStart >= 0 && /\bgrand\s*t[o0]tal\b/i.test(lines[i])) {
+      labelEnd = i
+      break
+    }
+  }
+  if (labelStart < 0 || labelEnd < labelStart) {
+    return { subtotal: null, shipping: null, tax: null, total: null }
+  }
+
+  const moneyOnly: number[] = []
+  for (let i = labelEnd + 1; i < Math.min(lines.length, labelEnd + 12); i++) {
+    const line = lines[i]
+    // Pure money line (optional $)
+    const pure = line.match(/^\$?\s*(\d{1,5}[.,]\d{2})\s*$/)
+    if (pure) {
+      const n = parseFloat(pure[1].replace(',', '.'))
+      if (Number.isFinite(n)) moneyOnly.push(roundMoney(n))
+      continue
+    }
+    // Stop when we hit product body (long text without only money)
+    if (line.length > 18 && /[A-Za-z]{4,}/.test(line) && !parseMoneyTokens(line).length) break
+    if (moneyOnly.length >= 2 && /[A-Za-z]{6,}/.test(line) && !/\$/.test(line)) break
+  }
+
+  if (moneyOnly.length < 2) {
+    return { subtotal: null, shipping: null, tax: null, total: null }
+  }
+
+  // Common 4-value Amazon stack: subtotal, ship, tax, grand
+  // Common 3-value: subtotal, ship|tax, grand
+  let subtotal: number | null = moneyOnly[0] ?? null
+  let shipping: number | null = null
+  let tax: number | null = null
+  let total: number | null = moneyOnly[moneyOnly.length - 1] ?? null
+
+  if (moneyOnly.length >= 4) {
+    shipping = moneyOnly[1]
+    tax = moneyOnly[moneyOnly.length - 2]
+    total = moneyOnly[moneyOnly.length - 1]
+  } else if (moneyOnly.length === 3) {
+    // subtotal, ship-or-tax, grand
+    if (moneyOnly[1] <= 0.05 || moneyOnly[1] < moneyOnly[0] * 0.2) {
+      shipping = moneyOnly[1]
+      tax = null
+    } else {
+      tax = moneyOnly[1]
+      shipping = 0
+    }
+    total = moneyOnly[2]
+  } else if (moneyOnly.length === 2) {
+    subtotal = moneyOnly[0]
+    total = moneyOnly[1]
+    shipping = 0
+  }
+
+  // Prefer largest as grand when last is smaller than first (mis-ordered stack)
+  if (total != null && subtotal != null && total < subtotal - 0.05) {
+    const maxA = Math.max(...moneyOnly)
+    if (maxA >= subtotal - 0.05) total = maxA
+  }
+  // Shipping must never be the items subtotal
+  if (
+    shipping != null &&
+    subtotal != null &&
+    nearly(shipping, subtotal, 0.05) &&
+    shipping > 1
+  ) {
+    shipping = 0
+  }
+  if (shipping != null && total != null && nearly(shipping, total, 0.05) && shipping > 1) {
+    shipping = 0
+  }
+  // Explicit $0.00 shipping in OCR
+  if (/\bshipping[\s\S]{0,40}\$0\.00/i.test(ocrText) || moneyOnly.includes(0)) {
+    if (shipping == null || shipping > 0.05) {
+      // only force zero when a zero appears in the stack or OCR says $0.00
+      if (moneyOnly.some((a) => a <= 0.05) || /\bshipping[\s\S]{0,40}\$0\.00/i.test(ocrText)) {
+        shipping = 0
+      }
+    }
+  }
+
+  return { subtotal, shipping, tax, total }
 }
 
 /**
@@ -223,6 +344,32 @@ export function critiqueParse(
         code: 'garbage-description',
         severity: 'fatal',
         message: 'Product description looks like OCR garbage — rebuild from cleaner phrases',
+      })
+    }
+  }
+  // Multiple lines with "Supplied by" / blank "Terminals" chrome as product names
+  const junkNames = prods.filter(
+    (p) =>
+      descriptionQuality(p.description || '') < 12 ||
+      PRODUCT_NAME_JUNK.test(p.description || '') ||
+      /^\s*\[/.test(p.description || '') ||
+      /supplied\s*by|:\s*terminals?/i.test(p.description || ''),
+  )
+  if (prods.length >= 1 && junkNames.length >= Math.ceil(prods.length / 2)) {
+    issues.push({
+      code: 'garbage-description',
+      severity: 'fatal',
+      message: 'Product description looks like OCR garbage — rebuild from cleaner phrases',
+    })
+  }
+  // Item subtotal mislabeled as Shipping
+  if (ship > 1 && total != null && ship >= total * 0.5 && ship <= total * 1.05) {
+    const ocrShipZero = /\bshipping[\s\S]{0,40}\$0\.00/i.test(normalizeOcrText(ocrText || ''))
+    if (ocrShipZero || nearly(ship, total, 0.5)) {
+      issues.push({
+        code: 'ship-is-subtotal',
+        severity: 'fatal',
+        message: `Shipping $${ship} looks like item subtotal, not freight`,
       })
     }
   }
@@ -354,7 +501,7 @@ export function critiqueParse(
 
 /** Header / boilerplate / marketing — never a product title. */
 const PRODUCT_LINE_SKIP =
-  /\b(order\s*summary|order\s*placed|order\s*#|ship\s*to|shipped|payment\s*method|mastercard|visa|amex|subtotal|final\s*subtotal|grand\s*total|sale\s*t[o0]tal|total\s*before|estimated\s*tax|state\s*tax|sales\s*tax|shipping|handling|delivered|retu[rmn]+\s*window|sold\s*by|package\s*was|bangor|united\s*states|items?\)?\s*subtotal|bradley|little\s*creek|front\s*door|porch|approval|debit|credit|chip|pin\s*online|rewards?\s*account|store\s*#|reg\s*#|csr\s*#|data\s*source|app\s*name|aid:|arqc)\b/i
+  /\b(order\s*summary|order\s*placed|order\s*#|ship\s*to|shipped|payment\s*method|mastercard|visa|amex|subtotal|final\s*subtotal|grand\s*total|sale\s*t[o0]tal|total\s*before|estimated\s*tax|state\s*tax|sales\s*tax|shipping|handling|delivered|retu[rmn]+\s*window|sold\s*by|supplied\s*by|package\s*was|bangor|united\s*states|items?\)?\s*subtotal|bradley|little\s*creek|front\s*door|porch|approval|debit|credit|chip|pin\s*online|rewards?\s*account|store\s*#|reg\s*#|csr\s*#|data\s*source|app\s*name|aid:|arqc|arriving\s+wednesday|view\s+related|transactions?)\b/i
 
 /** Tax/total chrome is never a catalog SKU. Core charge/trade-in are real money but not SKUs to invent. */
 const NON_CATALOG_PRODUCT =
@@ -505,6 +652,43 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
     )
     if (autoPart && !NON_CATALOG_PRODUCT.test(autoPart[1])) {
       pushName(autoPart[1].replace(/,?\s*E[AR]\s*$/i, '').trim())
+    }
+
+    // Pattern D: Amazon hard-parts / tools — brand or product phrase without "Brand -"
+    // e.g. "TKDMR 8 PCS 4/0 AWG - 3/8 Battery Cable Lugs…"
+    //      "4 AWG/Gauge - 3/8\" Battery Cable Lug Copper…"
+    //      "ALFOCI 482 PCS DT Deustch Connector Kit…"
+    if (PRODUCT_NAME_JUNK.test(line) || /^\s*\[/.test(line)) continue
+    const hardPart = line.match(
+      /^((?:TKDMR|ALFOCI|IWISS|DaierTek|True\s*MODS|Blue\s*Sea(?:\s*Systems)?|IRHAPSODY|Ccwoo|OnlineLEDStore|AIRIC)[\w\s,./#"'°\-+()]{6,80})/i,
+    )
+    if (hardPart && !NON_CATALOG_PRODUCT.test(hardPart[1]) && descriptionQuality(hardPart[1]) >= 12) {
+      pushName(
+        hardPart[1]
+          .replace(/\bSold by:.*$/i, '')
+          .replace(/\bSupplied by:.*$/i, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 90),
+      )
+      continue
+    }
+    // Gauge / battery cable / connector kit titles (no known brand token)
+    if (
+      /\b(\d+\s*\/?\s*\d*\s*AWG|battery\s*cable|cable\s*lug|connector\s*kit|fuse\s*block|bus\s*bar|heat\s*shrink|prewired\s*relay|high\s*power\s*relay)\b/i.test(
+        line,
+      ) &&
+      !PRODUCT_LINE_SKIP.test(line) &&
+      descriptionQuality(line) >= 14
+    ) {
+      pushName(
+        line
+          .replace(/\bSold by:.*$/i, '')
+          .replace(/\bSupplied by:.*$/i, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 90),
+      )
     }
   }
 
@@ -942,19 +1126,51 @@ export function resolveFromOcrConstraints(
   // 1) Lock grand total first (source of truth)
   const totals = runTotalsAgent(text)
   let total = totals.total
+  // Amazon multi-column: labels stacked then amounts stacked (subtotal/ship/tax/grand)
+  const summaryStack = extractOrderSummaryStack(text)
+  if (summaryStack.total != null) {
+    total = summaryStack.total
+  }
   // Prefer explicit GRAND TOTAL — amount may be on the same line or the next line
   // (Mosaic/Amazon PDF OCR often splits "GRAND TOTAL:" and "$93.00")
+  // When amounts are stacked under the summary, prefer the *largest* money-only line
+  // after Grand Total (last is usually correct; first is often Item Subtotal).
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (/\bgrand\s*t[o0]tal\b/i.test(line)) {
       let a = parseMoneyTokens(line)
-      if (!a.length && lines[i + 1]) a = parseMoneyTokens(lines[i + 1])
-      if (!a.length && lines[i + 2]) a = parseMoneyTokens(lines[i + 2])
+      if (!a.length) {
+        const stack: number[] = []
+        for (let j = i + 1; j < Math.min(lines.length, i + 10); j++) {
+          const pure = lines[j].match(/^\$?\s*(\d{1,5}[.,]\d{2})\s*$/)
+          if (pure) {
+            stack.push(roundMoney(parseFloat(pure[1].replace(',', '.'))))
+            continue
+          }
+          if (stack.length) break
+          a = parseMoneyTokens(lines[j])
+          if (a.length) break
+        }
+        if (stack.length >= 2) {
+          // Prefer max (grand) over first (often item subtotal)
+          total = Math.max(...stack)
+          break
+        }
+        if (stack.length === 1) {
+          total = stack[0]
+          break
+        }
+      }
       if (a.length) {
+        // Same-line grand total: last amount wins
         total = a[a.length - 1]
         break
       }
     }
+  }
+  // Summary stack total is strong when present
+  if (summaryStack.total != null && (total == null || nearly(total, summaryStack.total, 0.5) || total < (summaryStack.total ?? 0))) {
+    total = summaryStack.total
   }
   // Private-sale listing: prefer modal listing price (150) over OCR ghosts (7150/750)
   const listingPrice = extractListingPrice(text)
@@ -980,9 +1196,9 @@ export function resolveFromOcrConstraints(
   if (total == null && listingPrice != null) total = listingPrice
 
   // 2) Subtotal / tax / ship from labeled lines with “first amount after label”
-  let subtotal: number | null = null
-  let tax: number | null = null
-  let shipping: number | null = null
+  let subtotal: number | null = summaryStack.subtotal
+  let tax: number | null = summaryStack.tax
+  let shipping: number | null = summaryStack.shipping
   let fee: number | null = null
 
   for (let i = 0; i < lines.length; i++) {
@@ -999,7 +1215,8 @@ export function resolveFromOcrConstraints(
     if (!amts.length) continue
     const minA = Math.min(...amts)
     if (/\bsub[\s\-]*t[o0]tal\b|\bitems?\)?\s*subtotal\b/i.test(line)) {
-      subtotal = amts[amts.length - 1]
+      // Prefer dedicated stack value when present
+      if (subtotal == null) subtotal = amts[amts.length - 1]
     }
     if (/\bbefore\s*t[a4]x\b/i.test(line)) {
       // not tax
@@ -1007,10 +1224,15 @@ export function resolveFromOcrConstraints(
       continue
     }
     if (/\b(estimated\s*)?(sales\s*)?t[a4]x\b/i.test(line)) {
-      tax = minA // prefer $0.00 over the neighboring $93 column
+      if (tax == null) tax = minA // prefer $0.00 over the neighboring $93 column
     }
     if (/\bshipping\b|\bhandl(?:ing|e)\b|\bfreight\b/i.test(line) && !/\bship\s*to\b/i.test(line)) {
-      shipping = minA
+      // Never take shipping = items subtotal (common multi-column misread)
+      if (subtotal != null && nearly(minA, subtotal, 0.05) && minA > 1) {
+        // keep existing shipping (often 0 from stack)
+      } else if (shipping == null || shipping === 0) {
+        shipping = minA
+      }
     }
     if (
       /\b(convenience|service\s*fee|processing\s*fee|cc\s*fee)\b/i.test(line) &&
@@ -1025,14 +1247,29 @@ export function resolveFromOcrConstraints(
   if (total != null && tax != null && nearly(tax, total)) tax = 0
   if (total != null && fee != null && nearly(fee, total)) fee = null
   if (total != null && shipping != null && shipping > total) shipping = 0
+  // Subtotal misread as shipping
+  if (
+    shipping != null &&
+    subtotal != null &&
+    nearly(shipping, subtotal, 0.05) &&
+    shipping > 1
+  ) {
+    shipping = 0
+  }
   if (tax == null && /\btax[\s\S]{0,40}\$0\.00/i.test(text)) tax = 0
   if (shipping == null && /\bshipping[\s\S]{0,40}\$0\.00/i.test(text)) shipping = 0
+  if (/\bshipping[\s\S]{0,40}\$0\.00/i.test(text) && shipping != null && shipping > 0.05) {
+    shipping = 0
+  }
 
   // 3) Products: only amounts that fit under total — drop tax/total chrome
   const engine = runReceiptEngine(text)
   let products = productsOf(engine.lineItems || []).filter(
     (p) =>
       !NON_CATALOG_PRODUCT.test(p.description) &&
+      descriptionQuality(p.description) >= 10 &&
+      !PRODUCT_NAME_JUNK.test(p.description) &&
+      !/^\s*\[/.test(p.description) &&
       (total == null ||
         (!isImplausibleMoney(p.amount, { grandTotal: total }) &&
           p.amount <= total * 1.05 + 0.5)),
