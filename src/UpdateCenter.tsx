@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   applyAppBundleUpdate,
   checkForAppBundleUpdate,
-  useGitHubUpdates,
+  preferGitHubUpdates,
   setAutoUpdate,
 } from './appUpdate'
 import { downloadAndInstallApk } from './apkInstaller'
@@ -45,7 +45,7 @@ export function UpdateCenter() {
     setPercent(null)
     setStatus('Checking what you have…')
     try {
-      await useGitHubUpdates()
+      await preferGitHubUpdates()
       await setAutoUpdate(true)
       let s = await readVersionSnapshot()
       setSnap(s)

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.35.1'
+export const APP_VERSION = '1.35.2'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.35.2',
+    date: '2026-08-10',
+    title: 'Code audit — tests and linter clean',
+    changes: [
+      'Fixed category breakdown test after display-group keys',
+      'Renamed non-hook use* helpers so React lint rules stop false errors',
+      'Full suite green: typecheck, 160 tests, 0 lint errors',
+    ],
+  },
   {
     version: '1.35.1',
     date: '2026-08-10',

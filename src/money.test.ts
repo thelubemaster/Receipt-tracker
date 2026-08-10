@@ -84,8 +84,11 @@ describe('stats', () => {
 
   it('breaks down categories', () => {
     const b = categoryBreakdown(sample)
-    expect(b[0].categoryId).toBe('insulation')
+    // Display groups use display:… keys; label is the human category
+    expect(b[0].label).toMatch(/insulation/i)
+    expect(b[0].categoryId).toMatch(/insulation/)
     expect(b[0].percent).toBe(66.7)
+    expect(b[0].amount).toBe(100)
   })
 })
 

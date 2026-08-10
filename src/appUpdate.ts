@@ -161,10 +161,11 @@ export async function setUpdateServer(url: string): Promise<void> {
 }
 
 /** Clear custom server and use GitHub (Pages + Releases). */
-export async function useGitHubUpdates(): Promise<string> {
+export async function preferGitHubUpdates(): Promise<string> {
   await setUpdateServer(GITHUB_PAGES_BASE)
   return GITHUB_PAGES_BASE
 }
+
 
 export async function getAutoUpdate(): Promise<boolean> {
   try {
@@ -722,7 +723,7 @@ export async function autoUpdateIfAvailable(
 ): Promise<void> {
   if (!isNativeCapacitorApp()) return
   try {
-    await useGitHubUpdates()
+    await preferGitHubUpdates()
   } catch {
     /* ignore */
   }

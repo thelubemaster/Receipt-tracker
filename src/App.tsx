@@ -111,7 +111,7 @@ import {
 } from './AndroidInstaller'
 import {
   setAutoUpdate,
-  useGitHubUpdates,
+  preferGitHubUpdates,
 } from './appUpdate'
 import { isNativeCapacitorApp } from './installApp'
 import { UpdateCenter } from './UpdateCenter'
@@ -4427,7 +4427,7 @@ function SettingsScreen(props: {
   const nativeApp = isNativeCapacitorApp()
 
   useEffect(() => {
-    void useGitHubUpdates()
+    void preferGitHubUpdates()
     void setAutoUpdate(true)
   }, [])
 

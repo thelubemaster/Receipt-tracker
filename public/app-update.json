@@ -1,7 +1,7 @@
 {
-  "version": "1.35.1",
-  "url": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.35.1/web-update.zip",
-  "notes": "Amazon multi-item price pairing fix",
+  "version": "1.35.2",
+  "url": "https://github.com/thelubemaster/Receipt-tracker/releases/download/v1.35.2/web-update.zip",
+  "notes": "Code audit — tests and linter clean",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk"

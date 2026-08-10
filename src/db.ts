@@ -409,7 +409,7 @@ async function openIdbFriendly(): Promise<IDBPDatabase<SchoolieDB> | null> {
   return null
 }
 
-function useLocalMode(reason?: string): void {
+function fallBackToLocalStorage(reason?: string): void {
   if (reason) console.warn('[schoolie] using localStorage:', reason)
   try {
     idb?.close()
@@ -461,7 +461,7 @@ async function ensureStorage(): Promise<void> {
     await initPromise
   } catch (e) {
     console.warn('[schoolie] ensureStorage failed', e)
-    useLocalMode(e instanceof Error ? e.message : 'init failed')
+    fallBackToLocalStorage(e instanceof Error ? e.message : 'init failed')
   }
 }
 
@@ -553,11 +553,11 @@ function sortProjects(list: Project[]): Project[] {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-function useLocalProjects(): Project[] {
+function readLocalProjects(): Project[] {
   return sortProjects(lsRead<Project[]>(LS_PROJECTS, []))
 }
 
-async function useLocalPurchases(projectId?: string): Promise<Purchase[]> {
+async function readLocalPurchases(projectId?: string): Promise<Purchase[]> {
   const all = sortPurchases(lsRead<Purchase[]>(LS_PURCHASES, []))
   if (!projectId) return all
   return all.filter((p) => p.projectId === projectId)
@@ -614,12 +614,12 @@ async function ensureDefaultProjectAndIds(
 
 async function listProjectsRaw(): Promise<Project[]> {
   await ensureStorage()
-  if (mode === 'local' || !idb) return useLocalProjects()
+  if (mode === 'local' || !idb) return readLocalProjects()
   try {
-    if (!idb.objectStoreNames.contains('projects')) return useLocalProjects()
+    if (!idb.objectStoreNames.contains('projects')) return readLocalProjects()
     return sortProjects(await idb.getAll('projects'))
   } catch {
-    return useLocalProjects()
+    return readLocalProjects()
   }
 }
 
@@ -630,7 +630,7 @@ export async function listProjects(): Promise<Project[]> {
     if (mode === 'idb' && idb) {
       const n = await idb.count('projects').catch(() => 0)
       if (n === 0) await ensureDefaultProjectAndIds(idb)
-    } else if (useLocalProjects().length === 0) {
+    } else if (readLocalProjects().length === 0) {
       await ensureDefaultProjectAndIds(null)
     }
     const list = await listProjectsRaw()
@@ -638,7 +638,7 @@ export async function listProjects(): Promise<Project[]> {
     return list
   } catch (e) {
     console.warn('[outlay] listProjects failed', e)
-    return useLocalProjects()
+    return readLocalProjects()
   }
 }
 
@@ -646,12 +646,12 @@ export async function getProject(id: string): Promise<Project | undefined> {
   try {
     await ensureStorage()
     if (mode === 'local' || !idb) {
-      return useLocalProjects().find((p) => p.id === id)
+      return readLocalProjects().find((p) => p.id === id)
     }
     const row = await idb.get('projects', id)
     return row ? normalizeProject(row) : undefined
   } catch {
-    return useLocalProjects().find((p) => p.id === id)
+    return readLocalProjects().find((p) => p.id === id)
   }
 }
 
@@ -663,7 +663,7 @@ export async function saveProject(project: Project): Promise<void> {
   try {
     await ensureStorage()
     if (mode === 'local' || !idb) {
-      const list = useLocalProjects().filter((p) => p.id !== row.id)
+      const list = readLocalProjects().filter((p) => p.id !== row.id)
       list.push(row)
       backupProjects(list)
       return
@@ -672,8 +672,8 @@ export async function saveProject(project: Project): Promise<void> {
     backupProjects(await idb.getAll('projects'))
   } catch (e) {
     console.warn('[outlay] saveProject failed → local', e)
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
-    const list = useLocalProjects().filter((p) => p.id !== row.id)
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
+    const list = readLocalProjects().filter((p) => p.id !== row.id)
     list.push(row)
     backupProjects(list)
   }
@@ -687,14 +687,14 @@ export async function deleteProject(id: string): Promise<void> {
       await deletePurchase(p.id)
     }
     if (mode === 'local' || !idb) {
-      backupProjects(useLocalProjects().filter((p) => p.id !== id))
+      backupProjects(readLocalProjects().filter((p) => p.id !== id))
       return
     }
     await idb.delete('projects', id)
     backupProjects(await idb.getAll('projects'))
   } catch (e) {
     console.warn('[outlay] deleteProject', e)
-    backupProjects(useLocalProjects().filter((p) => p.id !== id))
+    backupProjects(readLocalProjects().filter((p) => p.id !== id))
   }
 }
 
@@ -702,7 +702,7 @@ export async function deleteProject(id: string): Promise<void> {
 export async function listPurchases(projectId?: string): Promise<Purchase[]> {
   try {
     await ensureStorage()
-    if (mode !== 'idb' || !idb) return useLocalPurchases(projectId)
+    if (mode !== 'idb' || !idb) return readLocalPurchases(projectId)
     let all: Purchase[]
     if (projectId && idb.objectStoreNames.contains('purchases')) {
       try {
@@ -722,8 +722,8 @@ export async function listPurchases(projectId?: string): Promise<Purchase[]> {
       : sorted
   } catch (e) {
     console.warn('[schoolie] listPurchases failed → local', e)
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
-    return useLocalPurchases(projectId)
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
+    return readLocalPurchases(projectId)
   }
 }
 
@@ -739,7 +739,7 @@ export async function getPurchase(id: string): Promise<Purchase | undefined> {
     const p = await idb.get('purchases', id)
     return p ? normalizePurchase(p) : undefined
   } catch (e) {
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
     const p = lsRead<Purchase[]>(LS_PURCHASES, []).find((x) => x.id === id)
     return p ? normalizePurchase(p) : undefined
   }
@@ -766,7 +766,7 @@ export async function savePurchase(purchase: Purchase): Promise<void> {
     }
   } catch (e) {
     console.warn('[schoolie] savePurchase failed → local', e)
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
     writeLocal()
   }
 }
@@ -806,7 +806,7 @@ export async function deletePurchase(id: string): Promise<void> {
       /* ignore */
     }
   } catch (e) {
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
     writeLocal()
   }
 }
@@ -988,7 +988,7 @@ export async function putImage(id: string, blob: Blob): Promise<void> {
     const row = await buildImageRow(id, typed)
     await idb.put('images', row)
   } catch (e) {
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
     await saveImageLocal(id, typed)
   }
 }
@@ -1153,7 +1153,7 @@ export async function getSettings(): Promise<AppSettings> {
     return parsed
   } catch (e) {
     console.warn('[schoolie] getSettings failed → local', e)
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
     return parseSettingsRow(lsRead<AppSettings | null>(LS_SETTINGS, null))
   }
 }
@@ -1165,7 +1165,7 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     if (mode === 'local' || !idb) return
     await idb.put('settings', { id: SETTINGS_KEY, ...settings })
   } catch (e) {
-    if (isStorageSchemaError(e)) useLocalMode(String(e))
+    if (isStorageSchemaError(e)) fallBackToLocalStorage(String(e))
   }
 }
 
@@ -1314,7 +1314,7 @@ export async function resetDatabase(): Promise<void> {
   try {
     await ensureStorage()
   } catch {
-    useLocalMode('reset fallback')
+    fallBackToLocalStorage('reset fallback')
   }
   storageNotice = null
 }
