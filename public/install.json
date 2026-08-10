@@ -1,6 +1,7 @@
 {
-  "version": "1.25.5",
+  "version": "1.33.5",
   "name": "Project Cost Tracker",
+  "installUrl": "https://thelubemaster.github.io/Receipt-tracker/?install=1",
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk",
   "installZipUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/Schoolie-Install.zip",
   "apkFileName": "schoolie.apk",
@@ -8,5 +9,5 @@
   "installerFile": "00-INSTALL-Schoolie.apk",
   "releasesUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest",
   "repoUrl": "https://github.com/thelubemaster/Receipt-tracker",
-  "notes": "Automatic updates from GitHub Releases"
+  "notes": "One install link for Android (APK) and Apple (Safari → Add to Home Screen)"
 }

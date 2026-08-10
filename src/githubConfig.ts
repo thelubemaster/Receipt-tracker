@@ -9,6 +9,12 @@ export const GITHUB_REPO_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO
 /** GitHub Pages base (enable Pages → Source: GitHub Actions). */
 export const GITHUB_PAGES_BASE = `https://${GITHUB_OWNER}.github.io/${GITHUB_REPO}`
 
+/**
+ * One install link for Android and Apple.
+ * Android gets the APK flow; iPhone/iPad get Add to Home Screen (Safari PWA).
+ */
+export const GITHUB_INSTALL_URL = `${GITHUB_PAGES_BASE}/?install=1`
+
 /** Latest release page (human-friendly). */
 export const GITHUB_RELEASES_PAGE = `${GITHUB_REPO_URL}/releases/latest`
 

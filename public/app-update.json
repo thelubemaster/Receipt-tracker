@@ -1,7 +1,7 @@
 {
-  "version": "1.33.4",
+  "version": "1.33.5",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "One spending list — Engine & Powertrain not duplicated",
+  "notes": "Install on Android and Apple from one link",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"

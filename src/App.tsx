@@ -1131,7 +1131,9 @@ function AndroidInstallCard() {
         <div style={{ flex: 1, minWidth: 0 }}>
           <strong>Add to home screen</strong>
           <p className="muted" style={{ margin: '4px 0 10px' }}>
-            Optional — open Schoolie like a normal app.
+            {ios
+              ? 'Works on iPhone/iPad too — free web app, no App Store.'
+              : 'Optional — open Schoolie like a normal app.'}
           </p>
           {canPrompt ? (
             <button
@@ -1146,9 +1148,9 @@ function AndroidInstallCard() {
           ) : (
             <p className="muted" style={{ fontSize: '0.85rem', margin: '0 0 8px' }}>
               {android
-                ? 'Chrome ⋮ → Install app'
+                ? 'Chrome ⋮ → Install app (or use schoolie.apk)'
                 : ios
-                  ? 'Safari Share → Add to Home Screen'
+                  ? 'Safari only: Share (□↑) → Add to Home Screen → Add'
                   : 'Browser menu → Install app'}
             </p>
           )}

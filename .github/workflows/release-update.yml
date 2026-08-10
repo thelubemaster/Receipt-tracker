@@ -144,10 +144,10 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  # Pages is optional — many installs only use GitHub Releases for OTA.
+  # Host the web app so Android + Apple share one install link (PWA on iOS).
   pages:
     needs: web
-    if: ${{ false }}
+    if: ${{ always() && needs.web.result == 'success' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -191,18 +191,23 @@ jobs:
           tag_name: v${{ needs.web.outputs.version }}
           name: Schoolie v${{ needs.web.outputs.version }}
           body: |
-            ## Download the Android app
+            ## Install (Android & Apple — same product)
 
-            **[⬇ Download schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
+            **One link (recommended):**  
+            **[⬇ Open install page](https://thelubemaster.github.io/Receipt-tracker/?install=1)**
 
-            1. Open the file on your phone  
-            2. Allow **Install unknown apps** if asked  
-            3. Tap **Install** → **Open**
+            | Device | How |
+            | --- | --- |
+            | **Android** | Install page → download **schoolie.apk** → Install |
+            | **iPhone / iPad** | Open that link in **Safari** → Share → **Add to Home Screen** |
 
-            After install, later updates can arrive as a small web bundle (no full re-download) when you open the app on Wi‑Fi / mobile data.
+            Direct Android APK:  
+            **[schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
+
+            After install, updates can arrive automatically when you open the app.
 
             ---
-            Also included: `web-update.zip` (OTA for already-installed APKs).
+            Also included: `web-update.zip` (OTA for already-installed Android APKs).
           files: |
             dist/downloads/web-update.zip
             dist/app-update.json

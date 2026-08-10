@@ -117,7 +117,15 @@ export function isAndroid(): boolean {
 
 export function isIos(): boolean {
   if (typeof navigator === 'undefined') return false
-  return /iphone|ipad|ipod/i.test(navigator.userAgent)
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent)) return true
+  // iPadOS 13+ often reports as desktop Safari on Mac
+  try {
+    const nav = navigator as Navigator & { platform?: string; maxTouchPoints?: number }
+    if (nav.platform === 'MacIntel' && (nav.maxTouchPoints ?? 0) > 1) return true
+  } catch {
+    /* ignore */
+  }
+  return false
 }
 
 export function isMobile(): boolean {

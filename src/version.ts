@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.33.4'
+export const APP_VERSION = '1.33.5'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.33.5',
+    date: '2026-08-03',
+    title: 'Install on Android and Apple from one link',
+    changes: [
+      'One install page for phones: Android gets the APK; iPhone/iPad use Safari → Add to Home Screen',
+      'Same free on-device app on Apple (no App Store required)',
+      'GitHub Pages hosts the shared install link',
+    ],
+  },
   {
     version: '1.33.4',
     date: '2026-08-03',
