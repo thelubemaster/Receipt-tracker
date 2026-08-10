@@ -67,17 +67,29 @@ export function UpdateCenter() {
             applyAppBundleUpdate(web.manifest, (m) => setStatus(m)),
             new Promise<{ ok: false; message: string }>((resolve) =>
               setTimeout(
-                () => resolve({ ok: false, message: 'Content download timed out' }),
-                50_000,
+                () =>
+                  resolve({
+                    ok: false,
+                    message:
+                      'Content download timed out (try Wi‑Fi). Or open Settings and tap Get up to date again.',
+                  }),
+                90_000,
               ),
             ),
           ])
           if (applied.ok) {
-            setStatus(`Content updated to v${web.manifest.version}. Continuing…`)
-            // Capgo will reload shortly; if not, keep going
-            await new Promise((r) => setTimeout(r, 800))
+            setStatus(`Content updated to v${web.manifest.version}. Restarting…`)
+            // Capgo will reload shortly; if not, force reload
+            await new Promise((r) => setTimeout(r, 1200))
+            try {
+              window.location.reload()
+            } catch {
+              /* ignore */
+            }
           } else {
-            setStatus(`Content: ${applied.message}. Trying package update anyway…`)
+            setStatus(
+              `Update failed: ${applied.message}. Check Wi‑Fi, then try again. Install page: thelubemaster.github.io/Receipt-tracker`,
+            )
           }
         }
         s = await readVersionSnapshot()

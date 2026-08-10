@@ -29,6 +29,13 @@ const PREF_AUTO = 'schoolie-auto-update'
 export const GITHUB_WEB_UPDATE_ZIP =
   `${GITHUB_REPO_URL}/releases/latest/download/web-update.zip`
 
+/** Versioned zip URL (preferred — avoids /latest/ cache and bad Capgo redirects). */
+export function githubWebUpdateZipForVersion(version: string): string {
+  const v = String(version || '').replace(/^v/i, '').trim()
+  if (!v) return GITHUB_WEB_UPDATE_ZIP
+  return `${GITHUB_REPO_URL}/releases/download/v${v}/web-update.zip`
+}
+
 export type UpdateManifest = {
   version: string
   url: string
@@ -261,18 +268,42 @@ async function loadManifestFromBase(
 
 /** Public GitHub Releases → web-update.zip */
 async function loadManifestFromGitHubReleases(): Promise<UpdateManifest | null> {
+  // Prefer lightweight app-update.json asset (no API rate limit, always versioned zip)
+  const fromFile = await fetchJson(
+    `${GITHUB_REPO_URL}/releases/latest/download/app-update.json`,
+  )
+  if (fromFile && typeof fromFile === 'object') {
+    const j = fromFile as Partial<UpdateManifest>
+    const version = String(j.version || '')
+      .replace(/^v/i, '')
+      .trim()
+    if (version) {
+      return {
+        version,
+        // Prefer versioned asset path — Capgo follows this more reliably than /latest/
+        url: githubWebUpdateZipForVersion(version),
+        notes: j.notes || 'GitHub Releases',
+        source: 'github-releases-json',
+        apkVersion: j.apkVersion || version,
+        apkVersionCode:
+          typeof j.apkVersionCode === 'number' ? j.apkVersionCode : undefined,
+        apkUrl: j.apkUrl || GITHUB_APK_LATEST,
+      }
+    }
+  }
+
   const data = await fetchJson(GITHUB_RELEASES_LATEST)
   if (!data || typeof data !== 'object') {
-    // API blocked? Try fixed download URL + tag from a lightweight install.json asset
     const install = await fetchJson(
       `${GITHUB_REPO_URL}/releases/latest/download/install.json`,
     )
     if (install && typeof install === 'object') {
       const j = install as { version?: string }
       if (j.version) {
+        const version = String(j.version).replace(/^v/i, '')
         return {
-          version: String(j.version).replace(/^v/i, ''),
-          url: GITHUB_WEB_UPDATE_ZIP,
+          version,
+          url: githubWebUpdateZipForVersion(version),
           notes: 'GitHub Releases',
           source: 'github-releases',
         }
@@ -295,8 +326,10 @@ async function loadManifestFromGitHubReleases(): Promise<UpdateManifest | null> 
     assets.find((a) => a.name === 'web-update.zip') ||
     assets.find((a) => a.name === 'schoolie-web-update.zip') ||
     assets.find((a) => (a.name || '').endsWith('.zip') && (a.name || '').includes('update'))
-  const url = zip?.browser_download_url || GITHUB_WEB_UPDATE_ZIP
+  // Prefer versioned release path over browser_download_url (same redirects, cleaner logs)
+  const url = githubWebUpdateZipForVersion(version) || zip?.browser_download_url || GITHUB_WEB_UPDATE_ZIP
   const apkAsset =
+    assets.find((a) => a.name === 'project-cost-tracker.apk') ||
     assets.find((a) => a.name === 'schoolie.apk') ||
     assets.find((a) => (a.name || '').endsWith('.apk'))
   return {
@@ -365,8 +398,12 @@ export async function checkForApkUpdate(
     else if (m.version && code >= remoteCode) {
       remoteName = String(m.version).replace(/^v/i, '')
     }
-    // Only trust apkUrl if it points at a real file path (versioned or latest)
-    if (m.apkUrl && /schoolie\.apk/i.test(String(m.apkUrl))) {
+    // Only trust apkUrl if it points at a real APK asset
+    if (
+      m.apkUrl &&
+      /\.apk(\?|$)/i.test(String(m.apkUrl)) &&
+      /project-cost-tracker\.apk|schoolie\.apk|releases\//i.test(String(m.apkUrl))
+    ) {
       apkUrl = String(m.apkUrl)
     }
   }
@@ -493,23 +530,56 @@ export async function applyAppBundleUpdate(
   if (!isNativeCapacitorApp()) {
     return {
       ok: false,
-      message: 'OTA updates apply inside the installed Android app only.',
+      message:
+        'In-app OTA only works in the installed Android app. On browser/PWA open the install page and pull to refresh, or reinstall the APK.',
     }
   }
+  const version = String(manifest.version || '').replace(/^v/i, '')
+  // Try several URLs — GitHub /latest/ and API asset URLs sometimes fail on Capgo/Android
+  const urls = [
+    githubWebUpdateZipForVersion(version),
+    manifest.url,
+    GITHUB_WEB_UPDATE_ZIP,
+  ].filter((u, i, arr) => !!u && /^https?:\/\//i.test(u) && arr.indexOf(u) === i)
+
+  let lastError = 'Update failed'
   try {
-    onProgress?.(`Downloading update from ${manifest.source || 'server'}…`)
     const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
-    const bundle = await CapacitorUpdater.download({
-      url: manifest.url,
-      version: manifest.version,
-    })
-    onProgress?.('Installing…')
-    await CapacitorUpdater.set(bundle)
-    onProgress?.('Restarting…')
-    setTimeout(() => {
-      window.location.reload()
-    }, 400)
-    return { ok: true }
+    // Prevent Capgo rollback while we install
+    try {
+      await CapacitorUpdater.notifyAppReady()
+    } catch {
+      /* ok */
+    }
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i]
+      try {
+        onProgress?.(
+          i === 0
+            ? `Downloading v${version}…`
+            : `Retry download (${i + 1}/${urls.length})…`,
+        )
+        const bundle = await CapacitorUpdater.download({
+          url,
+          version: `${version}${i > 0 ? `-${i}` : ''}`,
+        })
+        onProgress?.('Installing…')
+        await CapacitorUpdater.set(bundle)
+        onProgress?.('Restarting…')
+        setTimeout(() => {
+          window.location.reload()
+        }, 400)
+        return { ok: true }
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e)
+        onProgress?.(`Download failed: ${lastError}`)
+      }
+    }
+    return {
+      ok: false,
+      message: `${lastError}. Try Wi‑Fi, then Settings → Get up to date again. Or reinstall from the install page.`,
+    }
   } catch (e) {
     return {
       ok: false,

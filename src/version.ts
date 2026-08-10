@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.34.3'
+export const APP_VERSION = '1.34.4'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.34.4',
+    date: '2026-08-10',
+    title: 'Fix stuck updates',
+    changes: [
+      'More reliable in-app updates (versioned GitHub zip, retries)',
+      'Clearer errors when download fails (Wi‑Fi / reinstall hints)',
+      'Accepts project-cost-tracker.apk in update manifests',
+    ],
+  },
   {
     version: '1.34.3',
     date: '2026-08-10',

@@ -59,10 +59,13 @@ jobs:
           REPO="https://github.com/thelubemaster/Receipt-tracker"
           # Prefer Releases assets (Pages may be disabled). App also reads Releases API.
           APK="${REPO}/releases/latest/download/project-cost-tracker.apk"
-          WEB="${REPO}/releases/latest/download/web-update.zip"
+          # Versioned zip URL — Capgo / Android handle this more reliably than /latest/
+          WEB="${REPO}/releases/download/v${V}/web-update.zip"
+          WEB_LATEST="${REPO}/releases/latest/download/web-update.zip"
           printf '%s\n' "{
             \"version\": \"${V}\",
             \"url\": \"${WEB}\",
+            \"urlLatest\": \"${WEB_LATEST}\",
             \"notes\": \"Project Cost Tracker v${V} — free on-device update\",
             \"apkVersion\": \"${V}\",
             \"apkUrl\": \"${APK}\"
