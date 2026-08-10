@@ -400,4 +400,74 @@ $81.70
     expect(descriptionQuality(': Terminals')).toBe(0)
     expect(descriptionQuality('Sold by: TKDMR Store')).toBe(0)
   })
+
+  /**
+   * User dump 2026-08-10: Amazon ICP sensor $79.47 + Motorcraft cam sensor $34.97
+   * = subtotal $114.44 + tax $6.87 = grand $121.31. Must not glue wrong prices.
+   */
+  const AMAZON_SENSORS_OCR = `
+Order Summary
+Order placed August 9, 2026     Order # 113-0833286-9218643
+Item(s) Subtotal:
+Shipping &
+Handling:
+Total before tax:
+Estimated tax to be
+collected:
+Grand Total:
+$114.44
+$0.00
+$6.87
+$121.31
+Arriving Friday
+ICP Sensor Fits 7.3 Powerstroke Replaces F6TZ-9F8
+Sold by: Stab Motorsports LLC
+Supplied by: Other
+$79.47
+Motorcraft DU-87 Camshaft Position Sensor
+Sold by: Amazon.com
+supplied by: Other
+$34.97
+Grand Total:            $121.31
+`
+
+  it('Amazon sensors: two products with correct prices; grand $121.31', () => {
+    const names = extractProductNamesFromOcr(AMAZON_SENSORS_OCR)
+    expect(names.some((n) => /motorcraft/i.test(n))).toBe(true)
+    expect(names.some((n) => /icp|powerstroke|sensor/i.test(n))).toBe(true)
+
+    const fixed = resolveFromOcrConstraints(AMAZON_SENSORS_OCR, {
+      date: '2026-08-09',
+      vendor: 'Amazon',
+      amount: 121.31,
+      description: 'Motorcraft DU-87 Camshaft Position Sensor',
+      categoryId: 'engine',
+      notes: '',
+      lineItems: [
+        {
+          id: '1',
+          description: 'Motorcraft DU-87 Camshaft Position Sensor',
+          amount: 79.47,
+          categoryId: 'engine',
+        },
+      ],
+      source: 'on-device',
+      confidence: 0.9,
+      rawText: AMAZON_SENSORS_OCR,
+      agentReport: 'bad pair',
+      aisUsed: ['forge'],
+    })
+    expect(fixed.amount).toBeCloseTo(121.31, 1)
+    const prods = fixed.lineItems.filter((i) => !/ship|fee|tax/i.test(i.description))
+    expect(prods.length).toBeGreaterThanOrEqual(2)
+    const prices = prods.map((p) => p.amount).sort((a, b) => a - b)
+    expect(prices).toContain(34.97)
+    expect(prices).toContain(79.47)
+    const motor = prods.find((p) => /motorcraft/i.test(p.description))
+    expect(motor?.amount).toBeCloseTo(34.97, 1)
+    const icp = prods.find((p) => /icp|powerstroke|f6tz/i.test(p.description))
+    expect(icp?.amount).toBeCloseTo(79.47, 1)
+    const sum = prods.reduce((s, p) => s + p.amount, 0)
+    expect(sum).toBeCloseTo(114.44, 1)
+  })
 })

@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.35.0'
+export const APP_VERSION = '1.35.1'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.35.1',
+    date: '2026-08-10',
+    title: 'Amazon: two products get the right prices',
+    changes: [
+      'Pairs each Amazon title with the $ under it (Sold by / Supplied by ignored)',
+      'Motorcraft / ICP / Powerstroke sensor titles recognized',
+      'No more one line with the other item’s price',
+    ],
+  },
   {
     version: '1.35.0',
     date: '2026-08-10',

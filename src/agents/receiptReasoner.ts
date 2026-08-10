@@ -591,13 +591,20 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
   const names: string[] = []
   const seenIds = new Set<string>()
 
-  const pushName = (raw: string) => {
+  const pushName = (raw: string, loose = false) => {
     let n = raw.replace(/\s+/g, ' ').trim()
     if (n.length < 8 || n.length > 100) return
     if (PRODUCT_LINE_SKIP.test(n)) return
+    if (PRODUCT_NAME_JUNK.test(n)) return
     if (!/[A-Za-z]{4,}/.test(n)) return
-    // Must look like Brand - Product (reject pure marketing sentences)
-    if (!/\s[-–]\s|[A-Z]{3,16}\s*[-–]\s*[A-Za-z]/.test(n) && !/^[A-Z]{3,16}\s+/.test(n)) return
+    // Brand - Product, ALLCAPS brand, Title-Case brand, or loose auto-parts titles
+    const looksBranded =
+      /\s[-–]\s/.test(n) ||
+      /^[A-Z]{3,16}\s+/.test(n) ||
+      /^[A-Z][a-z]+(?:\s+[A-Z0-9][\w.-]*){1,}/.test(n) ||
+      loose
+    if (!looksBranded) return
+    if (descriptionQuality(n) < 10) return
     const id = productIdentityKey(n)
     if (!id || seenIds.has(id)) return
     // Prefer longer / cleaner title when we already have a weaker spelling? first wins (cleaner OCR is usually first page)
@@ -632,35 +639,38 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
     }
 
     // Pattern B: BRAND Product… (space, no dash) — all-caps brand token
+    // Skip short acronyms that are part of the product name (ICP Sensor, OEM …)
     const brandSpace = line.match(
       /^([A-Z]{3,16})\s+([A-Z][A-Za-z0-9][\w\s,&'/\-+.%()]{6,70})/,
     )
     if (
       brandSpace &&
       !FAKE_BRAND.test(brandSpace[1]) &&
+      !/^(ICP|OEM|SKU|ABS|ECU|PCM|TPS|MAP|EGR|DPF|DEF)$/i.test(brandSpace[1]) &&
       !/ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED/i.test(brandSpace[1]) &&
       !PRODUCT_MARKETING.test(brandSpace[2]) &&
       !NON_CATALOG_PRODUCT.test(`${brandSpace[1]} ${brandSpace[2]}`)
     ) {
       const cleaned = cleanBrandProductTitle(brandSpace[1], brandSpace[2])
-      if (cleaned && !NON_CATALOG_PRODUCT.test(cleaned)) pushName(cleaned)
+      if (cleaned && !NON_CATALOG_PRODUCT.test(cleaned)) {
+        pushName(cleaned)
+        continue
+      }
     }
 
-    // Pattern C: Auto parts style "Duralast HD Battery, EA" (no Brand-dash)
+    // Pattern C: Auto parts style "Duralast HD Battery, EA" / "Motorcraft DU-87 …"
     const autoPart = line.match(
-      /^((?:Duralast|DieHard|EverStart|Valvoline|Mobil|Castrol|ACDelco|Motorcraft|Bosh|Bosch|AGS|Peak)[\w\s,./#-]{4,55})/i,
+      /^((?:Duralast|DieHard|EverStart|Valvoline|Mobil|Castrol|ACDelco|Motorcraft|Bosh|Bosch|AGS|Peak)[\w\s,./#-]{4,70})/i,
     )
     if (autoPart && !NON_CATALOG_PRODUCT.test(autoPart[1])) {
-      pushName(autoPart[1].replace(/,?\s*E[AR]\s*$/i, '').trim())
+      pushName(autoPart[1].replace(/,?\s*E[AR]\s*$/i, '').trim(), true)
+      continue
     }
 
     // Pattern D: Amazon hard-parts / tools — brand or product phrase without "Brand -"
-    // e.g. "TKDMR 8 PCS 4/0 AWG - 3/8 Battery Cable Lugs…"
-    //      "4 AWG/Gauge - 3/8\" Battery Cable Lug Copper…"
-    //      "ALFOCI 482 PCS DT Deustch Connector Kit…"
     if (PRODUCT_NAME_JUNK.test(line) || /^\s*\[/.test(line)) continue
     const hardPart = line.match(
-      /^((?:TKDMR|ALFOCI|IWISS|DaierTek|True\s*MODS|Blue\s*Sea(?:\s*Systems)?|IRHAPSODY|Ccwoo|OnlineLEDStore|AIRIC)[\w\s,./#"'°\-+()]{6,80})/i,
+      /^((?:TKDMR|ALFOCI|IWISS|DaierTek|True\s*MODS|Blue\s*Sea(?:\s*Systems)?|IRHAPSODY|Ccwoo|OnlineLEDStore|AIRIC|Stab\s*Motorsports)[\w\s,./#"'°\-+()]{6,80})/i,
     )
     if (hardPart && !NON_CATALOG_PRODUCT.test(hardPart[1]) && descriptionQuality(hardPart[1]) >= 12) {
       pushName(
@@ -670,16 +680,17 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 90),
+        true,
       )
       continue
     }
-    // Gauge / battery cable / connector kit titles (no known brand token)
+    // Sensor / powerstroke / gauge / battery cable / connector kit titles
     if (
-      /\b(\d+\s*\/?\s*\d*\s*AWG|battery\s*cable|cable\s*lug|connector\s*kit|fuse\s*block|bus\s*bar|heat\s*shrink|prewired\s*relay|high\s*power\s*relay)\b/i.test(
+      /\b(\d+\s*\/?\s*\d*\s*AWG|battery\s*cable|cable\s*lug|connector\s*kit|fuse\s*block|bus\s*bar|heat\s*shrink|prewired\s*relay|high\s*power\s*relay|camshaft\s*position\s*sensor|icp\s*sensor|powerstroke|position\s*sensor|crankshaft\s*sensor|knock\s*sensor|o2\s*sensor|map\s*sensor|tps\s*sensor)\b/i.test(
         line,
       ) &&
       !PRODUCT_LINE_SKIP.test(line) &&
-      descriptionQuality(line) >= 14
+      descriptionQuality(line) >= 12
     ) {
       pushName(
         line
@@ -688,6 +699,7 @@ export function extractProductNamesFromOcr(ocrText: string): string[] {
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 90),
+        true,
       )
     }
   }
@@ -787,8 +799,8 @@ export function extractPricedCatalogLines(
 }
 
 /**
- * Walk OCR top-to-bottom: Brand – Product title, then the next unit price
- * before the next brand line (Amazon multi-column often puts $ under the title).
+ * Walk OCR top-to-bottom: product title, then the next unit price before the
+ * next title (Amazon: title → Sold by → Supplied by → $price).
  */
 export function extractNamedProductsWithPrices(
   ocrText: string,
@@ -812,6 +824,63 @@ export function extractNamedProductsWithPrices(
   const skipBrand =
     /^(ORDER|TOTAL|SHIP|PAYMENT|GRAND|ESTIMATED|ITEMS|DELIVERED|RETURN|RETUM|SOLD|YOUR|UNITED|PACKAGE|ITEM)/i
 
+  const isUnitPrice = (a: number) => {
+    if (a < 0.5) return false
+    if (grand != null && nearly(a, grand)) return false
+    if (sub != null && nearly(a, sub) && a > 5) return false
+    if (grand != null && a > grand + 0.05) return false
+    if (sub != null && a > sub + 0.05) return false
+    if (grand != null && grand < 200 && a >= 100 && Math.abs(a - Math.round(a)) < 0.001) return false
+    return true
+  }
+
+  /** Title-ish line for Amazon hard parts (not Sold by / totals). */
+  const looksLikeAmazonTitle = (line: string): string | null => {
+    if (PRODUCT_LINE_SKIP.test(line) || PRODUCT_NAME_JUNK.test(line)) return null
+    if (PRODUCT_MARKETING.test(line) && !/\$/.test(line)) return null
+    if (/^\$?\s*\d+[.,]\d{2}\s*$/.test(line)) return null
+    if (/^sold\s*by\b|^supplied\s*by\b/i.test(line)) return null
+    // Brand - product
+    const bm = line.match(brandRe)
+    if (bm && !skipBrand.test(bm[1])) {
+      const cleaned = cleanBrandProductTitle(bm[1], bm[2])
+      if (cleaned && descriptionQuality(cleaned) >= 10) return cleaned
+    }
+    // Motorcraft / Duralast / known brands
+    const auto = line.match(
+      /^((?:Duralast|DieHard|EverStart|Valvoline|Mobil|Castrol|ACDelco|Motorcraft|Bosch|Peak)[\w\s,./#-]{4,70})/i,
+    )
+    if (auto && descriptionQuality(auto[1]) >= 12) {
+      return auto[1].replace(/,?\s*E[AR]\s*$/i, '').trim().slice(0, 90)
+    }
+    // ICP / camshaft / powerstroke / cable / connector lines
+    if (
+      /\b(icp\s*sensor|camshaft|crankshaft|powerstroke|position\s*sensor|battery\s*cable|cable\s*lug|connector\s*kit|fuse\s*block|bus\s*bar|heat\s*shrink|awg)\b/i.test(
+        line,
+      ) &&
+      descriptionQuality(line) >= 12 &&
+      line.length >= 12
+    ) {
+      return line
+        .replace(/\bSold by:.*$/i, '')
+        .replace(/\bSupplied by:.*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 90)
+    }
+    // Generic: line with letters + optional $ on same line, not chrome
+    if (
+      /^[A-Z][A-Za-z0-9]/.test(line) &&
+      descriptionQuality(line) >= 16 &&
+      line.length >= 16 &&
+      line.length <= 90 &&
+      !/\b(order|total|shipping|payment|mastercard|estimated)\b/i.test(line)
+    ) {
+      return line.slice(0, 90)
+    }
+    return null
+  }
+
   type Row = { name: string; price: number | null; id: string }
   const rows: Row[] = []
   let current: Row | null = null
@@ -824,46 +893,33 @@ export function extractNamedProductsWithPrices(
   }
 
   for (const line of lines) {
-    if (PRODUCT_LINE_SKIP.test(line) && !brandRe.test(line)) continue
-
-    const bm = line.match(brandRe)
-    if (bm && !skipBrand.test(bm[1])) {
-      const cleaned = cleanBrandProductTitle(bm[1], bm[2])
-      if (cleaned) {
-        flush()
-        const id = productIdentityKey(cleaned)
-        // Skip multi-page duplicate of same product
-        if (rows.some((r) => r.id === id)) {
-          current = null
+    const title = looksLikeAmazonTitle(line)
+    if (title) {
+      const id = productIdentityKey(title)
+      // Multi-page duplicate of same product identity — skip starting a new row
+      if (rows.some((r) => r.id === id) || (current && current.id === id)) {
+        // still allow attaching a price if current matches
+        if (current && current.id === id) {
+          /* fall through to price scan */
+        } else {
           continue
         }
-        current = { name: cleaned, price: null, id }
-        // Price on same line as title?
-        const same = parseMoneyTokens(line, { grandTotal: grand }).filter(
-          (a) =>
-            a >= 0.5 &&
-            (grand == null || (!nearly(a, grand) && a <= grand + 0.05)) &&
-            (sub == null || !nearly(a, sub) || a < 5),
-        )
+      } else {
+        flush()
+        current = { name: title, price: null, id }
+        const same = parseMoneyTokens(line, { grandTotal: grand }).filter(isUnitPrice)
         if (same.length) current.price = same[same.length - 1]
         continue
       }
     }
 
     if (!current) continue
+    if (/^sold\s*by\b|^supplied\s*by\b/i.test(line)) continue
     if (PRODUCT_MARKETING.test(line) && !/\$/.test(line)) continue
 
-    const amts = parseMoneyTokens(line, { grandTotal: grand }).filter((a) => {
-      if (a < 0.5) return false
-      if (grand != null && nearly(a, grand)) return false
-      if (sub != null && nearly(a, sub) && a > 5) return false
-      if (grand != null && a > grand + 0.05) return false
-      if (grand != null && grand < 200 && a >= 100 && Math.abs(a - Math.round(a)) < 0.001)
-        return false
-      return true
-    })
+    const amts = parseMoneyTokens(line, { grandTotal: grand }).filter(isUnitPrice)
     if (amts.length && current.price == null) {
-      current.price = amts[0]
+      current.price = amts[amts.length - 1]
     }
   }
   flush()
