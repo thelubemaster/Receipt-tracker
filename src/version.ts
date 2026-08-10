@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.33.5'
+export const APP_VERSION = '1.34.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.34.0',
+    date: '2026-08-10',
+    title: 'Backup, fix wrong scans, and project budgets',
+    changes: [
+      'Full backup & restore in Settings (projects, receipts, photos, settings)',
+      'What’s wrong? chips after a scan — mark total/store/products and re-scan',
+      'Optional project budget with spent / remaining on the project home',
+    ],
+  },
   {
     version: '1.33.5',
     date: '2026-08-03',

@@ -520,6 +520,11 @@ function normalizePurchase(p: Purchase): Purchase {
 
 function normalizeProject(p: Project): Project {
   const themeRaw = typeof p.themeId === 'string' ? p.themeId.trim() : ''
+  const budgetRaw = p.budget
+  const budget =
+    typeof budgetRaw === 'number' && Number.isFinite(budgetRaw) && budgetRaw > 0
+      ? Math.round(budgetRaw * 100) / 100
+      : null
   return {
     id: p.id,
     name: (p.name || 'Untitled project').trim() || 'Untitled project',
@@ -527,6 +532,7 @@ function normalizeProject(p: Project): Project {
     coverImageId: p.coverImageId ?? null,
     // Always store a concrete theme so projects never “follow” the home theme live
     themeId: themeRaw || 'midnight-teal',
+    budget,
     createdAt: p.createdAt || new Date().toISOString(),
     updatedAt: p.updatedAt || p.createdAt || new Date().toISOString(),
   }
@@ -956,6 +962,16 @@ async function buildImageRow(id: string, blob: Blob): Promise<ImageRow> {
 
 export async function saveImage(blob: Blob): Promise<string> {
   const id = newId()
+  await putImage(id, blob)
+  return id
+}
+
+/**
+ * Store (or replace) an image under a known id — used by backup restore
+ * so receiptImageId / coverImageId links still resolve.
+ */
+export async function putImage(id: string, blob: Blob): Promise<void> {
+  if (!id) throw new Error('Image id required')
   // Compress first so storage + later display stay WebView-safe
   const compressed = await compressImageToJpeg(blob)
   const typed = compressed?.blob || blob
@@ -967,7 +983,7 @@ export async function saveImage(blob: Blob): Promise<string> {
     await ensureStorage()
     if (mode === 'local' || !idb) {
       await saveImageLocal(id, typed)
-      return id
+      return
     }
     const row = await buildImageRow(id, typed)
     await idb.put('images', row)
@@ -975,7 +991,29 @@ export async function saveImage(blob: Blob): Promise<string> {
     if (isStorageSchemaError(e)) useLocalMode(String(e))
     await saveImageLocal(id, typed)
   }
-  return id
+}
+
+/** All image ids currently stored (IDB + localStorage keys). */
+export async function listImageIds(): Promise<string[]> {
+  const ids = new Set<string>()
+  try {
+    if (canUseLocalStorage()) {
+      const map = lsRead<Record<string, string>>(LS_IMAGES, {})
+      for (const k of Object.keys(map || {})) if (k) ids.add(k)
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    await ensureStorage()
+    if (mode !== 'local' && idb && idb.objectStoreNames.contains('images')) {
+      const keys = await idb.getAllKeys('images')
+      for (const k of keys) if (typeof k === 'string' && k) ids.add(k)
+    }
+  } catch {
+    /* ignore */
+  }
+  return [...ids]
 }
 
 /**
@@ -1208,6 +1246,35 @@ export async function clearAllData(): Promise<void> {
     }
   } catch (e) {
     console.warn('[schoolie] clearAllData IDB partial', e)
+  }
+}
+
+/**
+ * Wipe projects + purchases + images + memory + leaderboard before full restore.
+ * Settings are left alone unless the restore payload overwrites them.
+ */
+export async function clearAllDataForRestore(): Promise<void> {
+  lsWrite(LS_PURCHASES, [])
+  lsWrite(LS_PROJECTS, [])
+  lsWrite(LS_IMAGES, {})
+  lsWrite(LS_MEMORY, emptyReceiptMemory())
+  lsWrite(LS_LEADERBOARD, null as unknown as LeaderboardMap)
+  try {
+    localStorage.removeItem(LS_LEADERBOARD)
+  } catch {
+    /* ignore */
+  }
+  try {
+    await ensureStorage()
+    if (mode === 'local' || !idb) return
+    if (idb.objectStoreNames.contains('purchases')) await idb.clear('purchases')
+    if (idb.objectStoreNames.contains('projects')) await idb.clear('projects')
+    if (idb.objectStoreNames.contains('images')) await idb.clear('images')
+    if (idb.objectStoreNames.contains('meta')) {
+      await idb.clear('meta')
+    }
+  } catch (e) {
+    console.warn('[schoolie] clearAllDataForRestore IDB partial', e)
   }
 }
 

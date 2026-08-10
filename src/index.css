@@ -545,6 +545,89 @@ a {
   font-size: 0.92rem;
 }
 
+.budget-panel {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.budget-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.budget-ok {
+  color: var(--accent-bright, #7dcea0);
+}
+
+.budget-over {
+  color: #f0a0a0;
+}
+
+.budget-track {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.budget-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent, #3d8b7a), var(--accent-bright, #7dcea0));
+  min-width: 2px;
+  transition: width 0.25s ease;
+}
+
+.budget-fill-over {
+  background: linear-gradient(90deg, #c0392b, #e74c3c);
+}
+
+.budget-meta {
+  margin-top: 6px;
+  font-size: 0.8rem;
+}
+
+.scan-fix-card {
+  margin: 12px 0 4px;
+  border-color: rgba(232, 165, 75, 0.3);
+}
+
+.scan-fix-card-active {
+  border-color: rgba(232, 165, 75, 0.55);
+  box-shadow: 0 0 0 1px rgba(232, 165, 75, 0.15);
+}
+
+.fix-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fix-chip {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.fix-chip-on {
+  border-color: rgba(231, 76, 60, 0.65);
+  background: rgba(231, 76, 60, 0.18);
+  color: #ffd5d0;
+}
+
 .hero-pills {
   display: flex;
   flex-wrap: wrap;

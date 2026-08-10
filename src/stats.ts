@@ -32,6 +32,31 @@ export function totalSpent(purchases: Purchase[]): number {
   return sumAmounts(purchases.map((p) => p.amount))
 }
 
+/** Spent vs optional project budget (for the project home hero). */
+export function budgetStatus(
+  spent: number,
+  budget: number | null | undefined,
+): {
+  budget: number
+  spent: number
+  remaining: number
+  percent: number
+  over: boolean
+} | null {
+  if (budget == null || !Number.isFinite(budget) || budget <= 0) return null
+  const b = Math.round(budget * 100) / 100
+  const s = Math.round(spent * 100) / 100
+  const remaining = Math.round((b - s) * 100) / 100
+  const percent = Math.min(999, Math.round((s / b) * 1000) / 10)
+  return {
+    budget: b,
+    spent: s,
+    remaining,
+    percent,
+    over: s > b + 0.005,
+  }
+}
+
 /**
  * Spend bars for the project home screen.
  * Uses the same similarity merge as receipt groups so

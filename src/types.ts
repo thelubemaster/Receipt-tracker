@@ -25,6 +25,11 @@ export interface Project {
    * Independent of the Home Screen theme in Settings.
    */
   themeId?: string | null
+  /**
+   * Optional total budget for this project (dollars).
+   * Shown as spent vs remaining on the project home.
+   */
+  budget?: number | null
   createdAt: string
   updatedAt: string
 }

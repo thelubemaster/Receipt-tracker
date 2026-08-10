@@ -53,6 +53,13 @@ import { normalizePickedDocument } from './documentPick'
 import { ProjectsHome } from './ProjectsHome'
 import { SafeImage } from './SafeImage'
 import { learnFromPurchase, memoryStats } from './receiptMemory'
+import {
+  createBackup,
+  downloadBackupFile,
+  parseBackupFile,
+  restoreBackup,
+  summarizeBackup,
+} from './backup'
 import { downloadCsv, downloadPdfSummary } from './exportData'
 import {
   defaultLeaderboard,
@@ -112,6 +119,7 @@ import { ThemePicker } from './ThemePicker'
 import { applyWaitingUpdate, notifyIfWaitingUpdate, setupPwaUpdates } from './pwa'
 import { scanInvoiceFromText, scanReceipt, type ScanResult } from './receiptAi'
 import {
+  budgetStatus,
   categoryBreakdown,
   groupPurchasesForDisplay,
   purchaseCategoryLabel,
@@ -1174,6 +1182,7 @@ function ProjectEditScreen(props: {
   const isNew = !props.projectId
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [budgetRaw, setBudgetRaw] = useState('')
   const [coverId, setCoverId] = useState<string | null>(null)
   const [coverPreview, setCoverPreview] = useState<string | null>(null)
   // New projects start from a *copy* of the home theme; then they live separately
@@ -1202,6 +1211,9 @@ function ProjectEditScreen(props: {
       }
       setName(p.name)
       setDescription(p.description)
+      setBudgetRaw(
+        p.budget != null && p.budget > 0 ? formatAmountForInput(p.budget) : '',
+      )
       setCoverId(p.coverImageId)
       // This project’s theme only (never Settings home)
       const tid = projectThemeId(p.themeId)
@@ -1284,6 +1296,13 @@ function ProjectEditScreen(props: {
     try {
       const now = new Date().toISOString()
       const existing = props.projectId ? await getProject(props.projectId) : null
+      const budgetParsed = budgetRaw.trim()
+        ? parseMoneyInputLoose(budgetRaw)
+        : null
+      const budget =
+        budgetParsed != null && budgetParsed > 0
+          ? Math.round(budgetParsed * 100) / 100
+          : null
       const project: Project = {
         id: props.projectId || newId(),
         name: trimmed,
@@ -1291,6 +1310,7 @@ function ProjectEditScreen(props: {
         coverImageId: coverId,
         // Always save this project’s own theme (never writes Settings / home theme)
         themeId,
+        budget,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       }
@@ -1424,6 +1444,20 @@ function ProjectEditScreen(props: {
             placeholder="Short description — goals, notes, anything helpful"
             rows={4}
           />
+        </div>
+
+        <div className="field">
+          <label htmlFor="proj-budget">Budget (optional)</label>
+          <input
+            id="proj-budget"
+            inputMode="decimal"
+            value={budgetRaw}
+            onChange={(e) => setBudgetRaw(sanitizeMoneyTyping(e.target.value))}
+            placeholder="e.g. 5000 — leave blank for none"
+          />
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.85rem' }}>
+            Project home shows spent vs remaining when you set a budget.
+          </p>
         </div>
 
         <div className="card settings-card">
@@ -1575,6 +1609,44 @@ function HomeScreen(props: {
               ? 'No receipts yet — scan one to start'
               : `${props.purchaseCount} receipt${props.purchaseCount === 1 ? '' : 's'} · ${props.groups.length} group${props.groups.length === 1 ? '' : 's'}`}
           </div>
+          {(() => {
+            const bud = budgetStatus(props.total, props.project.budget)
+            if (!bud) return null
+            const barPct = Math.min(100, bud.percent)
+            return (
+              <div className="budget-panel" aria-label="Budget progress">
+                <div className="budget-row">
+                  <span>Budget {formatMoney(bud.budget)}</span>
+                  <span className={bud.over ? 'budget-over' : 'budget-ok'}>
+                    {bud.over
+                      ? `Over by ${formatMoney(Math.abs(bud.remaining))}`
+                      : `${formatMoney(bud.remaining)} left`}
+                  </span>
+                </div>
+                <div className="budget-track">
+                  <span
+                    className={`budget-fill${bud.over ? ' budget-fill-over' : ''}`}
+                    style={{ width: `${Math.max(barPct, bud.over ? 100 : 2)}%` }}
+                  />
+                </div>
+                <div className="budget-meta muted">
+                  {bud.percent}% of budget used
+                  {!props.project.budget ? null : (
+                    <>
+                      {' · '}
+                      <button
+                        type="button"
+                        className="version-link"
+                        onClick={props.onEditProject}
+                      >
+                        Edit budget
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
           {props.project.description ? (
             <p className="project-hero-desc">{props.project.description}</p>
           ) : null}
@@ -2884,6 +2956,82 @@ function PurchaseFormScreen(props: {
         </div>
       )}
 
+      {/* Quick wrong-scan fix loop — one tap marks the problem, then re-scan */}
+      {props.onTryAgain && fromScan && (
+        <div
+          className={`card scan-fix-card${wrongCount > 0 || lowConfidence || looksThin ? ' scan-fix-card-active' : ''}`}
+        >
+          <strong className="scan-retry-title">What’s wrong?</strong>
+          <p className="muted" style={{ margin: '6px 0 10px' }}>
+            Tap what’s wrong, then <strong>Fix &amp; re-scan</strong>. Unmarked fields stay as they
+            are.
+          </p>
+          <div className="fix-chip-row" role="group" aria-label="Mark what the scan got wrong">
+            {(
+              [
+                ['total', 'Wrong total'],
+                ['vendor', 'Wrong store'],
+                ['date', 'Wrong date'],
+                ['category', 'Wrong category'],
+                ['missingItems', 'Missing products'],
+                ['shipping', 'Shipping / fees'],
+              ] as const
+            ).map(([key, label]) => {
+              const markKey = key === 'shipping' ? 'shipping' : key
+              const active =
+                markKey === 'shipping'
+                  ? partMarks.shipping === 'wrong' || partMarks.fees === 'wrong'
+                  : partMarks[markKey] === 'wrong'
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`fix-chip${active ? ' fix-chip-on' : ''}`}
+                  aria-pressed={active}
+                  onClick={() => {
+                    if (key === 'shipping') {
+                      setMark('shipping', active ? 'unset' : 'wrong')
+                      setMark('fees', active ? 'unset' : 'wrong')
+                    } else {
+                      setMark(markKey, active ? 'unset' : 'wrong')
+                    }
+                  }}
+                >
+                  {active ? '✗ ' : ''}
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
+            <label htmlFor="fix-note">Note for the re-scan (optional)</label>
+            <input
+              id="fix-note"
+              value={reportNote}
+              onChange={(e) => setReportNote(e.target.value)}
+              placeholder="e.g. total is 93.42 not 120"
+            />
+          </div>
+          <div className="row-actions" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={requestTryAgain}
+              disabled={wrongCount === 0 && !reportNote.trim()}
+            >
+              {wrongCount > 0
+                ? `Fix ${wrongCount} marked · re-scan`
+                : reportNote.trim()
+                  ? 'Re-scan with note'
+                  : 'Mark something first'}
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={requestTryAgain}>
+              Retry everything
+            </button>
+          </div>
+        </div>
+      )}
+
       <form
         className="form"
         onSubmit={(e) => {
@@ -3234,14 +3382,13 @@ function PurchaseFormScreen(props: {
           >
             <strong className="scan-retry-title">
               {wrongCount > 0
-                ? `${wrongCount} part${wrongCount === 1 ? '' : 's'} marked wrong`
+                ? `Still ${wrongCount} wrong mark${wrongCount === 1 ? '' : 's'} — fix above or re-scan`
                 : lowConfidence || looksThin
-                  ? 'Something may be incomplete'
-                  : 'Looks good? Save — or fix mistakes'}
+                  ? 'Looks incomplete — use What’s wrong? above if needed'
+                  : 'Looks good? Save when ready'}
             </strong>
             <p className="muted" style={{ margin: '6px 0 0' }}>
-              Mark <strong>✗</strong> only on wrong fields above, then fix. Unmarked fields are kept
-              as correct.
+              You can also mark individual fields with ✗ next to them, then re-scan.
             </p>
             <div className="row-actions" style={{ marginTop: 12 }}>
               <button
@@ -3249,16 +3396,11 @@ function PurchaseFormScreen(props: {
                 className="btn btn-primary"
                 onClick={requestTryAgain}
                 disabled={wrongCount === 0 && !hasAnyWrongMark(partMarks) && !reportNote.trim()}
-                title={
-                  wrongCount === 0
-                    ? 'Mark at least one ✗ (or write a note) before re-scanning'
-                    : 'Re-scan focusing on marked-wrong parts'
-                }
               >
-                {wrongCount > 0 ? 'Fix marked parts' : 'Mark ✗ then fix'}
+                {wrongCount > 0 ? 'Fix marked · re-scan' : 'Re-scan'}
               </button>
               <button type="button" className="btn btn-secondary" onClick={requestTryAgain}>
-                Retry all
+                Retry everything
               </button>
             </div>
           </div>
@@ -3774,6 +3916,9 @@ function SettingsScreen(props: {
   const [stabilityStatus, setStabilityStatus] = useState('')
   const [hfToken, setHfToken] = useState('')
   const [hfTokenSaved, setHfTokenSaved] = useState(false)
+  const [backupBusy, setBackupBusy] = useState(false)
+  const [backupStatus, setBackupStatus] = useState<string | null>(null)
+  const restoreInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     void getLeaderboard().then((b) => setBoard(normalizeLeaderboard(b)))
@@ -3784,6 +3929,47 @@ function SettingsScreen(props: {
       }),
     )
   }, [])
+
+  async function handleBackupExport() {
+    setBackupBusy(true)
+    setBackupStatus('Building backup…')
+    try {
+      const backup = await createBackup()
+      downloadBackupFile(backup)
+      const s = summarizeBackup(backup)
+      setBackupStatus(
+        `Downloaded backup: ${s.projects} project${s.projects === 1 ? '' : 's'}, ${s.purchases} receipt${s.purchases === 1 ? '' : 's'}, ${s.images} photo${s.images === 1 ? '' : 's'}.`,
+      )
+    } catch (e) {
+      setBackupStatus(e instanceof Error ? e.message : 'Backup failed')
+    } finally {
+      setBackupBusy(false)
+    }
+  }
+
+  async function handleBackupRestore(file: File | null) {
+    if (!file) return
+    const ok = confirm(
+      'Restore replaces ALL projects, receipts, and photos on this device with the backup. Continue?',
+    )
+    if (!ok) return
+    setBackupBusy(true)
+    setBackupStatus('Restoring…')
+    try {
+      const backup = await parseBackupFile(file)
+      const summary = summarizeBackup(backup)
+      const result = await restoreBackup(backup)
+      setBackupStatus(
+        `Restored ${result.projects} project${result.projects === 1 ? '' : 's'}, ${result.purchases} receipt${result.purchases === 1 ? '' : 's'}, ${result.images} photo${result.images === 1 ? '' : 's'}${result.settingsRestored ? ' + settings' : ''}. (file had ${summary.purchases} receipts)`,
+      )
+      // Reload so home list reflects new data
+      window.setTimeout(() => window.location.reload(), 900)
+    } catch (e) {
+      setBackupStatus(e instanceof Error ? e.message : 'Restore failed')
+    } finally {
+      setBackupBusy(false)
+    }
+  }
 
   const ranked = useMemo(() => rankLeaderboard(board), [board])
 
@@ -3905,6 +4091,48 @@ function SettingsScreen(props: {
         </div>
 
         <OnDeviceMemoryCard />
+
+        <div className="card settings-card">
+          <strong>Backup &amp; restore</strong>
+          <p className="muted" style={{ margin: '6px 0 12px' }}>
+            Full copy of projects, receipts, photos, and settings — stays on your device as a JSON
+            file. Use this before switching phones.
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ width: '100%' }}
+            disabled={backupBusy}
+            onClick={() => void handleBackupExport()}
+          >
+            {backupBusy ? 'Working…' : 'Download full backup'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ width: '100%', marginTop: 8 }}
+            disabled={backupBusy}
+            onClick={() => restoreInputRef.current?.click()}
+          >
+            Restore from backup file
+          </button>
+          <input
+            ref={restoreInputRef}
+            className="hidden-input"
+            type="file"
+            accept="application/json,.json"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null
+              e.currentTarget.value = ''
+              void handleBackupRestore(f)
+            }}
+          />
+          {backupStatus && (
+            <p className="muted" style={{ margin: '10px 0 0' }} role="status">
+              {backupStatus}
+            </p>
+          )}
+        </div>
 
         <div className="card settings-card">
           <strong>Optional vision models (OFF by default)</strong>
