@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Serve Schoolie for Android install with HTTPS (Chrome install needs a secure origin).
+# Serve Project Cost Tracker for Android install with HTTPS (Chrome install needs a secure origin).
 # Usage: npm run start:android
 # Phone: open the printed https://IP:4190 URL → Install page.
 
@@ -22,13 +22,13 @@ if [[ ! -f "$KEY" || ! -f "$CERT" ]]; then
   openssl req -x509 -newkey rsa:2048 \
     -keyout "$KEY" -out "$CERT" \
     -days 825 -nodes \
-    -subj "/CN=SchoolieLocal/O=Schoolie/C=US" \
+    -subj "/CN=Project Cost TrackerLocal/O=Project Cost Tracker/C=US" \
     -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
     2>/dev/null || \
   openssl req -x509 -newkey rsa:2048 \
     -keyout "$KEY" -out "$CERT" \
     -days 825 -nodes \
-    -subj "/CN=SchoolieLocal"
+    -subj "/CN=Project Cost TrackerLocal"
 fi
 
 # Discover LAN IP for phone
@@ -38,7 +38,7 @@ IP="${IP:-127.0.0.1}"
 
 echo ""
 echo "=============================================="
-echo "  Schoolie Android installer (HTTPS)"
+echo "  Project Cost Tracker Android installer (HTTPS)"
 echo "=============================================="
 echo "  On your phone (Chrome), open:"
 echo ""
@@ -46,7 +46,7 @@ echo "    https://${IP}:${PORT}/"
 echo ""
 echo "  Chrome will warn about the certificate — tap"
 echo "  Advanced → Proceed (safe for your home network)."
-echo "  Then use the Install page to add Schoolie."
+echo "  Then use the Install page to add Project Cost Tracker."
 echo "=============================================="
 echo ""
 

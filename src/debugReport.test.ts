@@ -32,7 +32,7 @@ describe('formatScanDebugText', () => {
         lineItems: [{ id: '1', description: 'RIGID FOAM', amount: 48.97, categoryId: 'insulation' }],
       },
     })
-    expect(text).toContain('SCHOOLIE SCAN DEBUG')
+    expect(text).toContain('PROJECT COST TRACKER SCAN DEBUG')
     expect(text).toContain('Total wrong')
     expect(text).toContain('HOME DEPOT')
     expect(text).toContain('120.28')
@@ -88,7 +88,7 @@ describe('formatProjectDebugText', () => {
         },
       ],
     })
-    expect(text).toContain('SCHOOLIE PROJECT DATA')
+    expect(text).toContain('PROJECT COST TRACKER DATA')
     expect(text).toContain('School bus')
     expect(text).toContain('AutoZone')
     expect(text).toContain('SALE TOTAL 365.20')

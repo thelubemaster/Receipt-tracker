@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Schoolie Android APK (installable like a normal app)
+# Build Project Cost Tracker Android APK (installable like a normal app)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -66,8 +66,8 @@ export GRADLE_OPTS="${GRADLE_OPTS:-} -Xmx2g"
 
 APK="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
 mkdir -p "$ROOT/public/downloads" "$ROOT/dist/downloads"
-cp -f "$APK" "$ROOT/public/downloads/schoolie.apk"
-cp -f "$APK" "$ROOT/dist/downloads/schoolie.apk"
+cp -f "$APK" "$ROOT/public/downloads/project-cost-tracker.apk"
+cp -f "$APK" "$ROOT/dist/downloads/project-cost-tracker.apk"
 echo ""
-echo "✓ APK ready: public/downloads/schoolie.apk"
-ls -lh "$ROOT/public/downloads/schoolie.apk"
+echo "✓ APK ready: public/downloads/project-cost-tracker.apk"
+ls -lh "$ROOT/public/downloads/project-cost-tracker.apk"

@@ -1,6 +1,6 @@
 # Project Cost Tracker
 
-Free, on-device receipt scanning and cost tracking **by project**.
+Free, on-device receipt scanning and cost tracking **by project** — kitchen remodel, trip, business build, vehicle, or anything else.
 
 **Repo:** [thelubemaster/Receipt-tracker](https://github.com/thelubemaster/Receipt-tracker)
 
@@ -10,17 +10,17 @@ Free, on-device receipt scanning and cost tracking **by project**.
 
 | Device | Steps |
 | --- | --- |
-| **Android** | Open the link → download **schoolie.apk** → Install → Open |
+| **Android** | Open the link → download **project-cost-tracker.apk** → Install → Open |
 | **iPhone / iPad** | Open the link in **Safari** → Share → **Add to Home Screen** → Add |
 
 Apple does not allow installing Android APKs. On iPhone/iPad you get the same free web app on your Home Screen (no App Store required).
 
-Direct Android APK only:  
-[schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)
+Direct Android APK:  
+[project-cost-tracker.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk)
 
 ## How it works
 
-1. **Home** — your projects (kitchen remodel, bus conversion, trip, …)
+1. **Home** — your projects
 2. **Open a project** — description, cover photo, and all receipts
 3. **Scan** — photo a receipt; free on-device AI suggests totals and categories
 

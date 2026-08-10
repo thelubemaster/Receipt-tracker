@@ -70,12 +70,12 @@ function readAppVersion() {
 
 function ensureBuild() {
   if (!existsSync(join(DIST, 'index.html'))) {
-    console.log('Building Schoolie…')
+    console.log('Building Project Cost Tracker…')
     execSync('npm run build', { cwd: ROOT, stdio: 'inherit' })
   }
   // Ensure APK is in dist for download
-  const srcApk = join(ROOT, 'public/downloads/schoolie.apk')
-  const dstApk = join(DIST, 'downloads/schoolie.apk')
+  const srcApk = join(ROOT, 'public/downloads/project-cost-tracker.apk')
+  const dstApk = join(DIST, 'downloads/project-cost-tracker.apk')
   mkdirSync(join(DIST, 'downloads'), { recursive: true })
   if (existsSync(srcApk) && (!existsSync(dstApk) || statSync(srcApk).mtimeMs > statSync(dstApk).mtimeMs)) {
     execSync(`cp -f "${srcApk}" "${dstApk}"`)
@@ -99,12 +99,12 @@ function ensureCert() {
   const san = ['DNS:localhost', 'IP:127.0.0.1', ...ips.map((ip) => `IP:${ip}`)].join(',')
   try {
     execSync(
-      `openssl req -x509 -newkey rsa:2048 -keyout "${KEY}" -out "${CERT}" -days 825 -nodes -subj "/CN=Schoolie" -addext "subjectAltName=${san}"`,
+      `openssl req -x509 -newkey rsa:2048 -keyout "${KEY}" -out "${CERT}" -days 825 -nodes -subj "/CN=CostTracker" -addext "subjectAltName=${san}"`,
       { stdio: 'pipe' },
     )
   } catch {
     execSync(
-      `openssl req -x509 -newkey rsa:2048 -keyout "${KEY}" -out "${CERT}" -days 825 -nodes -subj "/CN=Schoolie"`,
+      `openssl req -x509 -newkey rsa:2048 -keyout "${KEY}" -out "${CERT}" -days 825 -nodes -subj "/CN=CostTracker"`,
       { stdio: 'inherit' },
     )
   }
@@ -114,7 +114,7 @@ function ensureWebUpdateZip() {
   mkdirSync(join(DIST, 'downloads'), { recursive: true })
   try {
     execSync(
-      `cd "${DIST}" && rm -f downloads/web-update.zip && zip -qr downloads/web-update.zip . -x "downloads/schoolie.apk" -x "downloads/web-update.zip"`,
+      `cd "${DIST}" && rm -f downloads/web-update.zip && zip -qr downloads/web-update.zip . -x "downloads/project-cost-tracker.apk" -x "downloads/web-update.zip"`,
       { stdio: 'pipe' },
     )
     console.log(`OTA bundle ready (v${readAppVersion()})`)
@@ -218,7 +218,7 @@ function sendFile(req, res, filePath) {
     'X-Accel-Buffering': 'no',
   }
   if (isApk) {
-    baseHeaders['Content-Disposition'] = 'attachment; filename="schoolie.apk"'
+    baseHeaders['Content-Disposition'] = 'attachment; filename="project-cost-tracker.apk"'
     baseHeaders['X-Content-Type-Options'] = 'nosniff'
   }
   if (isZip) {
@@ -289,7 +289,7 @@ function handler(req, res) {
       const body = JSON.stringify({
         version,
         url: `${base}/downloads/web-update.zip`,
-        notes: `Schoolie v${version} web update`,
+        notes: `Project Cost Tracker v${version} web update`,
       })
       res.writeHead(200, {
         'Content-Type': 'application/json',
@@ -303,7 +303,7 @@ function handler(req, res) {
 
     // Health
     if (pathOnly === '/api/health') {
-      const apk = join(DIST, 'downloads/schoolie.apk')
+      const apk = join(DIST, 'downloads/project-cost-tracker.apk')
       const body = JSON.stringify({
         ok: true,
         version: readAppVersion(),
@@ -347,13 +347,13 @@ httpServer.keepAliveTimeout = 300000
 httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log('')
   console.log('==============================================')
-  console.log('  Schoolie Android installer (stable download)')
+  console.log('  Project Cost Tracker Android installer (stable download)')
   console.log('==============================================')
   for (const ip of ips.length ? ips : ['127.0.0.1']) {
     console.log(`  Phone Chrome →  http://${ip}:${HTTP_PORT}/`)
-    console.log(`  Direct APK   →  http://${ip}:${HTTP_PORT}/downloads/schoolie.apk`)
+    console.log(`  Direct APK   →  http://${ip}:${HTTP_PORT}/downloads/project-cost-tracker.apk`)
   }
-  const apk = join(DIST, 'downloads/schoolie.apk')
+  const apk = join(DIST, 'downloads/project-cost-tracker.apk')
   if (existsSync(apk)) {
     const mb = (statSync(apk).size / (1024 * 1024)).toFixed(1)
     console.log(`  APK size: ${mb} MB (Range + Content-Length enabled)`)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Schoolie Cost Tracker standalone (Electron). Used by app menu / tray / desktop icon.
+# Start Project Cost Tracker Cost Tracker standalone (Electron). Used by app menu / tray / desktop icon.
 
 set -euo pipefail
 
@@ -28,7 +28,7 @@ if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
 fi
 
 if [[ ! -f "$ROOT/dist/index.html" ]]; then
-  echo "Building Schoolie (first launch)…" | tee -a "$LOG"
+  echo "Building Project Cost Tracker (first launch)…" | tee -a "$LOG"
   (cd "$ROOT" && npm run build) >>"$LOG" 2>&1 || {
     echo "Build failed. See $LOG" >&2
     exit 1

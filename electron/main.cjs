@@ -1,5 +1,5 @@
 /**
- * Schoolie Cost Tracker — standalone desktop shell (Electron).
+ * Project Cost Tracker — standalone desktop shell (Electron).
  * System tray icon + app menu install. No browser tab required.
  */
 const {
@@ -69,7 +69,7 @@ function createWindow() {
     height: DEFAULT_H,
     minWidth: 360,
     minHeight: 560,
-    title: 'Schoolie Cost Tracker',
+    title: 'Project Cost Tracker',
     backgroundColor: '#0c0e13',
     autoHideMenuBar: true,
     show: false,
@@ -110,7 +110,7 @@ function createWindow() {
           encodeURIComponent(
             `<body style="font-family:system-ui;background:#0c0e13;color:#eee;padding:2rem">
               <h1>Build missing</h1>
-              <p>Run <code>npm run build</code> then launch Schoolie again.</p>
+              <p>Run <code>npm run build</code> then launch Project Cost Tracker again.</p>
             </body>`,
           ),
       )
@@ -128,11 +128,11 @@ function createTray() {
 
   const icon = loadAppIcon()
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
-  tray.setToolTip('Schoolie Cost Tracker')
+  tray.setToolTip('Project Cost Tracker')
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Open Schoolie',
+      label: 'Open Cost Tracker',
       click: () => showMainWindow(),
     },
     { type: 'separator' },

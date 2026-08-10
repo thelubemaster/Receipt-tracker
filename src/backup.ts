@@ -24,7 +24,10 @@ import type { ReceiptMemory } from './receiptMemory'
 import type { AppSettings, Project, Purchase } from './types'
 import { APP_VERSION } from './version'
 
-export const BACKUP_FORMAT = 'schoolie-backup' as const
+/** Current format id (generic). Older files may still say schoolie-backup. */
+export const BACKUP_FORMAT = 'project-cost-tracker-backup' as const
+/** Legacy format still accepted on restore */
+export const BACKUP_FORMAT_LEGACY = 'schoolie-backup' as const
 export const BACKUP_VERSION = 1 as const
 
 export type BackupImage = {
@@ -79,8 +82,10 @@ function dataUrlToBlob(dataUrl: string): Blob {
 export function isSchoolieBackup(raw: unknown): raw is SchoolieBackup {
   if (!raw || typeof raw !== 'object') return false
   const o = raw as Record<string, unknown>
+  const formatOk =
+    o.format === BACKUP_FORMAT || o.format === BACKUP_FORMAT_LEGACY
   return (
-    o.format === BACKUP_FORMAT &&
+    formatOk &&
     (o.version === 1 || o.version === BACKUP_VERSION) &&
     Array.isArray(o.projects) &&
     Array.isArray(o.purchases)
@@ -156,7 +161,7 @@ export function downloadBackupFile(backup: SchoolieBackup): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `schoolie-backup-${stamp}.json`
+  a.download = `project-cost-tracker-backup-${stamp}.json`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -167,11 +172,11 @@ export async function parseBackupFile(file: File | Blob): Promise<SchoolieBackup
   try {
     raw = JSON.parse(text)
   } catch {
-    throw new Error('That file is not valid JSON. Pick a Schoolie backup (.json).')
+    throw new Error('That file is not valid JSON. Pick a Cost Tracker backup (.json).')
   }
   if (!isSchoolieBackup(raw)) {
     throw new Error(
-      'That file is not a Schoolie backup. Export one from Settings → Backup first.',
+      'That file is not a Cost Tracker backup. Export one from Settings → Backup first.',
     )
   }
   return raw

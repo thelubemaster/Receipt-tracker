@@ -1,8 +1,8 @@
 {
-  "version": "1.34.0",
+  "version": "1.34.1",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Backup & restore, fix wrong scans, project budgets",
+  "notes": "Generic Project Cost Tracker branding — any project, not school-bus only",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
-  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
+  "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk"
 }

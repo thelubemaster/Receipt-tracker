@@ -47,7 +47,7 @@ export function downloadTextFile(filename: string, content: string, mime: string
 }
 
 export function downloadCsv(purchases: Purchase[], projectName: string) {
-  const safe = projectName.replace(/[^\w\-]+/g, '_').slice(0, 40) || 'schoolie'
+  const safe = projectName.replace(/[^\w\-]+/g, '_').slice(0, 40) || 'project'
   const stamp = new Date().toISOString().slice(0, 10)
   downloadTextFile(
     `${safe}-purchases-${stamp}.csv`,
@@ -118,7 +118,7 @@ export function downloadPdfSummary(purchases: Purchase[], projectName: string) {
     y += wrapped.length * 12 + 4
   }
 
-  const safe = projectName.replace(/[^\w\-]+/g, '_').slice(0, 40) || 'schoolie'
+  const safe = projectName.replace(/[^\w\-]+/g, '_').slice(0, 40) || 'project'
   const stamp = new Date().toISOString().slice(0, 10)
   doc.save(`${safe}-summary-${stamp}.pdf`)
 }

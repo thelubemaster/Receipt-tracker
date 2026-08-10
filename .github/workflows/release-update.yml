@@ -1,7 +1,7 @@
 # Build web app + Android APK, publish to GitHub Releases & Pages.
 #
 # Download the app:
-#   https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk
+#   https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk
 #
 # One-time: Settings → Pages → Source: GitHub Actions
 name: Release app
@@ -46,8 +46,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/downloads
-          # Never ship multi-MB APK on Pages — Releases host schoolie.apk
-          rm -f dist/downloads/schoolie.apk
+          # Never ship multi-MB APK on Pages — Releases host the APK
+          rm -f dist/downloads/project-cost-tracker.apk dist/downloads/schoolie.apk
           (
             cd dist
             rm -f downloads/web-update.zip
@@ -58,12 +58,12 @@ jobs:
           )
           REPO="https://github.com/thelubemaster/Receipt-tracker"
           # Prefer Releases assets (Pages may be disabled). App also reads Releases API.
-          APK="${REPO}/releases/latest/download/schoolie.apk"
+          APK="${REPO}/releases/latest/download/project-cost-tracker.apk"
           WEB="${REPO}/releases/latest/download/web-update.zip"
           printf '%s\n' "{
             \"version\": \"${V}\",
             \"url\": \"${WEB}\",
-            \"notes\": \"Schoolie v${V} — free on-device scan update\",
+            \"notes\": \"Project Cost Tracker v${V} — free on-device update\",
             \"apkVersion\": \"${V}\",
             \"apkUrl\": \"${APK}\"
           }" > dist/app-update.json
@@ -75,19 +75,20 @@ jobs:
           }" > dist/update-server.json
           printf '%s\n' "{
             \"version\": \"${V}\",
-            \"name\": \"Schoolie Cost Tracker\",
+            \"name\": \"Project Cost Tracker\",
             \"apkUrl\": \"${APK}\",
-            \"apkFileName\": \"schoolie.apk\",
+            \"apkFileName\": \"project-cost-tracker.apk\",
+            \"installUrl\": \"https://thelubemaster.github.io/Receipt-tracker/?install=1\",
             \"releasesUrl\": \"${REPO}/releases/latest\",
             \"repoUrl\": \"${REPO}\",
-            \"notes\": \"Download schoolie.apk, open it, tap Install.\"
+            \"notes\": \"Download project-cost-tracker.apk, open it, tap Install. For any project.\"
           }" > dist/install.json
-          node -e "const fs=require('fs');const p='dist/version.json';let j={version:process.env.V,name:'schoolie-tracker',builtAt:new Date().toISOString()};try{Object.assign(j,JSON.parse(fs.readFileSync(p,'utf8')))}catch{};j.version=process.env.V;fs.writeFileSync(p,JSON.stringify(j,null,2))"
+          node -e "const fs=require('fs');const p='dist/version.json';let j={version:process.env.V,name:'project-cost-tracker',builtAt:new Date().toISOString()};try{Object.assign(j,JSON.parse(fs.readFileSync(p,'utf8')))}catch{};j.version=process.env.V;fs.writeFileSync(p,JSON.stringify(j,null,2))"
           ls -lh dist/downloads/web-update.zip dist/app-update.json dist/install.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: schoolie-dist
+          name: app-dist
           path: dist
           retention-days: 7
 
@@ -131,16 +132,16 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Stage schoolie.apk
+      - name: Stage project-cost-tracker.apk
         run: |
           mkdir -p artifacts
-          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/schoolie.apk
-          ls -lh artifacts/schoolie.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/project-cost-tracker.apk
+          ls -lh artifacts/project-cost-tracker.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: schoolie-apk
-          path: artifacts/schoolie.apk
+          name: app-apk
+          path: artifacts/project-cost-tracker.apk
           retention-days: 14
           if-no-files-found: error
 
@@ -155,7 +156,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: schoolie-dist
+          name: app-dist
           path: dist
 
       - uses: actions/configure-pages@v5
@@ -175,34 +176,34 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: schoolie-dist
+          name: app-dist
           path: dist
 
       - name: Download APK artifact if present
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: schoolie-apk
+          name: app-apk
           path: artifacts
 
       - name: Publish GitHub Release (OTA zip + APK when available)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.web.outputs.version }}
-          name: Schoolie v${{ needs.web.outputs.version }}
+          name: Project Cost Tracker v${{ needs.web.outputs.version }}
           body: |
-            ## Install (Android & Apple — same product)
+            ## Install (Android & Apple — any project)
 
             **One link (recommended):**  
             **[⬇ Open install page](https://thelubemaster.github.io/Receipt-tracker/?install=1)**
 
             | Device | How |
             | --- | --- |
-            | **Android** | Install page → download **schoolie.apk** → Install |
+            | **Android** | Install page → download **project-cost-tracker.apk** → Install |
             | **iPhone / iPad** | Open that link in **Safari** → Share → **Add to Home Screen** |
 
             Direct Android APK:  
-            **[schoolie.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk)**
+            **[project-cost-tracker.apk](https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk)**
 
             After install, updates can arrive automatically when you open the app.
 
@@ -212,7 +213,7 @@ jobs:
             dist/downloads/web-update.zip
             dist/app-update.json
             dist/install.json
-            artifacts/schoolie.apk
+            artifacts/project-cost-tracker.apk
           fail_on_unmatched_files: false
           make_latest: true
         env:

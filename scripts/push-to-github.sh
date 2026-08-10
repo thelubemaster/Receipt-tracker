@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Push Schoolie to https://github.com/thelubemaster/Receipt-tracker
+# Push Project Cost Tracker to https://github.com/thelubemaster/Receipt-tracker
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -25,5 +25,6 @@ echo ""
 echo "✓ Pushed. Next:"
 echo "  1) Repo Settings → Pages → Source: GitHub Actions"
 echo "  2) Wait for workflow: Release app"
-echo "  3) Download: ${REPO_URL%/}.git → Releases → schoolie.apk"
-echo "     https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/schoolie.apk"
+echo "  3) Download: ${REPO_URL%/}.git → Releases → project-cost-tracker.apk"
+echo "     https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk"
+echo "     Install page: https://thelubemaster.github.io/Receipt-tracker/?install=1"

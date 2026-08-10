@@ -7,11 +7,11 @@ export interface Category {
   id: string
   label: string
   color: string
-  /** true when user or AI created it (not a schoolie build-out preset) */
+  /** true when user or AI created it (not a built-in preset) */
   custom?: boolean
 }
 
-/** Schoolie conversion presets — still available, not required. */
+/** Built-in category presets — still available, not required. */
 export const BUILTIN_CATEGORIES: Category[] = [
   { id: 'structure', label: 'Structure & Body', color: '#c45c26' },
   { id: 'insulation', label: 'Insulation', color: '#6b8f71' },
@@ -162,7 +162,7 @@ export function makeCustomCategory(label: string): Category {
   const slug = slugifyCategory(clean)
   const canon = canonicalizeCategoryId(slug)
   const builtin = BUILTIN_CATEGORIES.find((c) => c.id === canon)
-  // Don't invent a near-duplicate of a schoolie preset (Engine And Powertrain vs Engine & Powertrain)
+  // Don't invent a near-duplicate of a builtin preset (Engine And Powertrain vs Engine & Powertrain)
   if (builtin && (canon === slug || slugifyCategory(builtin.label) === slug || CATEGORY_ID_ALIASES[slug] === canon)) {
     return { ...builtin }
   }
@@ -181,7 +181,7 @@ export function getCategory(
 ): Category {
   const raw = (id || 'misc').trim() || 'misc'
   const canon = canonicalizeCategoryId(raw)
-  // Known alias of a schoolie preset → always show the clean preset label
+  // Known alias of a builtin preset → always show the clean preset label
   // (engine-and-powertrain → Engine & Powertrain)
   if (canon !== raw.toLowerCase() || BUILTIN_CATEGORIES.some((c) => c.id === canon)) {
     const builtin = BUILTIN_CATEGORIES.find((c) => c.id === canon)

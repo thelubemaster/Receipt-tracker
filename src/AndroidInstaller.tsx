@@ -1,12 +1,13 @@
 /**
  * Universal install screen — same entry for Android and Apple.
  *
- * - Android: download schoolie.apk (real home-screen app + OTA)
+ * - Android: download project-cost-tracker.apk (real home-screen app + OTA)
  * - iPhone / iPad: free PWA via Safari → Share → Add to Home Screen
  *   (Apple does not allow installing Android APKs; App Store requires a paid
  *   developer account. The web app is the same product on both.)
  */
 import { useEffect, useRef, useState } from 'react'
+import { APK_FILE_NAME } from './brand'
 import {
   GITHUB_APK_LATEST,
   GITHUB_INSTALL_URL,
@@ -23,7 +24,7 @@ type Props = {
 function startDownload(url: string) {
   const a = document.createElement('a')
   a.href = url
-  a.download = 'schoolie.apk'
+  a.download = APK_FILE_NAME
   a.rel = 'noopener'
   a.target = '_blank'
   document.body.appendChild(a)
@@ -45,7 +46,7 @@ export function AndroidInstaller(props: Props) {
     } catch {
       /* ignore */
     }
-    setStatus('Download started — open schoolie.apk, then tap Install.')
+    setStatus(`Download started — open ${APK_FILE_NAME}, then tap Install.`)
     startDownload(GITHUB_APK_LATEST)
   }
 
@@ -140,7 +141,7 @@ export function AndroidInstaller(props: Props) {
             {android ? (
               <>
                 <button type="button" className="btn btn-primary installer-cta" onClick={downloadApk}>
-                  Download schoolie.apk
+                  Download {APK_FILE_NAME}
                 </button>
                 <p className="installer-status">{status}</p>
 
@@ -148,7 +149,7 @@ export function AndroidInstaller(props: Props) {
                   <h2>3 steps</h2>
                   <ol className="installer-ol">
                     <li>
-                      Open the downloaded <strong>schoolie.apk</strong>
+                      Open the downloaded <strong>{APK_FILE_NAME}</strong>
                     </li>
                     <li>
                       Allow <strong>Install unknown apps</strong> if Android asks
@@ -162,7 +163,7 @@ export function AndroidInstaller(props: Props) {
             ) : (
               <>
                 <button type="button" className="btn btn-primary installer-cta" onClick={downloadApk}>
-                  Android — Download schoolie.apk
+                  Android — Download app
                 </button>
                 <a
                   className="btn btn-secondary installer-cta"
@@ -179,8 +180,8 @@ export function AndroidInstaller(props: Props) {
 
             <p className="muted" style={{ marginTop: 16, fontSize: '0.9rem' }}>
               Android APK:{' '}
-              <a href={GITHUB_APK_LATEST} download="schoolie.apk" rel="noopener">
-                schoolie.apk
+              <a href={GITHUB_APK_LATEST} download={APK_FILE_NAME} rel="noopener">
+                {APK_FILE_NAME}
               </a>
               <br />
               Shared install link:{' '}

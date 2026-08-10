@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.34.0'
+export const APP_VERSION = '1.34.1'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -14,7 +14,7 @@ export const APP_VERSION = '1.34.0'
  */
 export const APK_VERSION_CODE = 29
 
-/** GitHub release tag that hosts schoolie.apk (keep in sync when shipping a new shell). */
+/** GitHub release tag that hosts the shell APK (keep in sync when shipping a new shell). */
 export const APK_RELEASE_TAG = 'v1.29.1'
 
 export type ChangelogEntry = {
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.34.1',
+    date: '2026-08-10',
+    title: 'Any project — not school-bus only',
+    changes: [
+      'Downloads and installers renamed to Project Cost Tracker (no Schoolie/skoolie names)',
+      'APK: project-cost-tracker.apk · backup files use the same branding',
+      'Built for kitchen remodels, trips, businesses, vehicles — any project',
+    ],
+  },
   {
     version: '1.34.0',
     date: '2026-08-10',

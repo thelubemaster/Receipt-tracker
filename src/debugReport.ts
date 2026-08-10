@@ -125,7 +125,7 @@ export function formatScanDebugText(input: ScanDebugTextInput): string {
   const money = (n: number | null | undefined) =>
     n == null || Number.isNaN(n) ? '—' : `$${Number(n).toFixed(2)}`
 
-  lines.push('=== SCHOOLIE SCAN DEBUG (paste into chat) ===')
+  lines.push('=== PROJECT COST TRACKER SCAN DEBUG (paste into chat) ===')
   lines.push(`App version: ${APP_VERSION}`)
   lines.push(`When: ${new Date().toISOString()}`)
   if (input.userNote?.trim()) lines.push(`User note: ${input.userNote.trim()}`)
@@ -245,7 +245,7 @@ export function formatProjectDebugText(input: {
   const money = (n: number | null | undefined) =>
     n == null || Number.isNaN(n) ? '—' : `$${Number(n).toFixed(2)}`
   const lines: string[] = []
-  lines.push('=== SCHOOLIE PROJECT DATA (paste into chat) ===')
+  lines.push('=== PROJECT COST TRACKER DATA (paste into chat) ===')
   lines.push(`App version: ${APP_VERSION}`)
   lines.push(`When: ${new Date().toISOString()}`)
   lines.push(`Project: ${input.projectName}`)

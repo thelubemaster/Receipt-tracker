@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop a Schoolie preview if one is still bound to the port.
+# Stop a Project Cost Tracker preview if one is still bound to the port.
 
 set -euo pipefail
 
@@ -25,4 +25,4 @@ for line in out.splitlines():
             pass
 PY
 
-echo "Schoolie is not running."
+echo "Project Cost Tracker is not running."
