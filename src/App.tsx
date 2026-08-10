@@ -27,6 +27,7 @@ import { normalizeCategoryInput } from './agents/keywords'
 import {
   deletePurchase,
   deleteProject,
+  getImage,
   getImageUrl,
   getProject,
   getPurchase,
@@ -47,6 +48,13 @@ import {
   getStorageNotice,
   clearStorageNotice,
 } from './db'
+import {
+  listUsedCategories,
+  planCategoryMerge,
+  planCategoryRename,
+  remapPurchasesCategory,
+} from './categoryManage'
+import { filterPurchases } from './searchPurchases'
 import { APP_NAME_SHORT } from './brand'
 import { normalizePickedImage, revokePreviewUrl } from './imagePick'
 import { normalizePickedDocument } from './documentPick'
@@ -232,6 +240,7 @@ function projectIdFromScreen(s: Screen): string | null {
   if (
     s.name === 'project' ||
     s.name === 'project-data' ||
+    s.name === 'categories' ||
     s.name === 'add' ||
     s.name === 'edit' ||
     s.name === 'detail' ||
@@ -298,6 +307,7 @@ export default function App() {
       'project',
       'project-data',
       'project-edit',
+      'categories',
       'scan',
       'add',
       'detail',
@@ -734,6 +744,23 @@ export default function App() {
           onOpenAiData={() =>
             setScreen({ name: 'project-data', projectId: activeProject.id })
           }
+          onManageCategories={() =>
+            setScreen({ name: 'categories', projectId: activeProject.id })
+          }
+        />
+      )}
+
+      {screen.name === 'categories' && activeProject && (
+        <CategoriesManageScreen
+          project={activeProject}
+          purchases={purchases}
+          customCategories={customCats}
+          onBack={() => setScreen({ name: 'project', projectId: activeProject.id })}
+          onApplied={async (msg) => {
+            await refresh(activeProject.id)
+            setSettings(await getSettings())
+            setInfo(msg)
+          }}
         />
       )}
 
@@ -770,6 +797,7 @@ export default function App() {
             setScreen({
               name: 'add',
               projectId: screen.projectId,
+              replacePurchaseId: screen.replacePurchaseId,
               initial: {
                 date: suggestion.date ?? todayISO(),
                 description: suggestion.description,
@@ -796,6 +824,7 @@ export default function App() {
             setScreen({
               name: 'add',
               projectId: screen.projectId,
+              replacePurchaseId: screen.replacePurchaseId,
               receiptBlob: blob,
               receiptPreviewUrl: previewUrl,
             })
@@ -806,7 +835,7 @@ export default function App() {
 
       {screen.name === 'add' && (
         <PurchaseFormScreen
-          title="Add purchase"
+          title={screen.replacePurchaseId ? 'Re-scan result' : 'Add purchase'}
           initial={emptyForm(screen.initial)}
           receiptPreviewUrl={screen.receiptPreviewUrl}
           receiptBlob={screen.receiptBlob}
@@ -875,6 +904,7 @@ export default function App() {
                     retryBlob: screen.receiptBlob,
                     retryPreviewUrl: screen.receiptPreviewUrl,
                     rejected,
+                    replacePurchaseId: screen.replacePurchaseId,
                   })
                 }
               : undefined
@@ -910,7 +940,11 @@ export default function App() {
                   },
                 }
               : null
+            const existing = screen.replacePurchaseId
+              ? await getPurchase(screen.replacePurchaseId)
+              : null
             await handleSavePurchase({
+              id: screen.replacePurchaseId,
               projectId: screen.projectId,
               date: form.date,
               description: form.description,
@@ -922,6 +956,7 @@ export default function App() {
               aisUsed: form.aisUsed,
               bestAiId: form.bestAiId,
               receiptBlob,
+              existingReceiptImageId: existing?.receiptImageId ?? null,
               scanDebug,
             })
           }}
@@ -972,6 +1007,28 @@ export default function App() {
               projectId: screen.projectId,
             })
           }
+          onRescan={async () => {
+            setError(null)
+            setInfo(null)
+            const p = await getPurchase(screen.purchaseId)
+            if (!p?.receiptImageId) {
+              setError('No receipt photo saved — use Edit or Scan a new photo.')
+              return
+            }
+            const blob = await getImage(p.receiptImageId)
+            if (!blob) {
+              setError('Could not load the saved receipt photo.')
+              return
+            }
+            const url = (await getImageUrl(p.receiptImageId)) || URL.createObjectURL(blob)
+            setScreen({
+              name: 'scan',
+              projectId: screen.projectId,
+              retryBlob: blob,
+              retryPreviewUrl: url,
+              replacePurchaseId: screen.purchaseId,
+            })
+          }}
           onDelete={async () => {
             if (!confirm('Delete this purchase?')) return
             await deletePurchase(screen.purchaseId)
@@ -1519,11 +1576,18 @@ function HomeScreen(props: {
   onExportPdf: () => void
   /** Open project AI data lab — every receipt + OCR dumps */
   onOpenAiData: () => void
+  onManageCategories: () => void
 }) {
   // Groups start expanded so the main screen shows receipts under each category
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  const [search, setSearch] = useState('')
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const coverBlobRef = useRef<string | null>(null)
+  const searchHits = useMemo(
+    () => filterPurchases(props.purchases, search, props.customCategories),
+    [props.purchases, search, props.customCategories],
+  )
+  const searching = search.trim().length > 0
 
   useEffect(() => {
     let cancelled = false
@@ -1655,6 +1719,27 @@ function HomeScreen(props: {
 
       <AndroidInstallCard />
 
+      <div className="card" style={{ marginBottom: 12 }}>
+        <label htmlFor="project-search" className="muted" style={{ fontSize: '0.85rem' }}>
+          Search receipts
+        </label>
+        <input
+          id="project-search"
+          type="search"
+          enterKeyHint="search"
+          placeholder="Store, product, amount, category…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ width: '100%', marginTop: 6 }}
+        />
+        {searching && (
+          <p className="muted" style={{ margin: '8px 0 0', fontSize: '0.85rem' }}>
+            {searchHits.length} match{searchHits.length === 1 ? '' : 'es'}
+            {searchHits.length === 0 ? ' — try another word' : ''}
+          </p>
+        )}
+      </div>
+
       <div className="card ai-data-lab-card">
         <strong>AI data lab</strong>
         <p className="muted" style={{ margin: '6px 0 10px' }}>
@@ -1669,6 +1754,15 @@ function HomeScreen(props: {
           onClick={props.onOpenAiData}
         >
           View all project + AI data
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ width: '100%', marginTop: 8 }}
+          disabled={props.purchases.length === 0}
+          onClick={props.onManageCategories}
+        >
+          Merge / rename categories
         </button>
       </div>
 
@@ -1706,7 +1800,7 @@ function HomeScreen(props: {
       )}
 
       <div className="section-title">
-        <span>Receipts</span>
+        <span>{searching ? 'Search results' : 'Receipts'}</span>
         <span className="export-links">
           <button type="button" onClick={props.onExportCsv}>
             CSV
@@ -1716,14 +1810,45 @@ function HomeScreen(props: {
           </button>
         </span>
       </div>
-      <p className="group-hint" style={{ margin: '0 0 10px' }}>
-        Same categories as above. Expand a category to open receipts.
-      </p>
+      {!searching && (
+        <p className="group-hint" style={{ margin: '0 0 10px' }}>
+          Same categories as above. Expand a category to open receipts.
+        </p>
+      )}
 
       {props.groups.length === 0 ? (
         <div className="empty empty-soft">
           <div className="empty-icon">📷</div>
           <p>Scan a receipt to start tracking costs for this project.</p>
+        </div>
+      ) : searching ? (
+        <div className="group-list">
+          {searchHits.length === 0 ? (
+            <div className="empty empty-soft">
+              <p>No receipts match “{search.trim()}”.</p>
+            </div>
+          ) : (
+            <div className="card">
+              {searchHits.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="purchase-item purchase-item-in-group"
+                  onClick={() => props.onOpen(p.id)}
+                >
+                  <span className="purchase-title">{p.description || 'Purchase'}</span>
+                  <span className="purchase-amount">{formatMoney(p.amount)}</span>
+                  <span className="purchase-meta">
+                    {purchaseCategoryLabel(p, props.customCategories)}
+                    {' · '}
+                    {p.date}
+                    {p.vendor ? ` · ${p.vendor}` : ''}
+                    {p.receiptImageId ? ' · 📷' : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <div className="group-list">
@@ -2042,10 +2167,10 @@ function ScanScreen(props: {
   onManualWithPhoto: (blob: Blob, previewUrl: string) => void
   onError: (msg: string) => void
 }) {
-  const [busy, setBusy] = useState(Boolean(props.retryBlob && props.rejected))
+  const [busy, setBusy] = useState(Boolean(props.retryBlob))
   /** opening = loading/normalizing gallery pick; scanning = OCR team running */
   const [workPhase, setWorkPhase] = useState<'opening' | 'scanning' | null>(
-    props.retryBlob && props.rejected ? 'scanning' : null,
+    props.retryBlob ? 'scanning' : null,
   )
   const [progress, setProgress] = useState(0)
   const [scanError, setScanError] = useState<string | null>(null)
@@ -2093,10 +2218,10 @@ function ScanScreen(props: {
     }
   }
 
-  // Auto-start when arriving from the form's Try again (with rejected snapshot)
+  // Auto-start when arriving with a photo (Try again after bad read, or re-scan from detail)
   useEffect(() => {
     if (autoStarted.current) return
-    if (props.retryBlob && props.rejected) {
+    if (props.retryBlob) {
       autoStarted.current = true
       const url = props.retryPreviewUrl ?? URL.createObjectURL(props.retryBlob)
       void runScan(props.retryBlob, url, props.rejected)
@@ -3704,11 +3829,13 @@ function DetailScreen(props: {
   customCategories: Category[]
   onBack: () => void
   onEdit: () => void
+  onRescan: () => void | Promise<void>
   onDelete: () => void
   onError: (msg: string) => void
 }) {
   const [purchase, setPurchase] = useState<Purchase | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | undefined>()
+  const [rescanBusy, setRescanBusy] = useState(false)
 
   useEffect(() => {
     void (async () => {
@@ -3735,6 +3862,7 @@ function DetailScreen(props: {
   }
 
   const cat = getCategory(purchase.categoryId, props.customCategories)
+  const canRescan = Boolean(purchase.receiptImageId)
 
   return (
     <>
@@ -3827,7 +3955,20 @@ function DetailScreen(props: {
         </>
       )}
 
-      <div className="row-actions" style={{ marginTop: 16 }}>
+      <div className="row-actions stack" style={{ marginTop: 16 }}>
+        {canRescan && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={rescanBusy}
+            onClick={() => {
+              setRescanBusy(true)
+              void Promise.resolve(props.onRescan()).finally(() => setRescanBusy(false))
+            }}
+          >
+            {rescanBusy ? 'Opening photo…' : 'Re-scan this photo'}
+          </button>
+        )}
         <button type="button" className="btn btn-secondary" onClick={props.onEdit}>
           Edit
         </button>
@@ -3835,6 +3976,276 @@ function DetailScreen(props: {
           Delete
         </button>
       </div>
+      {canRescan ? (
+        <p className="muted" style={{ marginTop: 10, fontSize: '0.85rem' }}>
+          Re-scan runs the free AIs again on the saved receipt image and updates this purchase
+          when you save.
+        </p>
+      ) : (
+        <p className="muted" style={{ marginTop: 10, fontSize: '0.85rem' }}>
+          No photo on this receipt — add one with Edit, or scan a new receipt.
+        </p>
+      )}
+    </>
+  )
+}
+
+/** Manage category merge / rename for one project */
+function CategoriesManageScreen(props: {
+  project: Project
+  purchases: Purchase[]
+  customCategories: Category[]
+  onBack: () => void
+  onApplied: (msg: string) => void | Promise<void>
+}) {
+  const used = useMemo(
+    () => listUsedCategories(props.purchases, props.customCategories),
+    [props.purchases, props.customCategories],
+  )
+  const [selected, setSelected] = useState<string | null>(null)
+  const [mode, setMode] = useState<'idle' | 'rename' | 'merge'>('idle')
+  const [newLabel, setNewLabel] = useState('')
+  const [mergeTarget, setMergeTarget] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const selectedRow = used.find((u) => u.id === selected) || null
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => (prev === id ? null : id))
+    setMode('idle')
+    setError(null)
+  }
+
+  async function applyRename() {
+    if (!selected) return
+    const label = newLabel.trim()
+    if (!label) {
+      setError('Enter a new name.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const plan = planCategoryRename(selected, label, props.customCategories)
+      let changed = 0
+      const settings = await getSettings()
+      await saveSettings({ ...settings, customCategories: plan.nextCustom })
+      if (plan.toId !== selected) {
+        const r = remapPurchasesCategory(props.purchases, selected, plan.toId)
+        changed = r.changed
+        const before = new Map(props.purchases.map((x) => [x.id, x]))
+        for (const next of r.purchases) {
+          const old = before.get(next.id)
+          if (
+            !old ||
+            old.categoryId !== next.categoryId ||
+            JSON.stringify(old.lineItems) !== JSON.stringify(next.lineItems)
+          ) {
+            await savePurchase(next)
+          }
+        }
+      }
+      await props.onApplied(
+        plan.toId === selected
+          ? `Category label updated to “${plan.toLabel}”.`
+          : `Renamed to “${plan.toLabel}” on ${changed} receipt${changed === 1 ? '' : 's'}.`,
+      )
+      setMode('idle')
+      setSelected(null)
+      setNewLabel('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Rename failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function applyMerge() {
+    if (!selected || !mergeTarget) {
+      setError('Pick a target category.')
+      return
+    }
+    if (mergeTarget === selected) {
+      setError('Pick a different target.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const plan = planCategoryMerge([selected], { id: mergeTarget }, props.customCategories)
+      const r = remapPurchasesCategory(props.purchases, selected, plan.toId)
+      const settings = await getSettings()
+      await saveSettings({ ...settings, customCategories: plan.nextCustom })
+      const before = new Map(props.purchases.map((p) => [p.id, p]))
+      for (const p of r.purchases) {
+        const old = before.get(p.id)
+        if (
+          !old ||
+          old.categoryId !== p.categoryId ||
+          JSON.stringify(old.lineItems) !== JSON.stringify(p.lineItems)
+        ) {
+          await savePurchase(p)
+        }
+      }
+      await props.onApplied(
+        `Merged into “${plan.toLabel}” — ${r.changed} receipt${r.changed === 1 ? '' : 's'} updated.`,
+      )
+      setMode('idle')
+      setSelected(null)
+      setMergeTarget('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Merge failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <header className="topbar">
+        <button type="button" className="icon-btn" onClick={props.onBack} aria-label="Back">
+          ←
+        </button>
+        <BrandLockup title="Categories" subtitle={props.project.name} size={36} />
+        <div className="topbar-actions" />
+      </header>
+
+      <div className="card">
+        <strong>Merge or rename</strong>
+        <p className="muted" style={{ margin: '6px 0 0' }}>
+          You control labels. Merge puts two categories into one; rename changes the name on every
+          matching receipt. Does not invent new AI categories.
+        </p>
+      </div>
+
+      {error && (
+        <div className="banner banner-error" role="alert">
+          {error}
+        </div>
+      )}
+
+      <div className="section-title">
+        <span>Used in this project</span>
+      </div>
+      {used.length === 0 ? (
+        <div className="empty empty-soft">
+          <p>No categories yet — scan a receipt first.</p>
+        </div>
+      ) : (
+        <div className="card category-list">
+          {used.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              className="category-row"
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                background: selected === u.id ? 'rgba(232,165,75,0.12)' : undefined,
+                border: 'none',
+                cursor: 'pointer',
+                padding: '10px 0',
+              }}
+              onClick={() => toggleSelect(u.id)}
+            >
+              <span className="category-name">
+                <span className="cat-dot" style={{ background: u.color }} />
+                {u.label}
+                {selected === u.id ? ' · selected' : ''}
+              </span>
+              <span className="category-amount muted" style={{ fontSize: '0.85rem' }}>
+                {u.receiptCount} receipt{u.receiptCount === 1 ? '' : 's'}
+                {u.lineCount ? ` · ${u.lineCount} line${u.lineCount === 1 ? '' : 's'}` : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selectedRow && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <strong>{selectedRow.label}</strong>
+          <p className="muted" style={{ margin: '6px 0 12px', fontSize: '0.85rem' }}>
+            id: {selectedRow.id}
+          </p>
+          <div className="row-actions stack">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={() => {
+                setMode('rename')
+                setNewLabel(selectedRow.label)
+              }}
+            >
+              Rename…
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy || used.length < 2}
+              onClick={() => {
+                setMode('merge')
+                setMergeTarget(used.find((u) => u.id !== selected)?.id || '')
+              }}
+            >
+              Merge into another…
+            </button>
+          </div>
+
+          {mode === 'rename' && (
+            <div style={{ marginTop: 14 }}>
+              <label htmlFor="cat-rename">New name</label>
+              <input
+                id="cat-rename"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                placeholder="e.g. Engine & powertrain"
+                style={{ width: '100%', marginTop: 6 }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ width: '100%', marginTop: 10 }}
+                disabled={busy}
+                onClick={() => void applyRename()}
+              >
+                {busy ? 'Saving…' : 'Save rename'}
+              </button>
+            </div>
+          )}
+
+          {mode === 'merge' && (
+            <div style={{ marginTop: 14 }}>
+              <label htmlFor="cat-merge">Merge “{selectedRow.label}” into</label>
+              <select
+                id="cat-merge"
+                value={mergeTarget}
+                onChange={(e) => setMergeTarget(e.target.value)}
+                style={{ width: '100%', marginTop: 6 }}
+              >
+                {used
+                  .filter((u) => u.id !== selected)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.label}
+                    </option>
+                  ))}
+              </select>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ width: '100%', marginTop: 10 }}
+                disabled={busy}
+                onClick={() => void applyMerge()}
+              >
+                {busy ? 'Saving…' : 'Merge categories'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </>
   )
 }

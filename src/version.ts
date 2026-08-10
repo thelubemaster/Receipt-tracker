@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.34.4'
+export const APP_VERSION = '1.35.0'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.35.0',
+    date: '2026-08-10',
+    title: 'Re-scan, search, and manage categories',
+    changes: [
+      'Re-scan a saved receipt photo from the purchase detail screen',
+      'Search receipts by store, product, amount, or category',
+      'Merge or rename categories yourself (updates every matching receipt)',
+    ],
+  },
   {
     version: '1.34.4',
     date: '2026-08-10',

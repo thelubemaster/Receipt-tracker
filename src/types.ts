@@ -175,6 +175,8 @@ export type Screen =
       initial?: ScanFormSeed
       receiptBlob?: Blob
       receiptPreviewUrl?: string
+      /** When set, save updates this purchase instead of creating a new one (re-scan). */
+      replacePurchaseId?: string
     }
   | { name: 'edit'; purchaseId: string; projectId: string }
   | { name: 'detail'; purchaseId: string; projectId: string }
@@ -186,5 +188,9 @@ export type Screen =
       retryPreviewUrl?: string
       /** Snapshot of the answer the user rejected — AIs diversify away from it */
       rejected?: import('./agents/retryFeedback').RejectedScanSnapshot
+      /** Re-scan should replace this purchase when saved */
+      replacePurchaseId?: string
     }
+  /** Manage category merge / rename for a project */
+  | { name: 'categories'; projectId: string }
   | { name: 'settings' }
