@@ -5,7 +5,7 @@
  */
 
 /** Keep in sync with package.json version (single source users see in the UI). */
-export const APP_VERSION = '1.34.2'
+export const APP_VERSION = '1.34.3'
 
 /**
  * Android versionCode for the launcher/shell APK.
@@ -26,6 +26,16 @@ export type ChangelogEntry = {
 
 /** Newest first */
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.34.3',
+    date: '2026-08-10',
+    title: 'Compact copy dumps for Termux',
+    changes: [
+      'Project / scan “copy for chat” text is much smaller',
+      'Strips AI huddle [finding] spam; caps OCR length',
+      'Safe to paste multi-receipt dumps in Termux',
+    ],
+  },
   {
     version: '1.34.2',
     date: '2026-08-10',

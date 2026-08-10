@@ -1,7 +1,7 @@
 {
-  "version": "1.34.2",
+  "version": "1.34.3",
   "url": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/web-update.zip",
-  "notes": "Amazon orders: real product names and grand totals",
+  "notes": "Compact copy dumps for Termux",
   "apkVersion": "1.29.1",
   "apkVersionCode": 29,
   "apkUrl": "https://github.com/thelubemaster/Receipt-tracker/releases/latest/download/project-cost-tracker.apk"

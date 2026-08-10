@@ -1831,7 +1831,7 @@ function ProjectDataScreen(props: {
     })
     const ok = await copyTextToClipboard(text)
     const msg = ok
-      ? `Copied full project dump (${props.purchases.length} receipts) — paste into chat`
+      ? `Copied compact dump (${props.purchases.length} receipts, Termux-safe) — paste into chat`
       : 'Could not copy — try again'
     setCopyStatus(msg)
     props.onMessage(msg)
@@ -1877,15 +1877,14 @@ function ProjectDataScreen(props: {
       <div className="card">
         <strong>Everything in this project</strong>
         <p className="muted" style={{ margin: '6px 0 10px' }}>
-          Saved receipt fields plus OCR text and agent reports from free on-device AIs.
-          Copy a dump and paste it into chat so scanning can be improved — nothing leaves
-          your phone until you paste it.
+          Compact dumps for chat (OCR + key report lines only) so Termux does not crash on
+          huge paste. Full huddle logs are stripped. Nothing leaves your phone until you paste.
         </p>
         <p className="muted" style={{ margin: '0 0 12px', fontSize: '0.9rem' }}>
           {props.purchases.length} receipt{props.purchases.length === 1 ? '' : 's'} ·{' '}
-          {withDump} with AI scan dump{withDump === 1 ? '' : 's'}
+          {withDump} with AI dump{withDump === 1 ? '' : 's'} · Termux-safe size
           {withDump < props.purchases.length
-            ? ' · older/manual entries may lack OCR (re-scan to capture)'
+            ? ' · older/manual may lack OCR (re-scan to capture)'
             : ''}
         </p>
         <button
@@ -3420,8 +3419,7 @@ function PurchaseFormScreen(props: {
           <div className="card settings-card" style={{ marginTop: 12 }}>
             <strong>Copy scan debug for chat</strong>
             <p className="muted" style={{ margin: '6px 0 10px' }}>
-              Copies OCR text, which AIs actually ran, totals, line items, and the full
-              agent report — paste that into chat so Grok can see how the scan went wrong.
+              Compact OCR + key report lines (not the full AI huddle) so Termux can paste it.
             </p>
             {reportNote.trim() ? null : (
               <p className="muted" style={{ margin: '0 0 10px', fontSize: '0.85rem' }}>
